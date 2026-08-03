@@ -1,0 +1,20 @@
+{
+  "name": "vcpkg-turboraft",
+  "version-semver": "0.1.0",
+  "description": "Manifest dependencies for the TurboRaft consensus library",
+  "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
+  "dependencies": [
+    "boringssl",   
+    {
+      "name": "pkgconf",
+      "host": true
+    },
+    "simde",
+    "sqlite3",
+    {
+      "name": "xxhash",
+      "version>=": "0.8.3"
+    },
+    "zstd"
+  ]
+}

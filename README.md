@@ -1,0 +1,58 @@
+# TurboRaft
+
+TurboRaft is a C11 Raft library for the TurboNet ecosystem. It separates a deterministic consensus core from CoroNet peer transport, SQLite durability, application state machines, and an optional TurboHTTP JSON-RPC/HTMX management plane.
+
+The repository contains a native Ready-style Raft core, pre-vote and check-quorum elections, batched replication, ReadIndex, leadership transfer, learners and Joint Consensus, SQLite recovery, resumable snapshot transport, durable Snapshot ConfState, live log compaction with lagging-peer snapshot recovery, CoroNet mTLS peer services, a single-owner Service loop, and an authenticated HTMX control plane. Production readiness still requires the chaos, fuzz, long-duration, rolling-upgrade, and platform validation defined in the implementation plan.
+
+## Design goals
+
+- Preserve Raft safety independently of network timing, process crashes, duplicate messages, and reordered delivery.
+- Provide a stable C ABI with opaque handles and explicit ownership.
+- Run each Raft group on one owner loop; perform no blocking disk I/O on that loop.
+- Use CoroNet for authenticated peer streams and lifecycle management.
+- Use TurboUtils file APIs for WAL and snapshot storage, with a small durability adapter for operations TurboUtils does not expose.
+- Use TurboHTTP/Iris JSON-RPC only for administration and diagnostics.
+- Support linearizable metadata for mesh namespace, rules, leases, and task ownership without putting file chunks in the Raft log.
+
+## Documents
+
+- [Architecture and contracts](docs/DESIGN.md)
+- [Peer protocol draft](docs/PROTOCOL.md)
+- [Implementation and validation plan](docs/PLAN.md)
+- [Wire codec fuzzing](docs/FUZZING.md)
+- [Multi-process chaos testing](docs/CHAOS_TESTING.md)
+- [Rolling upgrades and rollback](docs/UPGRADES.md)
+- [willemt/raft adoption assessment](docs/WILLEMT_RAFT_ASSESSMENT.md)
+
+## Build and test
+
+```powershell
+cmake --preset win-release-user --fresh
+cmake --build --preset win-release-user
+ctest --preset win-release-user --output-on-failure
+```
+
+Optional adapters are controlled by `TURBORAFT_BUILD_SQLITE_STORAGE`, `TURBORAFT_BUILD_CORONET`, and `TURBORAFT_BUILD_CONTROL_PLANE`.
+
+## Installed package
+
+```powershell
+cmake --install build/msvc-release --prefix C:/projects/cpp/external/pkgs/turboraft
+```
+
+Consumers use the exported targets:
+
+```cmake
+find_package(TurboRaft CONFIG REQUIRED)
+target_link_libraries(app PRIVATE TurboRaft::Service)
+```
+
+Optional installed targets are `TurboRaft::SQLiteStorage`, `TurboRaft::CoroNet`, `TurboRaft::SnapshotManager`, `TurboRaft::ServiceOwner`, and `TurboRaft::ControlPlane` when their build options were enabled.
+
+## References
+
+- [Raft extended paper](https://raft.github.io/raft.pdf)
+- [Raft dissertation](https://github.com/ongardie/dissertation)
+- [Raft TLA+ specification](https://github.com/ongardie/raft.tla)
+- [etcd Raft library design](https://github.com/etcd-io/raft)
+- [willemt/raft](https://github.com/willemt/raft)

@@ -1,0 +1,48 @@
+schema TurboRaftWire [id(8101), version(2), byte_order(little)];
+
+message RaftWireMessage {
+    uint8 message_type;
+    uint8 granted;
+    uint16 reserved;
+    uint32 entry_count;
+    uint64 from_node;
+    uint64 to_node;
+    uint64 term;
+    uint64 campaign_term;
+    uint64 last_log_index;
+    uint64 last_log_term;
+    uint64 leader_commit;
+    uint64 previous_log_index;
+    uint64 previous_log_term;
+    uint64 match_index;
+    uint64 reject_hint;
+    uint64 entry_index;
+    uint64 entry_term;
+    uint64 entry_command_id;
+    bytes entry_data;
+}
+
+message InstallSnapshotChunk {
+    uint64 from_node;
+    uint64 to_node;
+    uint64 term;
+    uint64 snapshot_index;
+    uint64 snapshot_term;
+    uint64 snapshot_offset;
+    uint64 snapshot_size;
+    uint8 done;
+    bytes snapshot_configuration;
+    bytes snapshot_digest;
+    bytes chunk_data;
+}
+
+message InstallSnapshotAck {
+    uint64 from_node;
+    uint64 to_node;
+    uint64 term;
+    uint64 snapshot_index;
+    uint64 snapshot_size;
+    uint64 next_offset;
+    uint8 accepted;
+    bytes snapshot_digest;
+}
