@@ -1,6 +1,7 @@
 #include <tinytest.h>
 
 #include <turboraft/raft_core.h>
+#include <turboraft/raft_wire_codec.h>
 #include <turboraft/text_replay_executor.h>
 #include <turboraft/text_syntax.h>
 
@@ -450,5 +451,125 @@ spec("TurboRaft text syntax") {
                                         &state),
                  TURBO_ENOSPC);
     check_int_eq(state.submit_calls, 0);
+  }
+
+  it("rejects replay submit payloads larger than a Raft entry at parse") {
+    enum {
+      PAYLOAD_BYTES = TR_RAFT_MAX_ENTRY_BYTES + 1u,
+      INPUT_CAPACITY = 128u + PAYLOAD_BYTES * 2u + 1u
+    };
+    char input[INPUT_CAPACITY];
+    tr_text_replay_plan_t plan;
+    tr_text_diagnostic_t diagnostic;
+    size_t offset;
+    size_t index;
+
+    offset = (size_t)snprintf(
+        input, sizeof(input),
+        "submit request 3 to node 1 client 7 sequence 9 payload 0x");
+    for (index = 0u; index < PAYLOAD_BYTES * 2u; ++index) {
+      input[offset++] = '0';
+    }
+    input[offset++] = ';';
+    input[offset] = '\0';
+
+    check_int_eq(tr_text_replay_parse(input, offset, NULL, &plan,
+                                      &diagnostic),
+                 TURBO_ENOSPC);
+    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
+    check_size_eq(plan.action_count, 0u);
+  }
+
+  it("accepts replay submit payloads of exactly one Raft entry") {
+    enum {
+      PAYLOAD_BYTES = TR_RAFT_MAX_ENTRY_BYTES,
+      INPUT_CAPACITY = 128u + PAYLOAD_BYTES * 2u + 1u
+    };
+    char input[INPUT_CAPACITY];
+    tr_text_replay_plan_t plan;
+    tr_text_diagnostic_t diagnostic;
+    size_t offset;
+    size_t index;
+
+    offset = (size_t)snprintf(
+        input, sizeof(input),
+        "submit request 3 to node 1 client 7 sequence 9 payload 0x");
+    for (index = 0u; index < PAYLOAD_BYTES * 2u; ++index) {
+      input[offset++] = '0';
+    }
+    input[offset++] = ';';
+    input[offset] = '\0';
+
+    check_int_eq(tr_text_replay_parse(input, offset, NULL, &plan,
+                                      &diagnostic),
+                 TURBO_OK);
+    check_size_eq(plan.action_count, 1u);
+    check_size_eq(plan.actions[0].payload_hex.len,
+                  2u + PAYLOAD_BYTES * 2u);
+  }
+
+  it("rejects protocol frame payloads larger than the wire frame limit") {
+    enum {
+      PAYLOAD_BYTES = TR_RAFT_WIRE_MAX_FRAME_SIZE + 1u,
+      INPUT_CAPACITY = 256u + PAYLOAD_BYTES * 2u + 1u
+    };
+    char input[INPUT_CAPACITY];
+    tr_text_protocol_debug_plan_t plan;
+    tr_text_diagnostic_t diagnostic;
+    size_t offset;
+    size_t index;
+
+    offset = (size_t)snprintf(
+        input, sizeof(input),
+        "frame version 3 kind raft {\n"
+        "  from = 1;\n"
+        "  to = 2;\n"
+        "  term = 7;\n"
+        "  message = append_request;\n"
+        "  payload = 0x");
+    for (index = 0u; index < PAYLOAD_BYTES * 2u; ++index) {
+      input[offset++] = '0';
+    }
+    offset += (size_t)snprintf(input + offset, sizeof(input) - offset,
+                               ";\n}");
+
+    check_int_eq(tr_text_protocol_debug_parse(input, offset, NULL, &plan,
+                                              &diagnostic),
+                 TURBO_ENOSPC);
+    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
+    check_size_eq(plan.frame_count, 0u);
+  }
+
+  it("accepts protocol frame payloads of exactly the wire frame limit") {
+    enum {
+      PAYLOAD_BYTES = TR_RAFT_WIRE_MAX_FRAME_SIZE,
+      INPUT_CAPACITY = 256u + PAYLOAD_BYTES * 2u + 1u
+    };
+    char input[INPUT_CAPACITY];
+    tr_text_protocol_debug_plan_t plan;
+    tr_text_diagnostic_t diagnostic;
+    size_t offset;
+    size_t index;
+
+    offset = (size_t)snprintf(
+        input, sizeof(input),
+        "frame version 3 kind raft {\n"
+        "  from = 1;\n"
+        "  to = 2;\n"
+        "  term = 7;\n"
+        "  message = append_request;\n"
+        "  payload = 0x");
+    for (index = 0u; index < PAYLOAD_BYTES * 2u; ++index) {
+      input[offset++] = '0';
+    }
+    offset += (size_t)snprintf(input + offset, sizeof(input) - offset,
+                               ";\n}");
+
+    check_int_eq(tr_text_protocol_debug_parse(input, offset, NULL, &plan,
+                                              &diagnostic),
+                 TURBO_OK);
+    check_size_eq(plan.frame_count, 1u);
+    check_size_eq(plan.frames[0].payload_hex.len,
+                  2u + PAYLOAD_BYTES * 2u);
   }
 }

@@ -32,7 +32,7 @@ cmake --build --preset win-release-user
 ctest --preset win-release-user --output-on-failure
 ```
 
-Optional adapters are controlled by `TURBORAFT_BUILD_SQLITE_STORAGE`, `TURBORAFT_BUILD_CORONET`, and `TURBORAFT_BUILD_CONTROL_PLANE`.
+The SQLite storage adapter is controlled by `TURBORAFT_BUILD_SQLITE_STORAGE`. The CoroNet transport, snapshot manager, service owner, control plane, and console are built automatically when the TurboNet/TurboHttp packages are found; a configure without those packages still succeeds and builds the deterministic core, SQLite storage, and text-syntax tooling.
 
 ## Installed package
 
@@ -47,7 +47,22 @@ find_package(TurboRaft CONFIG REQUIRED)
 target_link_libraries(app PRIVATE TurboRaft::Service)
 ```
 
-Optional installed targets are `TurboRaft::SQLiteStorage`, `TurboRaft::CoroNet`, `TurboRaft::SnapshotManager`, `TurboRaft::ServiceOwner`, and `TurboRaft::ControlPlane` when their build options were enabled.
+Optional installed targets are `TurboRaft::SQLiteStorage`, `TurboRaft::CoroNet`, `TurboRaft::SnapshotManager`, `TurboRaft::ServiceOwner`, and `TurboRaft::ControlPlane` when the corresponding dependencies were found at configure time.
+
+## Examples
+
+The repository ships a small embeddable DSL demo (Query inspection plus a
+deterministic 3-node Replay simulation):
+
+```powershell
+cmake --preset win-release-user -DBUILD_EXAMPLES=ON
+cmake --build --preset win-release-user --target turboraft_dsl_embed_demo
+build/msvc-release/bin/turboraft_dsl_embed_demo
+```
+
+The full usage guide for the text DSLs (tools, CMake linkage, C API
+snippets, and limits) is in [docs/DSL_USAGE.md](docs/DSL_USAGE.md); syntax
+details are in [docs/TEXT_SYNTAX.md](docs/TEXT_SYNTAX.md).
 
 ## References
 

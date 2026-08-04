@@ -213,8 +213,10 @@ if(TURBORAFT_BUILD_SQLITE_STORAGE)
 endif()
 
 find_package(Threads REQUIRED)
-find_package(TurboNet CONFIG REQUIRED PATHS "${TURBO_NET_ROOT}")
+find_package(TurboNet CONFIG QUIET PATHS "${TURBO_NET_ROOT}")
+find_package(TurboHttp CONFIG QUIET PATHS "${TURBO_HTTP_ROOT}")
 
+if(TurboNet_FOUND)
   add_library(
     turboraft_coronet STATIC
     src/transport/raft_coronet_transport.c
@@ -259,9 +261,15 @@ find_package(TurboNet CONFIG REQUIRED PATHS "${TURBO_NET_ROOT}")
     turboraft_snapshot_manager
     PUBLIC TurboRaft::CoroNet TurboRaft::SnapshotSender
     PRIVATE TurboRaft::SnapshotReceiver)
-find_package(TurboHttp CONFIG REQUIRED PATHS "${TURBO_HTTP_ROOT}")
+else()
+  message(
+    STATUS
+    "TurboNet not found; CoroNet transport, snapshot manager, and service "
+    "owner adapters are disabled")
+endif()
 
-add_library(
+if(TurboNet_FOUND AND TurboHttp_FOUND)
+  add_library(
   turboraft_control_plane STATIC
   src/control/raft_control_audit.c src/control/raft_control_owner_bridge.c
   src/control/raft_control_operation.c src/control/raft_control_plane.c)
@@ -304,6 +312,12 @@ if(BUILD_TESTS)
       $<TARGET_FILE_DIR:turboraft_control_plane_http_tests>)
   add_test(NAME turboraft.control_plane_http
            COMMAND turboraft_control_plane_http_tests)
+  endif()
+else()
+  message(
+    STATUS
+    "TurboNet/TurboHttp not found together; the TurboRaft control plane is "
+    "disabled")
 endif()
 
 set(TURBORAFT_TEXT_SYNTAX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/text_syntax")
@@ -384,12 +398,16 @@ target_include_directories(
 target_link_libraries(turboraft_text_query_service
                       PUBLIC TurboRaft::TextSyntax TurboRaft::Service)
 
-add_executable(turboraft_console tools/turboraft_console.c)
-target_link_libraries(turboraft_console
-                      PRIVATE TurboRaft::TextSyntax TurboHttp::RPCClient)
-cmake_config_target(turboraft_console
-                    NO_INSTALL
-                    FOLDER "TurboRaft/tools")
+if(TurboHttp_FOUND)
+  add_executable(turboraft_console tools/turboraft_console.c)
+  target_link_libraries(turboraft_console
+                        PRIVATE TurboRaft::TextSyntax TurboHttp::RPCClient)
+  cmake_config_target(turboraft_console
+                      NO_INSTALL
+                      FOLDER "TurboRaft/tools")
+else()
+  message(STATUS "TurboHttp not found; turboraft_console is disabled")
+endif()
 
 add_library(turboraft_text_protocol_debug STATIC
             src/text_syntax/text_protocol_executor.c)
@@ -403,51 +421,88 @@ target_include_directories(
 target_link_libraries(turboraft_text_protocol_debug
                       PUBLIC TurboRaft::TextSyntax TurboRaft::Core)
 
+add_library(turboraft_replay_driver STATIC
+            src/text_syntax/text_replay_core_driver.c)
+add_library(TurboRaft::ReplayDriver ALIAS turboraft_replay_driver)
+set_target_properties(turboraft_replay_driver PROPERTIES EXPORT_NAME
+                                                                ReplayDriver)
+target_include_directories(
+  turboraft_replay_driver
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(turboraft_replay_driver PUBLIC TurboRaft::Core)
+
+add_executable(turboraft_repl tools/turboraft_repl.c)
+target_link_libraries(
+  turboraft_repl
+  PRIVATE TurboRaft::TextSyntax TurboRaft::ReplayDriver TurboUtils::Parser)
+cmake_config_target(turboraft_repl
+                    NO_INSTALL
+                    FOLDER "TurboRaft/tools")
+
 add_subdirectory(tests)
 
-add_library(turboraft_service_owner STATIC src/service/raft_service_owner.c)
-add_library(TurboRaft::ServiceOwner ALIAS turboraft_service_owner)
-set_target_properties(turboraft_service_owner PROPERTIES EXPORT_NAME
-                                                         ServiceOwner)
-target_include_directories(
-  turboraft_service_owner
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:include>)
-target_link_libraries(turboraft_service_owner PUBLIC TurboRaft::Service
-                                                     TurboNet::CoroNet)
-if(BUILD_TESTS AND TARGET turboraft_service_tests)
-  target_link_libraries(turboraft_service_tests
-                        PRIVATE TurboRaft::ServiceOwner)
-  target_compile_definitions(turboraft_service_tests
-                             PRIVATE TURBORAFT_HAS_SERVICE_OWNER=1)
+if(TurboNet_FOUND)
+  add_library(turboraft_service_owner STATIC src/service/raft_service_owner.c)
+  add_library(TurboRaft::ServiceOwner ALIAS turboraft_service_owner)
+  set_target_properties(turboraft_service_owner PROPERTIES EXPORT_NAME
+                                                           ServiceOwner)
+  target_include_directories(
+    turboraft_service_owner
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<INSTALL_INTERFACE:include>)
+  target_link_libraries(turboraft_service_owner PUBLIC TurboRaft::Service
+                                                       TurboNet::CoroNet)
+  if(BUILD_TESTS AND TARGET turboraft_service_tests)
+    target_link_libraries(turboraft_service_tests
+                          PRIVATE TurboRaft::ServiceOwner)
+    target_compile_definitions(turboraft_service_tests
+                               PRIVATE TURBORAFT_HAS_SERVICE_OWNER=1)
+  endif()
 endif()
-target_link_libraries(turboraft_control_plane
-                      PUBLIC TurboRaft::ServiceOwner)
-target_compile_definitions(turboraft_control_plane
-                           PRIVATE TURBORAFT_HAS_SERVICE_OWNER=1)
-if(BUILD_TESTS)
-  add_executable(turboraft_control_owner_bridge_tests
-                 tests/control/test_raft_control_owner_bridge.c)
-  target_link_libraries(
-    turboraft_control_owner_bridge_tests PRIVATE TurboRaft::ControlPlane
-                                                   TurboUtils::TinyTest)
-  target_compile_definitions(turboraft_control_owner_bridge_tests
+if(TurboNet_FOUND AND TurboHttp_FOUND)
+  target_link_libraries(turboraft_control_plane
+                        PUBLIC TurboRaft::ServiceOwner)
+  target_compile_definitions(turboraft_control_plane
                              PRIVATE TURBORAFT_HAS_SERVICE_OWNER=1)
-  add_test(NAME turboraft.control_owner_bridge
-           COMMAND turboraft_control_owner_bridge_tests)
+  if(BUILD_TESTS)
+    add_executable(turboraft_control_owner_bridge_tests
+                   tests/control/test_raft_control_owner_bridge.c)
+    target_link_libraries(
+      turboraft_control_owner_bridge_tests PRIVATE TurboRaft::ControlPlane
+                                                     TurboUtils::TinyTest)
+    target_compile_definitions(turboraft_control_owner_bridge_tests
+                               PRIVATE TURBORAFT_HAS_SERVICE_OWNER=1)
+    add_test(NAME turboraft.control_owner_bridge
+             COMMAND turboraft_control_owner_bridge_tests)
+  endif()
 endif()
 
 set(TURBORAFT_INSTALL_TARGETS
     turboraft_core turboraft_service turboraft_snapshot_receiver
     turboraft_snapshot_sender)
-if(TURBORAFT_BUILD_SQLITE_STORAGE)
+if(TARGET turboraft_sqlite_storage)
   list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_sqlite_storage)
 endif()
-list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_coronet
-     turboraft_snapshot_manager turboraft_service_owner)
-list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_control_plane)
+if(TARGET turboraft_coronet)
+  list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_coronet
+       turboraft_snapshot_manager turboraft_service_owner)
+endif()
+if(TARGET turboraft_control_plane)
+  list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_control_plane)
+endif()
 list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_text_syntax
-     turboraft_text_query_service turboraft_text_protocol_debug)
+     turboraft_text_query_service turboraft_text_protocol_debug
+     turboraft_replay_driver)
+
+set(TURBORAFT_HAVE_CORONET OFF)
+if(TARGET turboraft_coronet)
+  set(TURBORAFT_HAVE_CORONET ON)
+endif()
+set(TURBORAFT_HAVE_CONTROL_PLANE OFF)
+if(TARGET turboraft_control_plane)
+  set(TURBORAFT_HAVE_CONTROL_PLANE ON)
+endif()
 
 configure_package_config_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TurboRaftConfig.cmake.in"
@@ -477,4 +532,8 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/TurboRaftConfig.cmake"
 
 if(BUILD_BENCHMARKS)
   add_subdirectory(benchmarks)
+endif()
+
+if(BUILD_EXAMPLES)
+  add_subdirectory(examples)
 endif()

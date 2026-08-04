@@ -1,4 +1,5 @@
 #include "text_syntax_internal.h"
+#include <turboraft/raft_wire_codec.h>
 
 #include "turboraft_text_protocol_debug_grammar_gen.h"
 #include "turboraft_text_query_grammar_gen.h"
@@ -559,6 +560,12 @@ void tr_text_protocol_set_payload(
         "protocol payload must contain an even number of hex digits");
     return;
   }
+  if (hex_digits / 2u > TR_RAFT_WIRE_MAX_FRAME_SIZE) {
+    tr_text_parse_context_fail(
+        &ctx->base, TURBO_ENOSPC, TR_TEXT_DIAGNOSTIC_LIMIT,
+        "protocol payload exceeds the maximum wire frame size");
+    return;
+  }
   ctx->current_frame.payload_hex = payload.text;
 }
 
@@ -692,8 +699,10 @@ void tr_text_replay_append_duplicate_next(
 
 static int tr_text_validate_hex_payload(tr_text_parse_context_base_t *base,
                                         tstr_v payload,
+                                        size_t max_decoded_bytes,
                                         const char *empty_message,
-                                        const char *odd_length_message) {
+                                        const char *odd_length_message,
+                                        const char *oversize_message) {
   size_t hex_digits;
   if (payload.len < 3u) {
     tr_text_parse_context_fail(base, TURBO_EPROTO,
@@ -705,6 +714,11 @@ static int tr_text_validate_hex_payload(tr_text_parse_context_base_t *base,
     tr_text_parse_context_fail(base, TURBO_EPROTO,
                                TR_TEXT_DIAGNOSTIC_SEMANTIC,
                                odd_length_message);
+    return 0;
+  }
+  if (hex_digits / 2u > max_decoded_bytes) {
+    tr_text_parse_context_fail(base, TURBO_ENOSPC,
+                               TR_TEXT_DIAGNOSTIC_LIMIT, oversize_message);
     return 0;
   }
   return 1;
@@ -721,8 +735,10 @@ void tr_text_replay_append_submit(tr_text_replay_parse_context_t *ctx,
     return;
   }
   if (!tr_text_validate_hex_payload(
-          &ctx->base, payload.text, "replay submit payload is empty",
-          "replay submit payload must contain an even number of hex digits")) {
+          &ctx->base, payload.text, TR_RAFT_MAX_ENTRY_BYTES,
+          "replay submit payload is empty",
+          "replay submit payload must contain an even number of hex digits",
+          "replay submit payload exceeds a Raft entry")) {
     return;
   }
   action->kind = TR_TEXT_REPLAY_SUBMIT;

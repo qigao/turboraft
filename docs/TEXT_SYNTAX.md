@@ -1,5 +1,8 @@
 # TurboRaft Text Syntax
 
+> 使用指南（工具、CMake 链接、C API 骨架、端到端示例）见
+> [DSL_USAGE.md](DSL_USAGE.md)。
+
 TurboRaft provides three small text languages:
 
 - Query syntax for read-only inspection plans.
@@ -97,12 +100,16 @@ frame version 3 kind raft {
 Each frame requires `version`, `kind`, `from`, `to`, `term`, and `message`.
 Each field may appear at most once; duplicate fields are rejected as semantic
 errors.
-`payload` is optional and accepts an even number of hexadecimal digits after
-`0x`. The parser keeps the literal as a borrowed view; decoding and wire
-encoding remain the responsibility of the caller and existing TBE codecs.
-The parser returns `tr_text_protocol_debug_plan_t`; it does not encode or send
-the frame. Existing wire codecs remain the single binary protocol
-implementation.
+`payload` is optional at parse time and accepts an even number of
+hexadecimal digits after `0x`, decoding to at most
+`TR_RAFT_WIRE_MAX_FRAME_SIZE` bytes; a larger payload is rejected as a
+limit error. A frame without `payload` parses, but
+`tr_text_protocol_debug_execute()` rejects it because there are no wire bytes
+to decode. The parser keeps the literal as a borrowed view; decoding and
+wire encoding remain the responsibility of the caller and existing TBE
+codecs. The parser returns `tr_text_protocol_debug_plan_t`; it does not
+encode or send the frame. Existing wire codecs remain the single binary
+protocol implementation.
 
 ### Protocol execution adapter
 
@@ -155,10 +162,13 @@ poll request 3 until committed timeout 20 ticks;
 `submit` only constructs a client operation; it does not send the request.
 `poll` observes the request state up to the specified number of replay ticks;
 it does not advance time by itself. Submit payloads are borrowed hexadecimal
-views and must contain an even number of digits after `0x`.
+views, must contain an even number of digits after `0x`, and must decode to
+at most `TR_RAFT_MAX_ENTRY_BYTES` bytes; a larger payload is rejected as a
+limit error at parse time.
 
-The parser returns `tr_text_replay_plan_t`. Applying actions to a simulation
-is a separate runtime concern.
+The parser returns `tr_text_replay_plan_t`. The generic
+`tr_text_replay_execute()` adapter applies only `submit`, `poll`, and `tick`;
+the native core driver described below applies the full action set.
 
 ### Replay execution adapter
 
@@ -186,15 +196,57 @@ Payload decoding uses fixed temporary storage and enforces
 until the callback returns. `client_id` and `sequence` remain action metadata;
 the callback decides how the application layer maps them because the native
 `tr_raft_proposal_t` contract currently contains only `command_id` and data.
-Node, transport-fault, and expectation actions remain available in the typed
-plan but return `TURBO_ENOTSUP` from this generic adapter until a
-runtime-specific driver handles them.
+Node, transport-fault, and expectation actions are parsed into the plan,
+but the generic adapter returns `TURBO_ENOTSUP` for them; use the native
+core driver for those actions.
+
+### Native core driver
+
+`TurboRaft::ReplayDriver` (`include/turboraft/text_replay_core_driver.h`)
+owns a set of `tr_raft_core_t` nodes and a simulated message network. It
+executes every replay action through `tr_replay_driver_step()` or a whole
+plan through `tr_replay_driver_run()`:
+
+- `node` validates a configured node; `tick` advances every node by the
+  given number of unit ticks (one unit = tick all nodes + deliver due
+  messages), so heartbeats reset follower timers between units.
+- `send` injects a heartbeat request from the source node using its current
+  term, log tail, and commit.
+- `drop` / `delay` / `duplicate` install a single-shot filter for the next
+  in-flight message of the named kind; `partition` / `heal` toggle a
+  directed link and messages on a cut link are dropped at delivery.
+- `submit` proposes on the target node (must be the leader) with
+  `command_id = request_id` and returns a `(term, index)` receipt;
+  duplicate request ids fail with `TURBO_EALREADY`.
+- `poll` checks the receipt against `tr_raft_core_operation_status()` and
+  advances time internally up to `timeout_ticks` (driver-specific; the
+  generic adapter never advances time).
+- `expect role` / `expect commit_index` assert on `tr_raft_core_status()`
+  and return `TURBO_EPROTO` on mismatch.
+
+### REPL tool
+
+`turboraft_repl` (built as a tool, not installed) drives the native core
+driver interactively. Each command line is analyzed by the TurboUtils
+`turbo_cmd` parser (`turbo_parser.h`), which provides typed arguments,
+choices, and help. Interactive commands cover the full action set plus
+`cluster <n>`, `status [--node <id>]`, `run <file>`, `help`, and `exit`.
+A replay DSL script file can also be executed in batch with
+`turboraft_repl --nodes N --script FILE` or the `run <file>` command.
+
+Note: `turbo_cmd` (cmd_arger) terminates the process on a malformed option
+or bad value; the REPL pre-validates command names, positional counts, and
+integer values to avoid that path. Use `run <file>` for fully robust batch
+execution.
 
 ## Lifetime and limits
 
 The plan arrays have fixed capacity. Input size and statement count are
 bounded by `TR_TEXT_MAX_INPUT_BYTES` and `TR_TEXT_MAX_STATEMENTS`, and callers
-may select lower limits with `tr_text_parse_options_t`.
+may select lower limits with `tr_text_parse_options_t`. Hexadecimal payload
+bytes are also bounded at parse time: `submit` payloads by
+`TR_RAFT_MAX_ENTRY_BYTES` and protocol frame payloads by
+`TR_RAFT_WIRE_MAX_FRAME_SIZE`, each reported as `TURBO_ENOSPC`.
 
 String fields use borrowed `tstr_v` views into the input buffer. Keep the input
 buffer alive and unchanged until the plan is no longer used.

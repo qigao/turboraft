@@ -11,18 +11,13 @@ option(TURBORAFT_BUILD_FUZZERS
 
 option(TURBORAFT_BUILD_SQLITE_STORAGE
        "Build the optional SQLite durable storage adapter" ON)
-option(TURBORAFT_BUILD_CORONET "Build the optional CoroNet transport adapter"
-       OFF)
-option(TURBORAFT_BUILD_CONTROL_PLANE
-       "Build the optional TurboHTTP JSON-RPC and HTMX control plane" OFF)
-
-option(TURBORAFT_BUILD_WILLEMT_REFERENCE
-       "Build the pinned willemt/raft reference implementation" OFF)
-option(
-  TURBORAFT_BUILD_UPSTREAM_TESTS
-  "Build the pinned willemt/raft regression suite after its test dependency is audited"
-  OFF)
 option(BUILD_BENCHMARKS "Build TurboRaft performance benchmarks" OFF)
+option(BUILD_EXAMPLES "Build TurboRaft examples" OFF)
+
+# TurboNet/TurboHttp-backed adapters (CoroNet transport, snapshot manager,
+# service owner, control plane, console) are enabled automatically when the
+# corresponding packages are found during configure. A missing package only
+# disables the dependent targets; it does not fail the configure.
 
 set(TURBO_UTILS_ROOT
     ""

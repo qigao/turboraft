@@ -23,3 +23,11 @@ target_link_libraries(turboraft_text_protocol_executor_tests
                       PRIVATE TurboRaft::TextProtocolDebug TurboUtils::TinyTest)
 add_test(NAME turboraft.text_protocol_executor
          COMMAND turboraft_text_protocol_executor_tests)
+
+add_executable(turboraft_replay_driver_tests
+               test_text_replay_core_driver.c)
+target_link_libraries(turboraft_replay_driver_tests
+                      PRIVATE TurboRaft::ReplayDriver TurboRaft::TextSyntax
+                              TurboUtils::TinyTest)
+add_test(NAME turboraft.replay_driver
+         COMMAND turboraft_replay_driver_tests)
