@@ -418,6 +418,36 @@ int tr_raft_handshake_require_snapshot_v4(
                : TURBO_EPROTONOSUPPORT;
 }
 
+int tr_raft_handshake_select_snapshot_wire_version(
+    const tr_raft_handshake_result_t *result,
+    uint16_t *out_wire_version,
+    uint32_t *out_chunk_size)
+{
+    uint32_t chunk_size;
+
+    if (result == NULL || out_wire_version == NULL ||
+        out_chunk_size == NULL || !result->complete ||
+        (result->feature_bits &
+         TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE) == 0U) {
+        return TURBO_EINVAL;
+    }
+    if ((result->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V5) != 0U &&
+        result->max_frame_size >= TR_RAFT_WIRE_MAX_FRAME_SIZE &&
+        result->max_snapshot_chunk_size >=
+            TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
+        chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+        *out_wire_version = TR_RAFT_WIRE_SNAPSHOT_VERSION;
+        *out_chunk_size = chunk_size;
+        return TURBO_OK;
+    }
+    if ((result->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4) != 0U) {
+        *out_wire_version = TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION;
+        *out_chunk_size = TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+        return TURBO_OK;
+    }
+    return TURBO_EPROTONOSUPPORT;
+}
+
 static int tr_raft_handshake_exchange_fault(
     tr_raft_handshake_exchange_t *exchange,
     int error)

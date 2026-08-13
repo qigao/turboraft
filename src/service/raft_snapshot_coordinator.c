@@ -3,6 +3,7 @@
 #include <turbo_error.h>
 
 #include <stdlib.h>
+#include <string.h>
 
 struct tr_raft_snapshot_coordinator {
     tr_raft_snapshot_sender_t *sender;
@@ -10,17 +11,39 @@ struct tr_raft_snapshot_coordinator {
     void *emit_context;
 };
 
-static int tr_snapshot_coordinator_emit_current(
+static int tr_snapshot_coordinator_fill_window(
     tr_raft_snapshot_coordinator_t *coordinator)
 {
-    tr_raft_snapshot_chunk_t chunk;
-    int result;
+    for (;;) {
+        tr_raft_snapshot_chunk_t chunk;
+        int result;
 
-    result = tr_raft_snapshot_sender_next_chunk(coordinator->sender, &chunk);
-    if (result != TURBO_OK) {
-        return result;
+        result = tr_raft_snapshot_sender_next_chunk(coordinator->sender,
+                                                    &chunk);
+        if (result == TURBO_EBUSY) {
+            return TURBO_OK;
+        }
+        if (result != TURBO_OK) {
+            return result;
+        }
+        result = coordinator->emit(coordinator->emit_context, &chunk);
+        if (result != TURBO_OK) {
+            int cancel_result = tr_raft_snapshot_sender_cancel_chunk(
+                coordinator->sender, chunk.snapshot_offset);
+
+            return cancel_result == TURBO_OK ? result : cancel_result;
+        }
+        {
+            tr_raft_snapshot_sender_status_t status;
+
+            result = tr_raft_snapshot_sender_get_status(
+                coordinator->sender, &status);
+            if (result != TURBO_OK ||
+                status.inflight_chunks >= status.max_inflight_chunks) {
+                return result;
+            }
+        }
     }
-    return coordinator->emit(coordinator->emit_context, &chunk);
 }
 
 int tr_raft_snapshot_coordinator_create(
@@ -35,6 +58,7 @@ int tr_raft_snapshot_coordinator_create(
         return TURBO_EINVAL;
     }
     *out_coordinator = NULL;
+    memset(&sender_config, 0, sizeof(sender_config));
     coordinator = (tr_raft_snapshot_coordinator_t *) calloc(
         1U, sizeof(*coordinator));
     if (coordinator == NULL) {
@@ -44,6 +68,8 @@ int tr_raft_snapshot_coordinator_create(
     sender_config.self_id = config->self_id;
     sender_config.peer_id = config->peer_id;
     sender_config.max_snapshot_bytes = config->max_snapshot_bytes;
+    sender_config.chunk_size = config->chunk_size;
+    sender_config.max_inflight_chunks = config->max_inflight_chunks;
     result = tr_raft_snapshot_sender_create(&sender_config,
                                             &coordinator->sender);
     if (result != TURBO_OK) {
@@ -86,7 +112,7 @@ int tr_raft_snapshot_coordinator_begin(
     if (result != TURBO_OK) {
         return result;
     }
-    return tr_snapshot_coordinator_emit_current(coordinator);
+    return tr_snapshot_coordinator_fill_window(coordinator);
 }
 
 int tr_raft_snapshot_coordinator_handle_ack(
@@ -107,7 +133,7 @@ int tr_raft_snapshot_coordinator_handle_ack(
     if (result != TURBO_OK || status.complete) {
         return result;
     }
-    return tr_snapshot_coordinator_emit_current(coordinator);
+    return tr_snapshot_coordinator_fill_window(coordinator);
 }
 
 int tr_raft_snapshot_coordinator_resume(
@@ -116,7 +142,14 @@ int tr_raft_snapshot_coordinator_resume(
     if (coordinator == NULL) {
         return TURBO_EINVAL;
     }
-    return tr_snapshot_coordinator_emit_current(coordinator);
+    {
+        int result = tr_raft_snapshot_sender_prepare_resume(
+            coordinator->sender);
+
+        return result == TURBO_OK
+                   ? tr_snapshot_coordinator_fill_window(coordinator)
+                   : result;
+    }
 }
 
 int tr_raft_snapshot_coordinator_get_status(

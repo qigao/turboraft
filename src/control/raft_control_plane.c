@@ -24,6 +24,8 @@ enum {
     TR_RAFT_CONTROL_MAX_BATCH_SIZE = 8,
     TR_RAFT_CONTROL_JSON_CAPACITY = 8192,
     TR_RAFT_CONTROL_HTML_CAPACITY = 4096,
+    TR_RAFT_CONTROL_WS_CLOSE_POLICY = 1008,
+    TR_RAFT_CONTROL_WS_CLOSE_INTERNAL = 1011,
     TR_RAFT_CONTROL_RPC_SERVICE_ERROR = -32001,
     TR_RAFT_CONTROL_RPC_NOT_LEADER = -32002,
     TR_RAFT_CONTROL_RPC_AUDIT_FAULTED = -32003
@@ -948,10 +950,18 @@ static int tr_control_rpc_progress(Req *request,
             "%s{\"node_id\":%" PRIu64 ",\"match_index\":%" PRIu64
             ",\"next_index\":%" PRIu64
             ",\"recent_active\":%s,\"append_inflight\":%s"
+            ",\"append_inflight_count\":%zu"
+            ",\"append_inflight_limit\":%zu"
+            ",\"append_inflight_elapsed_ticks\":%u"
+            ",\"append_probe\":%s"
             ",\"snapshot_required\":%s}",
             emitted == 0U ? "" : ",", peer->node_id, peer->match_index,
             peer->next_index, peer->recent_active ? "true" : "false",
             peer->append_inflight ? "true" : "false",
+            peer->inflight_append_count,
+            peer->max_inflight_append_requests,
+            peer->append_inflight_elapsed_ticks,
+            peer->append_probe ? "true" : "false",
             peer->snapshot_required ? "true" : "false");
         ++emitted;
     }
@@ -1516,6 +1526,61 @@ static void tr_control_status_route(Req *request, Res *response)
     reply(response, 200, "text/html; charset=utf-8", html, size);
 }
 
+static int tr_control_ws_send_status(iris_websocket_t *websocket,
+                                     tr_raft_control_plane_t *plane)
+{
+    char status[TR_RAFT_CONTROL_JSON_CAPACITY];
+    size_t size;
+
+    if (websocket == NULL || plane == NULL ||
+        tr_raft_control_plane_render_status_json(
+            plane, status, sizeof(status), &size) != TURBO_OK) {
+        return TURBO_EINVAL;
+    }
+    return iris_ws_send(websocket, IRIS_WS_TEXT, status, size);
+}
+
+static void tr_control_ws_message(iris_websocket_t *websocket,
+                                  iris_websocket_opcode_t opcode,
+                                  const void *data,
+                                  size_t size,
+                                  void *user_data)
+{
+    static const char refresh[] = "refresh";
+    tr_raft_control_plane_t *plane =
+        (tr_raft_control_plane_t *) user_data;
+
+    if ((opcode != IRIS_WS_TEXT && opcode != IRIS_WS_BINARY) ||
+        size != sizeof(refresh) - 1U || data == NULL ||
+        memcmp(data, refresh, sizeof(refresh) - 1U) != 0) {
+        (void) iris_ws_close(websocket, TR_RAFT_CONTROL_WS_CLOSE_POLICY,
+                             "expected refresh");
+        return;
+    }
+    if (tr_control_ws_send_status(websocket, plane) != TURBO_OK) {
+        (void) iris_ws_close(websocket, TR_RAFT_CONTROL_WS_CLOSE_INTERNAL,
+                             "status unavailable");
+    }
+}
+
+static void tr_control_ws_route(Req *request, Res *response)
+{
+    tr_raft_control_plane_t *plane = tr_control_from_request(request);
+    iris_websocket_t *websocket = iris_ws(request);
+
+    (void) response;
+    if (plane == NULL || websocket == NULL ||
+        iris_ws_on_message(websocket, tr_control_ws_message, plane) !=
+            TURBO_OK ||
+        tr_control_ws_send_status(websocket, plane) != TURBO_OK) {
+        if (websocket != NULL) {
+            (void) iris_ws_close(websocket,
+                                 TR_RAFT_CONTROL_WS_CLOSE_INTERNAL,
+                                 "status unavailable");
+        }
+    }
+}
+
 static void tr_control_ui_route(Req *request, Res *response)
 {
     static const char page[] =
@@ -1786,6 +1851,8 @@ int tr_raft_control_plane_create(
     iris_app_get(plane->app, TR_RAFT_CONTROL_UI_PATH, tr_control_ui_route);
     iris_app_get(plane->app, TR_RAFT_CONTROL_STATUS_PATH,
                  tr_control_status_route);
+    iris_app_ws(plane->app, TR_RAFT_CONTROL_WS_PATH,
+                tr_control_ws_route);
     *out_plane = plane;
     return TURBO_OK;
 

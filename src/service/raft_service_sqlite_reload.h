@@ -21,6 +21,7 @@ typedef struct tr_raft_service_sqlite_reload_config {
     uint32_t election_max_ticks;
     uint32_t initial_election_timeout_ticks;
     size_t max_log_entries;
+    size_t max_inflight_append_requests;
 } tr_raft_service_sqlite_reload_config_t;
 
 int tr_raft_service_sqlite_reload_create(

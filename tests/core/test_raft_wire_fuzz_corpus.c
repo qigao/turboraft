@@ -93,7 +93,12 @@ spec("raft wire fuzz corpus")
         chunk.configuration.members[0].roles =
             TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
         memset(chunk.snapshot_digest, 0x3c, sizeof(chunk.snapshot_digest));
-        memset(chunk.data, 0x5a, chunk.data_length);
+        {
+            static const uint8_t chunk_data[16] = {
+                0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a,
+                0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a};
+            chunk.data = chunk_data;
+        }
         check_int_eq(tr_raft_wire_encode_snapshot_chunk(
                          codec, &metadata, &chunk, frame, sizeof(frame),
                          &frame_length),

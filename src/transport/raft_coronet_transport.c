@@ -19,7 +19,9 @@ struct tr_raft_coronet_session {
     tr_raft_node_id_t local_node_id;
     tr_raft_node_id_t peer_node_id;
     uint16_t raft_wire_version;
-    int snapshot_v4_enabled;
+    uint16_t snapshot_wire_version;
+    uint32_t snapshot_chunk_size;
+    uint32_t max_frame_size;
     uint64_t next_outbound_message_id;
     uint64_t last_inbound_message_id;
     int outbound_ids_exhausted;
@@ -33,6 +35,7 @@ struct tr_raft_coronet_session {
     uint8_t frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
     size_t expected_frame_size;
     size_t frame_used;
+    uint8_t outbound_packet[TR_RAFT_CORONET_MAX_PACKET_SIZE];
 };
 
 struct tr_raft_coronet_peer_manager {
@@ -163,8 +166,7 @@ static int tr_raft_coronet_dispatch_frame(tr_raft_coronet_session_t *session)
         (kind == TR_RAFT_WIRE_PAYLOAD_RAFT &&
          wire_version != session->raft_wire_version) ||
         (kind != TR_RAFT_WIRE_PAYLOAD_RAFT &&
-         (!session->snapshot_v4_enabled ||
-          wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION))) {
+         wire_version != session->snapshot_wire_version)) {
         return tr_raft_coronet_fault(session, TURBO_EPROTO);
     }
     payload.kind = kind;
@@ -182,6 +184,11 @@ static int tr_raft_coronet_dispatch_frame(tr_raft_coronet_session_t *session)
             &metadata, &payload.data.snapshot_chunk);
         from = payload.data.snapshot_chunk.from;
         to = payload.data.snapshot_chunk.to;
+        if (result == TURBO_OK &&
+            payload.data.snapshot_chunk.data_length >
+                session->snapshot_chunk_size) {
+            result = TURBO_EPROTO;
+        }
         break;
     case TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK:
         result = tr_raft_wire_decode_snapshot_ack(
@@ -250,7 +257,10 @@ int tr_raft_coronet_session_create(
     if (config->owns_socket && config->socket == NULL) {
         return TURBO_EINVAL;
     }
-    if (config->socket != NULL &&
+    if (config->socket != NULL && config->handshake == NULL) {
+        return TURBO_EPROTO;
+    }
+    if (config->handshake != NULL &&
         tr_raft_handshake_result_validate(
             config->handshake, &config->cluster_id, config->local_node_id,
             config->peer_node_id) != TURBO_OK) {
@@ -273,8 +283,10 @@ int tr_raft_coronet_session_create(
     session->local_node_id = config->local_node_id;
     session->peer_node_id = config->peer_node_id;
     session->raft_wire_version = TR_RAFT_WIRE_VERSION;
-    session->snapshot_v4_enabled = 1;
-    if (config->socket != NULL) {
+    session->snapshot_wire_version = TR_RAFT_WIRE_SNAPSHOT_VERSION;
+    session->snapshot_chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+    session->max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
+    if (config->handshake != NULL) {
         result = tr_raft_handshake_select_raft_wire_version(
             config->handshake, 0U, &session->raft_wire_version);
         if (result != TURBO_OK) {
@@ -282,9 +294,18 @@ int tr_raft_coronet_session_create(
             free(session);
             return result;
         }
-        session->snapshot_v4_enabled =
-            tr_raft_handshake_require_snapshot_v4(config->handshake) ==
-            TURBO_OK;
+        result = tr_raft_handshake_select_snapshot_wire_version(
+            config->handshake, &session->snapshot_wire_version,
+            &session->snapshot_chunk_size);
+        if (result == TURBO_EPROTONOSUPPORT) {
+            session->snapshot_wire_version = 0U;
+            session->snapshot_chunk_size = 0U;
+        } else if (result != TURBO_OK) {
+            tr_raft_wire_codec_destroy(session->codec);
+            free(session);
+            return result;
+        }
+        session->max_frame_size = config->handshake->max_frame_size;
     }
     session->next_outbound_message_id = config->first_outbound_message_id;
     session->on_message = config->on_message;
@@ -388,21 +409,25 @@ int tr_raft_coronet_encode_payload_packet(
             &frame_size);
         break;
     case TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK:
-        if (!session->snapshot_v4_enabled) {
+        if (session->snapshot_wire_version == 0U ||
+            payload->data.snapshot_chunk.data_length >
+            session->snapshot_chunk_size) {
             return TURBO_EPROTONOSUPPORT;
         }
-        result = tr_raft_wire_encode_snapshot_chunk(
-            session->codec, &metadata, &payload->data.snapshot_chunk,
+        result = tr_raft_wire_encode_snapshot_chunk_version(
+            session->codec, session->snapshot_wire_version, &metadata,
+            &payload->data.snapshot_chunk,
             output + TR_RAFT_CORONET_LENGTH_PREFIX_SIZE,
             output_capacity - TR_RAFT_CORONET_LENGTH_PREFIX_SIZE,
             &frame_size);
         break;
     case TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK:
-        if (!session->snapshot_v4_enabled) {
+        if (session->snapshot_wire_version == 0U) {
             return TURBO_EPROTONOSUPPORT;
         }
-        result = tr_raft_wire_encode_snapshot_ack(
-            session->codec, &metadata, &payload->data.snapshot_ack,
+        result = tr_raft_wire_encode_snapshot_ack_version(
+            session->codec, session->snapshot_wire_version, &metadata,
+            &payload->data.snapshot_ack,
             output + TR_RAFT_CORONET_LENGTH_PREFIX_SIZE,
             output_capacity - TR_RAFT_CORONET_LENGTH_PREFIX_SIZE,
             &frame_size);
@@ -475,7 +500,6 @@ static int tr_raft_coronet_send_payload_once(
     tr_raft_coronet_session_t *session,
     const tr_raft_coronet_payload_t *payload)
 {
-    uint8_t packet[TR_RAFT_CORONET_MAX_PACKET_SIZE];
     size_t packet_size = 0U;
     int result;
 
@@ -487,11 +511,13 @@ static int tr_raft_coronet_send_payload_once(
         return TURBO_EPROTO;
     }
     result = tr_raft_coronet_encode_payload_packet(
-        session, payload, packet, sizeof(packet), &packet_size);
+        session, payload, session->outbound_packet,
+        sizeof(session->outbound_packet), &packet_size);
     if (result != TURBO_OK) {
         return tr_raft_coronet_fault(session, result);
     }
-    result = coro_socket_send(session->socket, (const char *) packet,
+    result = coro_socket_send(session->socket,
+                              (const char *) session->outbound_packet,
                               packet_size);
     if (result != TURBO_OK) {
         return tr_raft_coronet_fault(session, result);
@@ -587,6 +613,7 @@ int tr_raft_coronet_feed(tr_raft_coronet_session_t *session,
             session->expected_frame_size =
                 (size_t) tr_raft_coronet_read_u32_be(session->length_prefix);
             if (session->expected_frame_size < TR_RAFT_WIRE_HEADER_SIZE ||
+                session->expected_frame_size > session->max_frame_size ||
                 session->expected_frame_size > TR_RAFT_WIRE_MAX_FRAME_SIZE) {
                 return tr_raft_coronet_fault(session, TURBO_EPROTO);
             }

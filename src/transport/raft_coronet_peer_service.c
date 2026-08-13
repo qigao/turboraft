@@ -1,6 +1,7 @@
 #include <turboraft/raft_coronet_peer_service.h>
 
 #include "raft_coronet_transport_internal.h"
+#include "raft_coronet_payload_storage.h"
 
 #include <CoroNet/turbo_coro_context.h>
 #include <turbo_deque.h>
@@ -11,7 +12,7 @@
 #include <string.h>
 
 TURBO_DEQUE_DEFINE(tr_raft_coronet_payload_queue_t,
-                   tr_raft_coronet_payload_t)
+                   tr_raft_owned_coronet_payload_t)
 
 typedef struct tr_raft_coronet_reader_slot {
     tr_raft_coronet_peer_service_t *service;
@@ -31,6 +32,7 @@ struct tr_raft_coronet_peer_service {
     tr_raft_node_id_t peer_node_ids[TR_RAFT_MAX_VOTERS - 1U];
     tr_raft_coronet_payload_queue_t outbound_queues[
         TR_RAFT_MAX_VOTERS - 1U];
+    size_t outbound_snapshot_bytes[TR_RAFT_MAX_VOTERS - 1U];
     tr_raft_coronet_reader_slot_t readers[TR_RAFT_MAX_VOTERS - 1U];
     size_t scheduler_count;
     size_t peer_count;
@@ -191,19 +193,17 @@ static void tr_raft_coronet_peer_service_writer(coro_t *coroutine,
         size_t index;
         made_progress = 0;
         for (index = 0U; index < service->peer_count; ++index) {
-            tr_raft_coronet_payload_t *front =
+            tr_raft_owned_coronet_payload_t *front =
                 tr_raft_coronet_payload_queue_t_front(
                     &service->outbound_queues[index]);
-            tr_raft_coronet_payload_t payload;
-            tr_raft_coronet_payload_t discarded;
+            tr_raft_owned_coronet_payload_t discarded;
             int result;
 
             if (front == NULL) {
                 continue;
             }
-            payload = *front;
             result = tr_raft_coronet_peer_manager_enqueue_payload(
-                service->manager, &payload);
+                service->manager, &front->payload);
             if (result == TURBO_OK) {
                 if (!tr_raft_coronet_payload_queue_t_pop_front(
                         &service->outbound_queues[index], &discarded)) {
@@ -211,6 +211,12 @@ static void tr_raft_coronet_peer_service_writer(coro_t *coroutine,
                     service->stopping = 1;
                     break;
                 }
+                if (discarded.payload.kind ==
+                    TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+                    service->outbound_snapshot_bytes[index] -=
+                        discarded.payload.data.snapshot_chunk.data_length;
+                }
+                tr_raft_owned_coronet_payload_release(&discarded);
                 made_progress = 1;
             } else if (result != TURBO_ENOTCONN && result != TURBO_EPROTO) {
                 service->last_pump_error = result;
@@ -415,6 +421,12 @@ static void tr_raft_coronet_peer_service_destroy_queues(
     size_t index;
 
     for (index = 0U; index < queue_count; ++index) {
+        tr_raft_owned_coronet_payload_t owned;
+
+        while (tr_raft_coronet_payload_queue_t_pop_front(
+            &service->outbound_queues[index], &owned)) {
+            tr_raft_owned_coronet_payload_release(&owned);
+        }
         tr_raft_coronet_payload_queue_t_destroy(
             &service->outbound_queues[index]);
     }
@@ -883,7 +895,8 @@ int tr_raft_coronet_peer_service_enqueue_payload(
     tr_raft_coronet_peer_service_t *service,
     const tr_raft_coronet_payload_t *payload)
 {
-    tr_raft_coronet_payload_t discarded;
+    tr_raft_owned_coronet_payload_t owned;
+    tr_raft_owned_coronet_payload_t discarded;
     tr_raft_node_id_t from;
     tr_raft_node_id_t to;
     size_t index;
@@ -921,15 +934,38 @@ int tr_raft_coronet_peer_service_enqueue_payload(
         service->outbound_queue_capacity) {
         return TURBO_ENOSPC;
     }
-    result = tr_raft_coronet_payload_queue_t_push_back(
-        &service->outbound_queues[index], *payload);
+    if (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK &&
+        (service->outbound_snapshot_bytes[index] >
+             TR_RAFT_WIRE_MAX_INFLIGHT_SNAPSHOT_BYTES ||
+         payload->data.snapshot_chunk.data_length >
+             TR_RAFT_WIRE_MAX_INFLIGHT_SNAPSHOT_BYTES -
+                 service->outbound_snapshot_bytes[index])) {
+        return TURBO_ENOSPC;
+    }
+    result = tr_raft_owned_coronet_payload_copy(&owned, payload);
     if (result != TURBO_OK) {
+        return result;
+    }
+    if (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+        service->outbound_snapshot_bytes[index] +=
+            payload->data.snapshot_chunk.data_length;
+    }
+    result = tr_raft_coronet_payload_queue_t_push_back(
+        &service->outbound_queues[index], owned);
+    if (result != TURBO_OK) {
+        tr_raft_owned_coronet_payload_release(&owned);
         return result;
     }
     result = tr_raft_coronet_peer_service_start_writer(service);
     if (result != TURBO_OK) {
         tr_raft_coronet_payload_queue_t_pop_back(
             &service->outbound_queues[index], &discarded);
+        if (discarded.payload.kind ==
+            TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+            service->outbound_snapshot_bytes[index] -=
+                discarded.payload.data.snapshot_chunk.data_length;
+        }
+        tr_raft_owned_coronet_payload_release(&discarded);
     }
     return result;
 }

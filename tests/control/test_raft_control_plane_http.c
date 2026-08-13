@@ -8,6 +8,7 @@
 #include <iris/security.h>
 #include <iris/server.h>
 #include <tinytest.h>
+#include <turbo_http.h>
 #include <turbo_error.h>
 
 #include <stdio.h>
@@ -44,12 +45,14 @@ enum {
     CONTROL_HTTP_AUTH_TEST_PORT = 19942,
     CONTROL_HTTP_RPC_MAX_REQUEST_BYTES = 16 * 1024,
     CONTROL_HTTP_REQUEST_CAPACITY = 20 * 1024,
+    CONTROL_HTTP_URL_CAPACITY = 128,
     CONTROL_HTTP_DRAIN_TIMEOUT_MS = 1000
 };
 
 typedef struct control_http_state {
     coro_context_t *context;
     coro_socket_t *server;
+    iris_app_t *app;
     tr_raft_service_t *service;
     tr_raft_control_plane_t *plane;
     tr_raft_service_owner_t *owner;
@@ -70,6 +73,8 @@ typedef struct control_http_state {
     int operation_control_ok;
     int async_control_ok;
     int fragment_ok;
+    int h2_status_ok;
+    int websocket_status_ok;
     int status_ok;
     int members_ok;
     int members_filter_ok;
@@ -339,6 +344,81 @@ static int control_http_exchange(coro_context_t *context,
            CONTROL_HTTP_RESPONSE_MATCH;
 }
 
+static int control_websocket_status(coro_context_t *context)
+{
+    static const char refresh[] = "refresh";
+    coro_socket_t *client;
+    char *data = NULL;
+    size_t size = 0U;
+    int is_text = 0;
+    int initial_ok = 0;
+    int refresh_ok = 0;
+
+    client = coro_socket_create(context, CORO_SOCKET_TCP_V4);
+    if (client == NULL) {
+        return 0;
+    }
+    if (coro_socket_connect_ws(client, "127.0.0.1",
+                               CONTROL_HTTP_TEST_PORT,
+                               TR_RAFT_CONTROL_WS_PATH, 0) != TURBO_OK) {
+        coro_socket_destroy(client);
+        return 0;
+    }
+    if (coro_socket_recv_ws(client, &data, &size, &is_text) == TURBO_OK) {
+        initial_ok = is_text &&
+                     control_http_response_contains(data, size,
+                                                    "\"node_id\":7");
+        coro_socket_free_recv(data);
+        data = NULL;
+    }
+    if (initial_ok &&
+        coro_socket_send_ws_text(client, refresh,
+                                 sizeof(refresh) - 1U) == TURBO_OK &&
+        coro_socket_recv_ws(client, &data, &size, &is_text) == TURBO_OK) {
+        refresh_ok = is_text &&
+                     control_http_response_contains(data, size,
+                                                    "\"node_id\":7");
+    }
+    if (data != NULL) {
+        coro_socket_free_recv(data);
+    }
+    coro_socket_destroy(client);
+    return initial_ok && refresh_ok;
+}
+
+static int control_h2_status(coro_context_t *context)
+{
+    turbo_http_options_t options;
+    turbo_http_t *client = NULL;
+    http_response_t *response = NULL;
+    char url[CONTROL_HTTP_URL_CAPACITY];
+    int written;
+    int matched = 0;
+
+    if (turbo_http_options_init(&options, sizeof(options)) != TURBO_OK) {
+        return 0;
+    }
+    options.transport = TURBO_HTTP_TRANSPORT_H2;
+    options.follow_redirects = 0;
+    if (turbo_http_create(context, &options, &client) != TURBO_OK) {
+        return 0;
+    }
+    written = snprintf(url, sizeof(url), "http://127.0.0.1:%u%s",
+                       CONTROL_HTTP_TEST_PORT,
+                       TR_RAFT_CONTROL_STATUS_PATH);
+    if (written > 0 && (size_t) written < sizeof(url)) {
+        response = turbo_http_get(client, url);
+        matched = response != NULL && response->status_code == 200 &&
+                  response->body != NULL &&
+                  control_http_response_contains(response->body,
+                                                 response->body_len,
+                                                 "STABLE");
+    }
+    http_response_free(response);
+    turbo_http_destroy(client);
+    return matched;
+}
+
 static int control_http_rpc(coro_context_t *context,
                             const char *body,
                             const char *expected)
@@ -447,6 +527,8 @@ static void control_http_coro(coro_t *coroutine, void *argument)
     state->fragment_ok = control_http_exchange(
         state->context, "GET", TR_RAFT_CONTROL_STATUS_PATH, NULL,
         "STABLE");
+    state->h2_status_ok = control_h2_status(state->context);
+    state->websocket_status_ok = control_websocket_status(state->context);
     state->status_ok = control_http_rpc(
         state->context,
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"raft.status\",\"params\":{}}",
@@ -684,6 +766,9 @@ spec("raft control plane HTTP integration")
         config.owner = state.owner;
         config.audit = state.audit;
         config.allow_unauthenticated_mutations = true;
+        state.app = iris_app_create();
+        check_not_null(state.app);
+        config.app = state.app;
         check_int_eq(tr_raft_control_plane_create(&config, &state.plane),
                      TURBO_OK);
         init_router();
@@ -698,6 +783,8 @@ spec("raft control plane HTTP integration")
         check(state.operation_control_ok);
         check(state.async_control_ok);
         check(state.fragment_ok);
+        check(state.h2_status_ok);
+        check(state.websocket_status_ok);
         check(state.status_ok);
         check(state.members_ok);
         check(state.members_filter_ok);
@@ -726,6 +813,7 @@ spec("raft control plane HTTP integration")
             coro_socket_destroy(state.server);
         }
         tr_raft_control_plane_destroy(state.plane);
+        iris_app_destroy(state.app);
         tr_raft_control_audit_destroy(state.audit);
         check_int_eq(tr_raft_service_owner_close(state.owner), TURBO_OK);
         tr_raft_service_destroy(state.service);

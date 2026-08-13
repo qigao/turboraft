@@ -1,5 +1,5 @@
-#ifndef SCHEMA_GENERATED_H
-#define SCHEMA_GENERATED_H
+#ifndef TurboRaftWireV3_GENERATED_H
+#define TurboRaftWireV3_GENERATED_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -67,10 +67,10 @@ typedef struct turbo_uuid_s {
 enum { TBE_SCHEMA_CODEC_ABI_VERSION = 1 };
 
 typedef enum tbe_schema_format_e {
-    TBE_SCHEMA_FORMAT_JSON = 1,
-    TBE_SCHEMA_FORMAT_YAML = 2,
-    TBE_SCHEMA_FORMAT_CSV = 3,
-    TBE_SCHEMA_FORMAT_XML = 4
+    TBE_SCHEMA_FORMAT_JSON = DATA_BIND_FORMAT_JSON,
+    TBE_SCHEMA_FORMAT_YAML = DATA_BIND_FORMAT_YAML,
+    TBE_SCHEMA_FORMAT_CSV = DATA_BIND_FORMAT_CSV,
+    TBE_SCHEMA_FORMAT_XML = DATA_BIND_FORMAT_XML
 } tbe_schema_format_t;
 
 /**
@@ -109,7 +109,6 @@ enum { TurboRaftWireV3_WIRE_BIG_ENDIAN = 0 };
 TBE_GENERATED_API DataBindStatus TurboRaftWireV3_codec_create(DataBind **out_codec, DataBindError *error);
 TBE_GENERATED_API const char *TurboRaftWireV3_schema_text(void);
 TBE_GENERATED_API const tbe_schema_codec_v1_t *TurboRaftWireV3_schema_codec(void);
-#define TurboRaftWireV3_SCHEMA_VERSION 3
 
 /* ========================================================================= */
 /* Enums                                                                     */
@@ -1549,4 +1548,4 @@ using RaftWireMessageV3Owner = Owner<RaftWireMessageV3_t, RaftWireMessageV3_init
 #undef TBE_GENERATED_STRCMP
 #undef TBE_GENERATED_STRLEN
 
-#endif /* SCHEMA_GENERATED_H */
+#endif /* TurboRaftWireV3_GENERATED_H */

@@ -33,8 +33,11 @@
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
                 "TURBO_UTILS_ROOT": "$env{PKG_ROOT}/turboutils",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser",
                 "TURBO_NET_ROOT": "$env{PKG_ROOT}/turbonet",
-                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turbohttp",
+                "TURBO_HTTP_ROOT": "$env{PKG_ROOT}/turbohttp",
+                "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft",
                 "CMAKE_MAKE_PROGRAM": "$env{NINJA_ROOT}/ninja.exe",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
                 "PKG_CONFIG_EXECUTABLE": "${sourceDir}/vcpkg_installed/x64-windows/tools/pkgconf/pkgconf.exe",
@@ -50,8 +53,11 @@
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
                 "TURBO_UTILS_ROOT": "$env{PKG_ROOT}/turboutils",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser",
                 "TURBO_NET_ROOT": "$env{PKG_ROOT}/turbonet",
-                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turbohttp",
+                "TURBO_HTTP_ROOT": "$env{PKG_ROOT}/turbohttp",
+                "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft",
                 "CMAKE_MAKE_PROGRAM": "/usr/bin/ninja",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
                 "VCPKG_TARGET_TRIPLET": "x64-linux",
@@ -79,11 +85,14 @@
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
                 "CMAKE_MAKE_PROGRAM": "$env{NINJA_ROOT}/ninja.exe",
-                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turbohttp-android",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft-android",
                 "CMAKE_PREFIX_PATH": "$env{PROJECT_ROOT}/turbonet/turbo-utils/build/$env{ANDROID_BUILD_VARIANT};$env{PROJECT_ROOT}/turbonet/turbonet/build/$env{ANDROID_BUILD_VARIANT}",
                 "PKG_CONFIG_EXECUTABLE": "${sourceDir}/vcpkg_installed/x64-windows/tools/pkgconf/pkgconf.exe",
                 "TURBO_UTILS_ROOT": "$env{PROJECT_ROOT}/turbonet/turbo-utils/build/$env{ANDROID_BUILD_VARIANT}",
+                "TURBOPARSER_ROOT": "$env{PROJECT_ROOT}/turbonet/turbo-parser/build/$env{ANDROID_BUILD_VARIANT}",
                 "TURBO_NET_ROOT": "$env{PROJECT_ROOT}/turbonet/turbonet/build/$env{ANDROID_BUILD_VARIANT}",
+                "TURBO_HTTP_ROOT": "$env{PKG_ROOT}/turbohttp-android",
+                "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq-android",
                 "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
             }
@@ -104,6 +113,7 @@
             "cacheVariables": {
                 "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows",
                 "TURBO_UTILS_ROOT": "$env{PKG_ROOT}/turboutils",
+                "TURBOPARSER_ROOT": "$env{PKG_ROOT}/turboparser",
                 "TURBO_NET_ROOT": "$env{PKG_ROOT}/turbonet"
             },
             "environment": {

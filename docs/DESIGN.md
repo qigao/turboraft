@@ -1,25 +1,48 @@
 # TurboRaft Architecture Design
 
-Status: design draft, implementation has not started.
+Status: implemented architecture; production hardening remains in progress.
 
 ## 1. Decision summary
 
-TurboRaft will be a layered replicated-state-machine library. Consensus safety belongs to a deterministic core. Network, persistence, application state, and HTTP administration are ports around that core.
+TurboRaft is a layered replicated-state-machine library. Consensus safety belongs to a deterministic core. Network, persistence, application state, and HTTP administration are ports around that core.
 
-```text
-Application: M3 namespace, mesh rules, task leases
-                    |
-             TurboRaft Service
-          /         |          \
- deterministic   durable      peer transport
- Raft core        storage      CoroNet TCP/TLS
-          \         |          /
-             owner-loop driver
-                    |
-        optional TurboHTTP management adapter
+```mermaid
+flowchart TB
+    APP["Application<br/>M3 namespace, mesh rules, task leases"]
+    ADMIN["Operator / diagnostics client"]
+
+    subgraph NODE["TurboRaft node process"]
+        HTTP["Optional TurboHTTP / Iris<br/>management adapter"]
+        SERVICE["TurboRaft Service<br/>single owner-loop driver"]
+        CORE["Deterministic Raft Core<br/>term, log, quorum, progress"]
+        SNAP["Snapshot Manager<br/>64 KiB x 4 V5 window"]
+        STORAGE["Durable Storage<br/>WAL, hard state, snapshots"]
+        PORT["Bounded peer-transport port"]
+        DIRECT["Direct CoroNet<br/>TCP/TLS"]
+        FLOWMQ["FlowMQ adapter<br/>FlowMQ::FlowMQ / ROUTER-DEALER"]
+        CORONET["FlowMQ internal CoroNet runtime<br/>TLS/WSS"]
+
+        HTTP -->|"bounded owner-loop command"| SERVICE
+        APP -->|"proposal / read / apply callback"| SERVICE
+        SERVICE <--> CORE
+        SERVICE -->|"ordered durable Ready effects"| STORAGE
+        SERVICE <--> SNAP
+        SERVICE --> PORT
+        SNAP --> PORT
+        PORT --> DIRECT
+        PORT --> FLOWMQ
+        FLOWMQ --> CORONET
+    end
+
+    ADMIN -->|"authenticated management RPC"| HTTP
+    DIRECT -->|"Raft binary frames"| PEERS["Remote TurboRaft peers"]
+    CORONET -->|"Raft binary frames"| PEERS
 ```
 
-The peer protocol is not JSON-RPC. Consensus traffic uses a bounded binary protocol over persistent CoroNet TCP/TLS streams. TurboHTTP/Iris is limited to authenticated operator and diagnostic APIs.
+The peer protocol is not JSON-RPC. Consensus traffic uses the same bounded
+binary wire protocol through either direct CoroNet TCP/TLS or the optional
+FlowMQ `ROUTER`/`DEALER` adapter over TLS/WSS. TurboHTTP/Iris is limited to
+authenticated operator and diagnostic APIs.
 
 ## 2. Evidence and constraints
 
@@ -45,7 +68,8 @@ The peer protocol is not JSON-RPC. Consensus traffic uses a bounded binary proto
 - Snapshots and log compaction.
 - Learners and joint-consensus membership changes.
 - Leadership transfer and check-quorum.
-- CoroNet TCP/TLS peer transport.
+- Direct CoroNet TCP/TLS peer transport.
+- Optional FlowMQ `ROUTER`/`DEALER` peer transport over TLS/WSS.
 - Optional TurboHTTP JSON-RPC management adapter.
 - Metrics, structured diagnostics, and audit events for membership changes.
 
@@ -80,6 +104,7 @@ The detailed adoption criteria are defined in [WILLEMT_RAFT_ASSESSMENT.md](WILLE
 | `TurboRaft::Core` | Deterministic Raft state machine, quorum math, progress tracking, message production. | TurboUtils Core only for bounded containers and errors. |
 | `TurboRaft::Storage` | WAL, hard state, snapshots, recovery, corruption detection. | `TurboUtils::Core`, CRC32C provider. |
 | `TurboRaft::CoroNet` | Peer listener, outbound pools, framing, TLS identity, backpressure. | `TurboNet::CoroNet`. |
+| `TurboRaft::FlowMQ` | Optional ROUTER/DEALER peer service, secure endpoint validation, batching, retained snapshot buffers. | Core, CoroNet, and the public `FlowMQ::FlowMQ` target. |
 | `TurboRaft::Service` | Owner-loop driver, `Ready` ordering, proposal/read completion, lifecycle. | Core, Storage, CoroNet. |
 | `TurboRaft::HTTP` | Optional Iris JSON-RPC administration and diagnostics. | Service, TurboHTTP Iris/RPC. |
 
@@ -216,16 +241,63 @@ Static membership ships first. Dynamic membership is enabled only when the compl
 - Two-voter production clusters are rejected by default because one failure removes quorum.
 - Forced quorum reconstruction is an offline disaster-recovery tool, not an RPC method.
 
-## 14. CoroNet transport
+## 14. Peer transport
 
-- One persistent stream per directed peer relationship is sufficient for MVP.
-- TCP/TLS is the production transport; plaintext TCP is development-only and requires an explicit option.
-- Each socket has connect, handshake, read-idle, write, and snapshot timeouts.
-- Frames and decoded messages are bounded before allocation.
-- Append traffic uses per-peer inflight byte and message windows.
-- Heartbeats are never blocked indefinitely behind snapshot payloads; snapshots use a separate stream or strict priority scheduling.
-- Duplicate connections are resolved deterministically using stable node IDs.
-- Connection failure affects availability, not core safety; messages are retried from current progress state.
+The service and snapshot manager depend on one payload-enqueue port. The wire
+codec, HELLO/ACK negotiation, peer identity, cumulative acknowledgements, and
+Raft progress remain transport-neutral.
+
+FlowMQ is provided by the independent `flowmq` repository. Its only public
+consumer target is `FlowMQ::FlowMQ`; protocol, runtime, and transport details
+remain private to that package.
+
+The installed FlowMQ API exposes standalone CONNECT and ROUTER/BIND owners.
+TurboRaft embeds their public configuration types, installs private callbacks,
+and links only `FlowMQ::FlowMQ`; it does not include FlowMQ private runtime
+headers or depend on TurboFlow.
+
+```mermaid
+flowchart LR
+    READY["Core / Ready messages"] --> PORT["Peer enqueue port"]
+    SNAP["Snapshot V5 sender"] --> PORT
+    PORT -->|"direct profile"| CS["CoroNet session"]
+    PORT -->|"FlowMQ profile"| FQ["Per-peer bounded FIFO"]
+    FQ --> DEALER["FlowMQ DEALER"]
+    DEALER --> CW["CoroNet TLS/WSS transport"]
+    CS --> WIRE["Remote peer"]
+    CW --> ROUTER["Remote FlowMQ ROUTER"]
+    ROUTER --> WIRE
+```
+
+- Direct CoroNet uses one persistent TCP/TLS stream per directed peer
+  relationship. Plaintext TCP is development-only and requires an explicit
+  option.
+- FlowMQ maps one local node to one `ROUTER` listener and one `DEALER` per
+  configured remote peer. Only TLS and WSS endpoints are accepted.
+- Both adapters reuse the bounded Raft wire codec and negotiated Snapshot V4/V5
+  profile. A negotiated-profile mismatch fails at the transport boundary.
+- Frames and decoded messages are bounded before allocation. Snapshot V5 uses
+  64 KiB chunks, a four-slot sender window, cumulative ACK, and at most 256 KiB
+  of retained snapshot bytes per peer.
+- FlowMQ copies a borrowed snapshot chunk once into an owned `mem_buffer_t`
+  before it crosses the asynchronous queue boundary. Queue saturation returns
+  `TURBO_ENOSPC`; it never silently drops or grows without bound.
+- Duplicate direct connections are resolved deterministically using stable
+  node IDs. FlowMQ requires mutual TLS/WSS for this adapter. The DEALER identity
+  selects a configured peer, and the following Raft HELLO must carry the
+  expected cluster and node ID before a session is admitted.
+- Connection failure affects availability, not core safety; retry and resume
+  begin from Raft progress and the last cumulative snapshot ACK.
+
+The detailed FlowMQ topology and lifecycle are documented in
+[FLOWMQ_PEER_TRANSPORT.md](FLOWMQ_PEER_TRANSPORT.md); the bounded replication
+protocol is documented in
+[HIGH_PERFORMANCE_REPLICATION.md](HIGH_PERFORMANCE_REPLICATION.md).
+
+TurboFlow integration belongs above both libraries: a product composition
+module may call `tr_raft_service_propose()` and consume committed entries via
+`apply_batch()`. Neither TurboFlow nor TurboRaft needs access to FlowMQ's
+private targets; the composition links only the public library targets it uses.
 
 ## 15. TurboHTTP management plane
 
@@ -300,7 +372,9 @@ INFO logs record lifecycle milestones and leadership changes. Repeated heartbeat
 - CMake minimum version follows the TurboNet baseline.
 - Presets are derived from TurboNet's Windows/Linux Ninja and vcpkg presets but copied into this repository for portability.
 - `find_package(TurboUtils CONFIG REQUIRED)` and `find_package(TurboNet CONFIG REQUIRED)` consume installed packages.
-- `find_package(TurboHTTP CONFIG REQUIRED)` is conditional on `TURBORAFT_BUILD_HTTP`.
+- `find_package(TurboHttp CONFIG)` enables the optional control plane and console
+  when the installed package is available. Server code links `TurboHttp::Iris`;
+  client code links the installed facade target `TurboHttp::TurboHttp`.
 - A vcpkg manifest pins only direct third-party dependencies, initially the selected CRC32C implementation and test-only fault/fuzz tools if needed.
 - Lemon is not used for binary Raft messages. It may be introduced later for a real text grammar, but not for TOML or fixed binary framing.
 - No dependency type, error code, or ownership convention crosses the stable public ABI.

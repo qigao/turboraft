@@ -1,5 +1,5 @@
-#ifndef SCHEMA_GENERATED_H
-#define SCHEMA_GENERATED_H
+#ifndef TurboRaftWire_GENERATED_H
+#define TurboRaftWire_GENERATED_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -67,10 +67,10 @@ typedef struct turbo_uuid_s {
 enum { TBE_SCHEMA_CODEC_ABI_VERSION = 1 };
 
 typedef enum tbe_schema_format_e {
-    TBE_SCHEMA_FORMAT_JSON = 1,
-    TBE_SCHEMA_FORMAT_YAML = 2,
-    TBE_SCHEMA_FORMAT_CSV = 3,
-    TBE_SCHEMA_FORMAT_XML = 4
+    TBE_SCHEMA_FORMAT_JSON = DATA_BIND_FORMAT_JSON,
+    TBE_SCHEMA_FORMAT_YAML = DATA_BIND_FORMAT_YAML,
+    TBE_SCHEMA_FORMAT_CSV = DATA_BIND_FORMAT_CSV,
+    TBE_SCHEMA_FORMAT_XML = DATA_BIND_FORMAT_XML
 } tbe_schema_format_t;
 
 /**
@@ -109,7 +109,6 @@ enum { TurboRaftWire_WIRE_BIG_ENDIAN = 0 };
 TBE_GENERATED_API DataBindStatus TurboRaftWire_codec_create(DataBind **out_codec, DataBindError *error);
 TBE_GENERATED_API const char *TurboRaftWire_schema_text(void);
 TBE_GENERATED_API const tbe_schema_codec_v1_t *TurboRaftWire_schema_codec(void);
-#define TurboRaftWire_SCHEMA_VERSION 2
 
 /* ========================================================================= */
 /* Enums                                                                     */
@@ -1317,4 +1316,4 @@ using InstallSnapshotAckOwner = Owner<InstallSnapshotAck_t, InstallSnapshotAck_i
 #undef TBE_GENERATED_STRCMP
 #undef TBE_GENERATED_STRLEN
 
-#endif /* SCHEMA_GENERATED_H */
+#endif /* TurboRaftWire_GENERATED_H */

@@ -6,8 +6,10 @@ the HTMX page only submits RPC requests and does not own cluster state.
 
 ## Endpoint and authentication
 
-- `GET /` returns the HTMX management page.
-- JSON-RPC requests use the configured RPC HTTP endpoint.
+- `GET /raft` returns the HTMX management page.
+- JSON-RPC requests use `POST /raft/rpc`.
+- `GET /raft/status` returns the HTMX status fragment.
+- `/raft/ws` is a read-only WebSocket status endpoint.
 - `raft.status`, `raft.members`, `raft.progress`, and
   `raft.storage.status` are read-only diagnostics and do not require the
   management token.
@@ -18,7 +20,7 @@ the HTMX page only submits RPC requests and does not own cluster state.
 Example request:
 
 ```http
-POST /rpc HTTP/1.1
+POST /raft/rpc HTTP/1.1
 Content-Type: application/json
 Authorization: Bearer <management-token>
 
@@ -27,6 +29,13 @@ Authorization: Bearer <management-token>
 
 Every failure is returned as a JSON-RPC error. Callers must treat any `error`
 member as failure and must not infer success from the HTTP status alone.
+
+Production deployments must serve the control plane through
+`iris_server_start_tls()` or `iris_server_start_tls_on()`. The TLS ALPN list
+must contain `h2` and `http/1.1`; this lets the same Iris app and routes accept
+HTTP/2 and HTTP/1.1 without protocol-specific handlers. Plaintext listeners are
+development-only because mutation requests carry a bearer credential. Cleartext
+HTTP/2 uses prior knowledge and does not weaken this production TLS requirement.
 
 Leader-only mutation failures use the stable control-plane category
 `NOT_LEADER` and include `leader_id`. The identifier is a virtual Raft node ID;
@@ -202,3 +211,22 @@ ReadIndex, leadership transfer, learner add, learner promotion, member removal,
 advanced full membership change, and explicit snapshot controls. Responses are
 rendered from the RPC result, so page refreshes and multiple operators cannot
 advance an independent UI-side state machine.
+
+## WebSocket status snapshots
+
+`/raft/ws` is registered once with `iris_app_ws()`. The same route accepts an
+HTTP/1.1 RFC 6455 Upgrade or an HTTP/2 RFC 8441 extended CONNECT. WebSocket over
+HTTP/3 is not supported and is never downgraded implicitly.
+
+After the handshake, the server sends one text frame containing the same bounded
+status JSON used by `raft.status`. A client may send the exact text or binary
+payload `refresh` to request another snapshot. Any other application payload
+closes the connection with policy code 1008. Rendering failure closes it with
+code 1011.
+
+The endpoint is deliberately read-only. Membership, leadership, proposal, and
+snapshot mutations remain JSON-RPC operations so they retain authentication,
+audit, receipt, and owner-loop semantics. The handler does not retain the Iris
+WebSocket handle after its callback and does not maintain a second copy of Raft
+state. Server-initiated broadcast requires a separate, bounded Iris-context
+lifecycle protocol and is not part of this endpoint.

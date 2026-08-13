@@ -3,6 +3,7 @@
 #include <tinytest.h>
 #include <turbo_error.h>
 
+#include <stdlib.h>
 #include <string.h>
 
 static const tr_raft_conf_t sender_configuration = {
@@ -131,5 +132,68 @@ spec("raft snapshot sender")
         check(status.complete);
 
         tr_raft_snapshot_sender_destroy(sender);
+    }
+
+    it("keeps four 64 KiB chunks in flight and applies cumulative ACKs")
+    {
+        enum { SNAPSHOT_BYTES = 5U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES };
+        tr_raft_snapshot_sender_config_t config;
+        tr_raft_snapshot_sender_t *sender = NULL;
+        tr_raft_snapshot_chunk_t chunks[5];
+        tr_raft_snapshot_ack_t ack;
+        tr_raft_snapshot_sender_status_t status;
+        uint8_t *snapshot = (uint8_t *)malloc(SNAPSHOT_BYTES);
+        size_t index;
+
+        check(snapshot != NULL);
+        if (snapshot == NULL) {
+            return;
+        }
+        memset(snapshot, 0x5a, SNAPSHOT_BYTES);
+        memset(&config, 0, sizeof(config));
+        config.self_id = 1U;
+        config.peer_id = 2U;
+        config.max_snapshot_bytes = SNAPSHOT_BYTES;
+        config.chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+        config.max_inflight_chunks = TR_RAFT_SNAPSHOT_DEFAULT_INFLIGHT_CHUNKS;
+        check_int_eq(tr_raft_snapshot_sender_create(&config, &sender), TURBO_OK);
+        check_int_eq(tr_raft_snapshot_sender_begin(
+                         sender, 7U, 9U, 6U, &sender_configuration,
+                         snapshot, SNAPSHOT_BYTES), TURBO_OK);
+        for (index = 0U; index < 4U; ++index) {
+            check_int_eq(tr_raft_snapshot_sender_next_chunk(
+                             sender, &chunks[index]), TURBO_OK);
+            check_long_eq(chunks[index].snapshot_offset,
+                          index * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
+            check_size_eq(chunks[index].data_length,
+                          TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
+        }
+        check_int_eq(tr_raft_snapshot_sender_next_chunk(sender, &chunks[4]),
+                     TURBO_EBUSY);
+
+        memset(&ack, 0, sizeof(ack));
+        ack.from = 2U;
+        ack.to = 1U;
+        ack.term = 7U;
+        ack.snapshot_index = 9U;
+        ack.snapshot_size = SNAPSHOT_BYTES;
+        ack.next_offset = 2U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+        ack.accepted = true;
+        memcpy(ack.snapshot_digest, chunks[0].snapshot_digest,
+               sizeof(ack.snapshot_digest));
+        check_int_eq(tr_raft_snapshot_sender_acknowledge(sender, &ack), TURBO_OK);
+        check_int_eq(tr_raft_snapshot_sender_next_chunk(sender, &chunks[4]), TURBO_OK);
+        check(chunks[4].done);
+        check_int_eq(tr_raft_snapshot_sender_get_status(sender, &status), TURBO_OK);
+        check_size_eq(status.inflight_chunks, 3U);
+        check_long_eq(status.next_offset, SNAPSHOT_BYTES);
+
+        ack.next_offset = SNAPSHOT_BYTES;
+        check_int_eq(tr_raft_snapshot_sender_acknowledge(sender, &ack), TURBO_OK);
+        check_int_eq(tr_raft_snapshot_sender_get_status(sender, &status), TURBO_OK);
+        check(status.complete);
+        check_size_eq(status.inflight_chunks, 0U);
+        tr_raft_snapshot_sender_destroy(sender);
+        free(snapshot);
     }
 }

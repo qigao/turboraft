@@ -448,6 +448,7 @@ spec("raft CoroNet peer service mTLS integration")
                 0xb4U, 0x10U, 0xffU, 0x61U, 0xf2U, 0x00U, 0x15U, 0xadU
             };
             tr_raft_coronet_payload_t payload;
+            uint8_t chunk_data[3] = {'a', 'b', 'c'};
             size_t run_count;
 
             memset(&payload, 0, sizeof(payload));
@@ -462,13 +463,14 @@ spec("raft CoroNet peer service mTLS integration")
             payload.data.snapshot_chunk.configuration =
                 peer_service_snapshot_configuration;
             payload.data.snapshot_chunk.data_length = 3U;
+            payload.data.snapshot_chunk.data = chunk_data;
             payload.data.snapshot_chunk.done = true;
             memcpy(payload.data.snapshot_chunk.snapshot_digest, abc_sha256,
                    sizeof(abc_sha256));
-            memcpy(payload.data.snapshot_chunk.data, "abc", 3U);
             check_int_eq(tr_raft_coronet_peer_service_enqueue_payload(
                              state.client_service, &payload),
                          TURBO_OK);
+            memset(chunk_data, 0, sizeof(chunk_data));
             for (run_count = 0U;
                  run_count < 1000U && state.snapshot_ack_count == 0U;
                  ++run_count) {

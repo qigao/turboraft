@@ -178,6 +178,10 @@ The control plane accepts a borrowed `iris_app_t` through
 explicit app, stop its listener, destroy the control plane, and then destroy the
 app. A null field preserves the legacy default-app integration for source
 compatibility; migrating or rolling back changes no route or RPC protocol.
+Production listeners use TLS with both `h2` and `http/1.1` in the ALPN list.
+The same app therefore serves both transports; there are no H1-only control
+routes. The read-only `/raft/ws` route likewise maps H1 RFC 6455 and H2 RFC 8441
+to one handler and never accepts mutation commands.
 
 ## 9. HTMX behavior
 

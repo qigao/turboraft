@@ -18,6 +18,7 @@ struct tr_raft_service_sqlite_reload {
     uint32_t election_max_ticks;
     uint32_t initial_election_timeout_ticks;
     size_t max_log_entries;
+    size_t max_inflight_append_requests;
 };
 
 int tr_raft_service_sqlite_reload_create(
@@ -40,7 +41,9 @@ int tr_raft_service_sqlite_reload_create(
         config->election_min_ticks > config->election_max_ticks ||
         config->initial_election_timeout_ticks < config->election_min_ticks ||
         config->initial_election_timeout_ticks > config->election_max_ticks ||
-        config->max_log_entries == 0U) {
+        config->max_log_entries == 0U ||
+        config->max_inflight_append_requests >
+            TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS) {
         return TURBO_EINVAL;
     }
     for (index = 0U; index < config->voter_count; ++index) {
@@ -89,6 +92,8 @@ int tr_raft_service_sqlite_reload_create(
     reload->initial_election_timeout_ticks =
         config->initial_election_timeout_ticks;
     reload->max_log_entries = config->max_log_entries;
+    reload->max_inflight_append_requests =
+        config->max_inflight_append_requests;
     *out_reload = reload;
     return TURBO_OK;
 }
@@ -151,6 +156,8 @@ int tr_raft_service_sqlite_reload_runtime(
     core_config.initial_commit_index = recovery.commit_index;
     core_config.initial_applied_index = recovery.snapshot_index;
     core_config.max_log_entries = reload->max_log_entries;
+    core_config.max_inflight_append_requests =
+        reload->max_inflight_append_requests;
     result = tr_raft_service_reload(reload->service, &core_config);
     tr_raft_sqlite_recovery_destroy(&recovery);
     return result;

@@ -1,4 +1,5 @@
 #include <rpc_client.h>
+#include <turbo_http.h>
 
 #include <turboraft/text_syntax.h>
 
@@ -101,6 +102,9 @@ int main(int argc, char **argv)
 {
     const char *endpoint;
     const char *query = NULL;
+    turbo_http_options_t http_options;
+    turbo_http_t *http = NULL;
+    rpc_client_config_t client_config = {0};
     rpc_client_t *client;
     int exit_code = 0;
 
@@ -121,10 +125,24 @@ int main(int argc, char **argv)
         query = argv[4];
     }
 
-    client = rpc_client_create_simple(endpoint);
+    if (turbo_http_options_init(&http_options,
+                                sizeof(http_options)) != TURBO_OK) {
+        fprintf(stderr, "cannot initialize HTTP client options\n");
+        return 1;
+    }
+    http_options.transport = TURBO_HTTP_TRANSPORT_AUTO;
+    http_options.follow_redirects = 0;
+    if (turbo_http_create_sync(&http_options, &http) != TURBO_OK) {
+        fprintf(stderr, "cannot create HTTP client\n");
+        return 1;
+    }
+    client_config.url = endpoint;
+    client_config.facade_client = http;
+    client = rpc_client_create(&client_config);
     if (client == NULL || rpc_client_connect(client) != 0) {
         fprintf(stderr, "cannot connect to %s\n", endpoint);
         rpc_client_destroy(client);
+        turbo_http_destroy(http);
         return 1;
     }
     if (query != NULL) {
@@ -145,5 +163,6 @@ int main(int argc, char **argv)
     }
     rpc_client_disconnect(client);
     rpc_client_destroy(client);
+    turbo_http_destroy(http);
     return exit_code;
 }

@@ -188,6 +188,37 @@ spec("raft wire codec")
         tr_raft_wire_codec_destroy(codec);
     }
 
+    it("rejects trailing bytes in a v3 payload")
+    {
+        tr_raft_wire_codec_t *codec = NULL;
+        tr_raft_wire_metadata_t metadata;
+        tr_raft_message_t message;
+        uint8_t frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+        size_t frame_length = 0U;
+        size_t payload_length;
+
+        memset(&metadata, 0, sizeof(metadata));
+        memset(&message, 0, sizeof(message));
+        message.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+        message.from = 1U;
+        message.to = 2U;
+        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_int_eq(tr_raft_wire_encode(codec, &metadata, &message, frame,
+                                         sizeof(frame), &frame_length),
+                     TURBO_OK);
+
+        payload_length = frame_length - TR_RAFT_WIRE_HEADER_SIZE + 1U;
+        frame[frame_length++] = 0U;
+        frame[8] = (uint8_t) (payload_length >> 24U);
+        frame[9] = (uint8_t) (payload_length >> 16U);
+        frame[10] = (uint8_t) (payload_length >> 8U);
+        frame[11] = (uint8_t) payload_length;
+        check_int_eq(tr_raft_wire_decode(codec, frame, frame_length, &metadata,
+                                         &message),
+                     TURBO_EPROTO);
+        tr_raft_wire_codec_destroy(codec);
+    }
+
     it("decodes explicitly negotiated v2 single-entry frames")
     {
         tr_raft_wire_codec_t *codec = NULL;
@@ -235,6 +266,7 @@ spec("raft wire codec")
         tr_raft_snapshot_ack_t ack;
         tr_raft_snapshot_ack_t decoded_ack;
         uint8_t frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+        uint8_t chunk_data[88];
         size_t frame_length = 0U;
         size_t index;
 
@@ -259,7 +291,8 @@ spec("raft wire codec")
         for (index = 0U; index < sizeof(chunk.snapshot_digest); ++index) {
             chunk.snapshot_digest[index] = (uint8_t) (index + 1U);
         }
-        memset(chunk.data, 0x5a, chunk.data_length);
+        memset(chunk_data, 0x5a, sizeof(chunk_data));
+        chunk.data = chunk_data;
 
         check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
         check_int_eq(tr_raft_wire_encode_snapshot_chunk(
@@ -313,6 +346,7 @@ spec("raft wire codec")
         tr_raft_snapshot_chunk_t chunk;
         tr_raft_snapshot_chunk_t decoded;
         uint8_t frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+        uint8_t chunk_data[512] = {0};
         size_t frame_length = 0U;
 
         memset(&metadata, 0, sizeof(metadata));
@@ -329,7 +363,8 @@ spec("raft wire codec")
         chunk.configuration.members[0].node_id = 2U;
         chunk.configuration.members[0].roles =
             TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
-        chunk.data_length = 511U;
+        chunk.data_length = 513U;
+        chunk.data = chunk_data;
         check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
         check_int_eq(tr_raft_wire_encode_snapshot_chunk(
                          codec, &metadata, &chunk, frame, sizeof(frame),
@@ -345,6 +380,59 @@ spec("raft wire codec")
         check_int_eq(tr_raft_wire_decode_snapshot_chunk(
                          codec, frame, frame_length, &metadata, &decoded),
                      TURBO_EPROTO);
+        tr_raft_wire_codec_destroy(codec);
+    }
+
+    it("encodes a zero-allocation 64 KiB V5 chunk and preserves V4 limit")
+    {
+        tr_raft_wire_codec_t *codec = NULL;
+        tr_raft_wire_metadata_t metadata;
+        tr_raft_wire_metadata_t decoded_metadata;
+        tr_raft_snapshot_chunk_t chunk;
+        tr_raft_snapshot_chunk_t decoded;
+        uint8_t data[TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES];
+        uint8_t frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+        size_t frame_length = 0U;
+        uint16_t version = 0U;
+
+        memset(data, 0xa5, sizeof(data));
+        memset(&metadata, 0, sizeof(metadata));
+        metadata.cluster_id.bytes[0] = 1U;
+        metadata.message_id = 2U;
+        memset(&chunk, 0, sizeof(chunk));
+        chunk.from = 1U;
+        chunk.to = 2U;
+        chunk.term = 3U;
+        chunk.snapshot_index = 4U;
+        chunk.snapshot_term = 2U;
+        chunk.snapshot_size = sizeof(data);
+        chunk.has_configuration = true;
+        chunk.configuration.phase = TR_RAFT_CONF_FINAL;
+        chunk.configuration.member_count = 1U;
+        chunk.configuration.members[0].node_id = 2U;
+        chunk.configuration.members[0].roles =
+            TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+        chunk.data = data;
+        chunk.data_length = sizeof(data);
+        chunk.done = true;
+        memset(chunk.snapshot_digest, 0x3c, sizeof(chunk.snapshot_digest));
+
+        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_int_eq(tr_raft_wire_encode_snapshot_chunk(
+                         codec, &metadata, &chunk, frame, sizeof(frame),
+                         &frame_length), TURBO_OK);
+        check_int_eq(tr_raft_wire_peek_version(frame, frame_length, &version),
+                     TURBO_OK);
+        check_int_eq(version, TR_RAFT_WIRE_SNAPSHOT_VERSION);
+        check_int_eq(tr_raft_wire_decode_snapshot_chunk(
+                         codec, frame, frame_length, &decoded_metadata,
+                         &decoded), TURBO_OK);
+        check_size_eq(decoded.data_length, sizeof(data));
+        check_mem_eq(decoded.data, data, sizeof(data));
+        check_int_eq(tr_raft_wire_encode_snapshot_chunk_version(
+                         codec, TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION,
+                         &metadata, &chunk, frame, sizeof(frame),
+                         &frame_length), TURBO_EPROTO);
         tr_raft_wire_codec_destroy(codec);
     }
 }

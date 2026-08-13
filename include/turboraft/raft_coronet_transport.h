@@ -74,7 +74,8 @@ typedef struct tr_raft_coronet_session_config {
     tr_raft_node_id_t local_node_id;
     tr_raft_node_id_t peer_node_id;
     uint64_t first_outbound_message_id;
-    /* Required for connected sockets; ignored only in detached operation. */
+    /* Required for connected sockets; optional negotiated limits for detached
+     * encode/feed adapters such as FlowMQ. */
     const tr_raft_handshake_result_t *handshake;
     tr_raft_coronet_message_handler_fn on_message;
     void *message_context;

@@ -37,6 +37,9 @@ typedef struct tr_raft_snapshot_manager_config {
     const tr_raft_node_id_t *peer_node_ids;
     size_t peer_count;
     size_t max_snapshot_bytes;
+    /* Zero values preserve V4 512-byte stop-and-wait transfers. */
+    size_t snapshot_chunk_size;
+    size_t snapshot_max_inflight_chunks;
     /* Optional transport seam; leave null when bind_peer_service is used. */
     tr_raft_snapshot_manager_payload_enqueue_fn enqueue;
     void *enqueue_context;

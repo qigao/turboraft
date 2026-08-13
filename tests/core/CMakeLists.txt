@@ -447,4 +447,31 @@ if(TARGET turboraft_coronet)
   endif()
   add_test(NAME turboraft.coronet_three_node_mtls
            COMMAND turboraft_coronet_three_node_mtls_tests)
+
+  if(TARGET turboraft_flowmq)
+    add_executable(turboraft_flowmq_peer_service_tests
+                   test_raft_flowmq_peer_service.c)
+    target_compile_definitions(
+      turboraft_flowmq_peer_service_tests
+      PRIVATE TURBORAFT_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
+    target_link_libraries(turboraft_flowmq_peer_service_tests
+                          PRIVATE TurboRaft::FlowMQ TurboUtils::TinyTest)
+    if(WIN32)
+      target_link_libraries(turboraft_flowmq_peer_service_tests PRIVATE ws2_32)
+      add_custom_command(
+        TARGET turboraft_flowmq_peer_service_tests
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:TurboUtils::Core>
+                $<TARGET_FILE:TurboParser::Parser>
+                $<TARGET_FILE:TurboParser::DataBind>
+                $<TARGET_FILE:TurboNet::CoroNet>
+                $<TARGET_FILE:FlowMQ::FlowMQ>
+                $<TARGET_FILE_DIR:turboraft_flowmq_peer_service_tests>)
+    endif()
+    add_test(NAME turboraft.flowmq_peer_service
+             COMMAND turboraft_flowmq_peer_service_tests)
+    set_tests_properties(turboraft.flowmq_peer_service
+                         PROPERTIES TIMEOUT 30)
+  endif()
 endif()

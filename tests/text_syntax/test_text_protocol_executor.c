@@ -115,6 +115,7 @@ static int tr_text_protocol_executor_make_snapshot_frames(
   tr_raft_wire_metadata_t metadata;
   tr_raft_snapshot_chunk_t chunk;
   tr_raft_snapshot_ack_t ack;
+  static const uint8_t chunk_data[2] = {0xaaU, 0xbbU};
   size_t index;
   int result;
 
@@ -128,8 +129,7 @@ static int tr_text_protocol_executor_make_snapshot_frames(
   chunk.snapshot_term = 6u;
   chunk.snapshot_size = 2u;
   chunk.data_length = 2u;
-  chunk.data[0] = 0xaau;
-  chunk.data[1] = 0xbbu;
+  chunk.data = chunk_data;
   chunk.done = true;
   chunk.has_configuration = true;
   chunk.configuration.phase = TR_RAFT_CONF_FINAL;
@@ -185,9 +185,9 @@ static void tr_text_protocol_executor_set_frame(
 
 spec("TurboRaft text protocol executor") {
   it("parses, decodes, and validates a raft frame") {
-    uint8_t wire_frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
-    char payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
-    char input[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 256u];
+    static uint8_t wire_frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+    static char payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
+    static char input[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 256u];
     tr_text_protocol_debug_plan_t plan;
     tr_text_protocol_executor_test_state_t state = {0};
     tr_text_diagnostic_t diagnostic;
@@ -222,10 +222,10 @@ spec("TurboRaft text protocol executor") {
   }
 
   it("decodes snapshot chunks and acknowledgements") {
-    uint8_t chunk_frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
-    uint8_t ack_frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
-    char chunk_payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
-    char ack_payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
+    static uint8_t chunk_frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+    static uint8_t ack_frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+    static char chunk_payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
+    static char ack_payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
     tr_text_protocol_debug_plan_t plan = {0};
     tr_text_protocol_executor_test_state_t state = {0};
     size_t chunk_length = 0u;
@@ -243,10 +243,12 @@ spec("TurboRaft text protocol executor") {
                      ack_frame, ack_length, ack_payload, sizeof(ack_payload)),
                  TURBO_OK);
     tr_text_protocol_executor_set_frame(
-        &plan.frames[0], 4u, "snapshot_chunk", "snapshot_chunk",
+        &plan.frames[0], TR_RAFT_WIRE_SNAPSHOT_VERSION,
+        "snapshot_chunk", "snapshot_chunk",
         chunk_payload);
     tr_text_protocol_executor_set_frame(
-        &plan.frames[1], 4u, "snapshot_ack", "snapshot_ack", ack_payload);
+        &plan.frames[1], TR_RAFT_WIRE_SNAPSHOT_VERSION,
+        "snapshot_ack", "snapshot_ack", ack_payload);
     plan.frames[0].term = 7u;
     plan.frames[1].from = 2u;
     plan.frames[1].to = 1u;
@@ -306,8 +308,8 @@ spec("TurboRaft text protocol executor") {
   }
 
   it("rejects a message name that does not match the decoded frame") {
-    uint8_t wire_frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
-    char payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
+    static uint8_t wire_frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+    static char payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
     tr_text_protocol_debug_plan_t plan = {0};
     tr_text_protocol_executor_test_state_t state = {0};
     size_t frame_length = 0u;
@@ -329,8 +331,8 @@ spec("TurboRaft text protocol executor") {
   }
 
   it("returns callback errors without continuing") {
-    uint8_t wire_frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
-    char payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
+    static uint8_t wire_frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+    static char payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
     tr_text_protocol_debug_plan_t plan = {0};
     tr_text_protocol_executor_test_state_t state = {
         .result = TURBO_EBUSY};

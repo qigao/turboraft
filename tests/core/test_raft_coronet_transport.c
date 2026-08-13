@@ -291,10 +291,10 @@ spec("raft CoroNet transport")
         payload.data.snapshot_chunk.configuration.members[0].roles =
             TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
         payload.data.snapshot_chunk.data_length = 3U;
+        payload.data.snapshot_chunk.data = (const uint8_t *)"abc";
         payload.data.snapshot_chunk.done = true;
         memset(payload.data.snapshot_chunk.snapshot_digest, 1,
                sizeof(payload.data.snapshot_chunk.snapshot_digest));
-        memcpy(payload.data.snapshot_chunk.data, "abc", 3U);
         check_int_eq(tr_raft_coronet_encode_payload_packet(
                          sender, &payload, packet, sizeof(packet),
                          &packet_size),

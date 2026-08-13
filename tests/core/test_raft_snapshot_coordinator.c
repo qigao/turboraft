@@ -6,10 +6,11 @@
 #include <turbo_error.h>
 
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct snapshot_emit_capture {
-    tr_raft_snapshot_chunk_t chunks[3];
+    tr_raft_snapshot_chunk_t chunks[6];
     size_t count;
     bool fail_next;
 } snapshot_emit_capture_t;
@@ -147,5 +148,56 @@ spec("raft snapshot coordinator")
 
         tr_raft_snapshot_receiver_destroy(receiver);
         tr_raft_snapshot_coordinator_destroy(coordinator);
+    }
+
+    it("fills and refills a four-chunk V5 window")
+    {
+        enum { SNAPSHOT_BYTES = 5U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES };
+        tr_raft_snapshot_coordinator_config_t config;
+        tr_raft_snapshot_coordinator_t *coordinator = NULL;
+        tr_raft_snapshot_ack_t ack;
+        snapshot_emit_capture_t emitted;
+        uint8_t *snapshot = malloc(SNAPSHOT_BYTES);
+
+        check(snapshot != NULL);
+        if (snapshot == NULL) {
+            return;
+        }
+        memset(snapshot, 0x31, SNAPSHOT_BYTES);
+        memset(&config, 0, sizeof(config));
+        memset(&emitted, 0, sizeof(emitted));
+        config.self_id = 1U;
+        config.peer_id = 2U;
+        config.max_snapshot_bytes = SNAPSHOT_BYTES;
+        config.chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+        config.max_inflight_chunks = TR_RAFT_SNAPSHOT_DEFAULT_INFLIGHT_CHUNKS;
+        config.emit = snapshot_capture_emit;
+        config.emit_context = &emitted;
+        check_int_eq(tr_raft_snapshot_coordinator_create(&config, &coordinator),
+                     TURBO_OK);
+        check_int_eq(tr_raft_snapshot_coordinator_begin(
+                         coordinator, 7U, 9U, 6U,
+                         &coordinator_configuration, snapshot,
+                         SNAPSHOT_BYTES), TURBO_OK);
+        check_size_eq(emitted.count, 4U);
+
+        memset(&ack, 0, sizeof(ack));
+        ack.from = 2U;
+        ack.to = 1U;
+        ack.term = 7U;
+        ack.snapshot_index = 9U;
+        ack.snapshot_size = SNAPSHOT_BYTES;
+        ack.next_offset = 2U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+        ack.accepted = true;
+        memcpy(ack.snapshot_digest, emitted.chunks[0].snapshot_digest,
+               sizeof(ack.snapshot_digest));
+        check_int_eq(tr_raft_snapshot_coordinator_handle_ack(coordinator, &ack),
+                     TURBO_OK);
+        check_size_eq(emitted.count, 5U);
+        check_long_eq(emitted.chunks[4].snapshot_offset,
+                      4U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
+        check(emitted.chunks[4].done);
+        tr_raft_snapshot_coordinator_destroy(coordinator);
+        free(snapshot);
     }
 }

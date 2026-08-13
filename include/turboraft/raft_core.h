@@ -13,6 +13,8 @@ extern "C" {
 #define TR_RAFT_MAX_MEMBERS TR_RAFT_MAX_VOTERS
 #define TR_RAFT_MAX_ENTRY_BYTES 512U
 #define TR_RAFT_MAX_APPEND_ENTRIES 8U
+#define TR_RAFT_DEFAULT_MAX_INFLIGHT_APPEND_REQUESTS 1U
+#define TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS 64U
 #define TR_RAFT_DEFAULT_MAX_LOG_ENTRIES 1024U
 #define TR_RAFT_CONF_CODEC_VERSION 1U
 #define TR_RAFT_CONF_HEADER_SIZE 16U
@@ -144,6 +146,11 @@ typedef struct tr_raft_core_config {
     tr_raft_index_t initial_commit_index;
     tr_raft_index_t initial_applied_index;
     size_t max_log_entries;
+    /**
+     * Per-peer AppendEntries window. Zero preserves the historical single
+     * in-flight request behavior.
+     */
+    size_t max_inflight_append_requests;
 } tr_raft_core_config_t;
 
 typedef struct tr_raft_proposal {
@@ -230,8 +237,11 @@ typedef struct tr_raft_peer_progress {
     tr_raft_index_t match_index;
     tr_raft_index_t next_index;
     uint32_t append_inflight_elapsed_ticks;
+    size_t inflight_append_count;
+    size_t max_inflight_append_requests;
     bool recent_active;
     bool append_inflight;
+    bool append_probe;
     bool snapshot_required;
 } tr_raft_peer_progress_t;
 
@@ -315,7 +325,10 @@ int tr_raft_core_read_index(tr_raft_core_t *core,
                             uint64_t context_id,
                             tr_raft_ready_t *ready);
 
-/** Returns startup or previously committed entries awaiting application. */
+/**
+ * Returns startup/committed work and, on a leader, fills available bounded
+ * AppendEntries window slots up to Ready.message_capacity.
+ */
 int tr_raft_core_poll(tr_raft_core_t *core, tr_raft_ready_t *ready);
 
 /**

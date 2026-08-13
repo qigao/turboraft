@@ -829,6 +829,8 @@ static TbeTypedType RaftWireMessageV3_TYPED_TYPE = {
     .presence_size = 0,
     .wire_big_endian = 0
 };
+static const TbeTypedDescriptor RaftWireMessageV3_TYPED_DESCRIPTOR =
+    TBE_TYPED_DESCRIPTOR_INIT(&RaftWireMessageV3_TYPED_TYPE);
 
 #define TBE_TYPED_DEFINE_RECORD(name) \
     void name##_init(name##_t *object) { \
@@ -836,19 +838,19 @@ static TbeTypedType RaftWireMessageV3_TYPED_TYPE = {
     } \
     void name##_clear(name##_t *object) { tbe_typed_clear(&name##_TYPED_TYPE, object); } \
     DataBindStatus name##_from_bin(DataBind *codec, name##_t *object, const void *data, size_t len, DataBindError *error) { \
-        return tbe_typed_parse(codec, #name, &name##_TYPED_TYPE, "bin", data, len, 0, object, error); \
+        return tbe_typed_descriptor_parse(codec, #name, &name##_TYPED_DESCRIPTOR, DATA_BIND_FORMAT_BINARY, data, len, 0, object, error); \
     } \
     DataBindStatus name##_from_json(DataBind *codec, name##_t *object, const char *data, size_t len, DataBindError *error) { \
-        return tbe_typed_parse(codec, #name, &name##_TYPED_TYPE, "json", data, len, 0, object, error); \
+        return tbe_typed_descriptor_parse(codec, #name, &name##_TYPED_DESCRIPTOR, DATA_BIND_FORMAT_JSON, data, len, 0, object, error); \
     } \
     DataBindStatus name##_from_yaml(DataBind *codec, name##_t *object, const char *data, size_t len, DataBindError *error) { \
-        return tbe_typed_parse(codec, #name, &name##_TYPED_TYPE, "yaml", data, len, 0, object, error); \
+        return tbe_typed_descriptor_parse(codec, #name, &name##_TYPED_DESCRIPTOR, DATA_BIND_FORMAT_YAML, data, len, 0, object, error); \
     } \
     DataBindStatus name##_from_csv(DataBind *codec, name##_t *object, const char *data, size_t len, size_t row, DataBindError *error) { \
-        return tbe_typed_parse(codec, #name, &name##_TYPED_TYPE, "csv", data, len, row, object, error); \
+        return tbe_typed_descriptor_parse(codec, #name, &name##_TYPED_DESCRIPTOR, DATA_BIND_FORMAT_CSV, data, len, row, object, error); \
     } \
     DataBindStatus name##_from_xml(DataBind *codec, name##_t *object, const char *data, size_t len, DataBindError *error) { \
-        return tbe_typed_parse(codec, #name, &name##_TYPED_TYPE, "xml", data, len, 0, object, error); \
+        return tbe_typed_descriptor_parse(codec, #name, &name##_TYPED_DESCRIPTOR, DATA_BIND_FORMAT_XML, data, len, 0, object, error); \
     } \
     DataBindStatus name##_to_bin(const name##_t *object, uint8_t **out, size_t *out_len, DataBindError *error) { \
         return tbe_typed_serialize_binary(&name##_TYPED_TYPE, object, out, out_len, error); \
@@ -857,16 +859,16 @@ static TbeTypedType RaftWireMessageV3_TYPED_TYPE = {
         return tbe_typed_serialize_binary_into(&name##_TYPED_TYPE, object, output, output_capacity, out_len, error); \
     } \
     DataBindStatus name##_to_json(DataBind *codec, const name##_t *object, char **out, size_t *out_len, DataBindError *error) { \
-        return tbe_typed_serialize(codec, #name, &name##_TYPED_TYPE, object, "json", out, out_len, error); \
+        return tbe_typed_descriptor_serialize(codec, #name, &name##_TYPED_DESCRIPTOR, object, DATA_BIND_FORMAT_JSON, out, out_len, error); \
     } \
     DataBindStatus name##_to_yaml(DataBind *codec, const name##_t *object, char **out, size_t *out_len, DataBindError *error) { \
-        return tbe_typed_serialize(codec, #name, &name##_TYPED_TYPE, object, "yaml", out, out_len, error); \
+        return tbe_typed_descriptor_serialize(codec, #name, &name##_TYPED_DESCRIPTOR, object, DATA_BIND_FORMAT_YAML, out, out_len, error); \
     } \
     DataBindStatus name##_to_csv(DataBind *codec, const name##_t *object, char **out, size_t *out_len, DataBindError *error) { \
-        return tbe_typed_serialize(codec, #name, &name##_TYPED_TYPE, object, "csv", out, out_len, error); \
+        return tbe_typed_descriptor_serialize(codec, #name, &name##_TYPED_DESCRIPTOR, object, DATA_BIND_FORMAT_CSV, out, out_len, error); \
     } \
     DataBindStatus name##_to_xml(DataBind *codec, const name##_t *object, char **out, size_t *out_len, DataBindError *error) { \
-        return tbe_typed_serialize(codec, #name, &name##_TYPED_TYPE, object, "xml", out, out_len, error); \
+        return tbe_typed_descriptor_serialize(codec, #name, &name##_TYPED_DESCRIPTOR, object, DATA_BIND_FORMAT_XML, out, out_len, error); \
     }
 
 TBE_TYPED_DEFINE_RECORD(RaftWireMessageV3)
@@ -875,12 +877,18 @@ static DataBindStatus TurboRaftWireV3_schema_codec_error(DataBindError *error,
                                                                 DataBindStatus status,
                                                                 const char *path,
                                                                 const char *message) {
-    if (error != NULL && error->size >= sizeof(*error)) {
-        error->code = status;
-        error->line = -1;
-        error->column = -1;
-        snprintf(error->path, sizeof(error->path), "%s", path != NULL ? path : "");
-        snprintf(error->message, sizeof(error->message), "%s", message != NULL ? message : "");
+    if (error != NULL && error->size >= sizeof(error->size)) {
+        if (error->size >= offsetof(DataBindError, code) + sizeof(error->code))
+            error->code = status;
+        if (error->size >= offsetof(DataBindError, line) + sizeof(error->line))
+            error->line = -1;
+        if (error->size >= offsetof(DataBindError, column) + sizeof(error->column))
+            error->column = -1;
+        if (error->size >= offsetof(DataBindError, path) + sizeof(error->path))
+            snprintf(error->path, sizeof(error->path), "%s", path != NULL ? path : "");
+        if (error->size >= offsetof(DataBindError, message) + sizeof(error->message))
+            snprintf(error->message, sizeof(error->message), "%s",
+                     message != NULL ? message : "");
     }
     return status;
 }

@@ -68,6 +68,7 @@ spec("raft service sqlite reload")
         tr_raft_snapshot_installer_config_t installer_config;
         tr_raft_snapshot_installer_t *installer = NULL;
         tr_raft_service_status_t service_status;
+        tr_raft_progress_view_t progress;
         tr_raft_snapshot_installer_status_t installer_status;
         reload_application_capture_t application;
 
@@ -95,6 +96,7 @@ spec("raft service sqlite reload")
         service_config.core.election_max_ticks = 5U;
         service_config.core.initial_election_timeout_ticks = 3U;
         service_config.core.max_log_entries = 16U;
+        service_config.core.max_inflight_append_requests = 4U;
         service_config.storage = storage_adapter;
         service_config.state_machine.context = &application;
         service_config.state_machine.apply_batch = reload_apply;
@@ -111,6 +113,7 @@ spec("raft service sqlite reload")
         reload_config.election_max_ticks = 5U;
         reload_config.initial_election_timeout_ticks = 3U;
         reload_config.max_log_entries = 16U;
+        reload_config.max_inflight_append_requests = 4U;
         check_int_eq(tr_raft_service_sqlite_reload_create(
                          &reload_config, &reload), TURBO_OK);
 
@@ -138,6 +141,10 @@ spec("raft service sqlite reload")
         check_long_eq(service_status.core.applied_index, 9U);
         check_size_eq(service_status.core.voter_count, 2U);
         check_long_eq(service_status.core.membership_transition_id, 44U);
+        check_int_eq(tr_raft_service_progress(service, &progress), TURBO_OK);
+        check_size_eq(progress.peer_count, 2U);
+        check_size_eq(progress.peers[0].max_inflight_append_requests, 4U);
+        check_size_eq(progress.peers[1].max_inflight_append_requests, 4U);
         check_int_eq(tr_raft_snapshot_installer_get_status(
                          installer, &installer_status), TURBO_OK);
         check_int_eq(installer_status.stage,

@@ -13,10 +13,16 @@ extern "C" {
 
 typedef struct tr_raft_snapshot_sender tr_raft_snapshot_sender_t;
 
+#define TR_RAFT_SNAPSHOT_MAX_INFLIGHT_CHUNKS 4U
+#define TR_RAFT_SNAPSHOT_DEFAULT_INFLIGHT_CHUNKS 4U
+
 typedef struct tr_raft_snapshot_sender_config {
     tr_raft_node_id_t self_id;
     tr_raft_node_id_t peer_id;
     size_t max_snapshot_bytes;
+    /* Zero preserves V4 stop-and-wait behavior. */
+    size_t chunk_size;
+    size_t max_inflight_chunks;
 } tr_raft_snapshot_sender_config_t;
 
 typedef struct tr_raft_snapshot_sender_status {
@@ -27,6 +33,9 @@ typedef struct tr_raft_snapshot_sender_status {
     tr_raft_term_t snapshot_term;
     uint64_t snapshot_size;
     uint64_t acknowledged_offset;
+    uint64_t next_offset;
+    size_t inflight_chunks;
+    size_t max_inflight_chunks;
 } tr_raft_snapshot_sender_status_t;
 
 /* A sender is single-owner and must not be accessed concurrently. */
@@ -45,10 +54,19 @@ int tr_raft_snapshot_sender_begin(
     const uint8_t *data,
     size_t size);
 
-/* Repeated calls return the same chunk until a valid acknowledgement advances it. */
+/* Claims the next chunk; returns EBUSY while the bounded window is full. */
 int tr_raft_snapshot_sender_next_chunk(
     tr_raft_snapshot_sender_t *sender,
     tr_raft_snapshot_chunk_t *out_chunk);
+
+/* Cancels the most recent claim when the transport rejected it synchronously. */
+int tr_raft_snapshot_sender_cancel_chunk(
+    tr_raft_snapshot_sender_t *sender,
+    uint64_t snapshot_offset);
+
+/* Drops speculative claims so resume can retransmit from cumulative ACK. */
+int tr_raft_snapshot_sender_prepare_resume(
+    tr_raft_snapshot_sender_t *sender);
 
 int tr_raft_snapshot_sender_acknowledge(
     tr_raft_snapshot_sender_t *sender,

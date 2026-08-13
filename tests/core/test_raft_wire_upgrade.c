@@ -49,7 +49,6 @@ static tr_raft_coronet_session_t *make_session(
     tr_raft_coronet_session_t *session = NULL;
 
     memset(&config, 0, sizeof(config));
-    config.socket = (coro_socket_t *) (uintptr_t) 1U;
     config.cluster_id = handshake->cluster_id;
     config.local_node_id = handshake->local_node_id;
     config.peer_node_id = handshake->peer_node_id;
@@ -91,6 +90,7 @@ spec("raft rolling wire upgrades")
         tr_raft_handshake_result_t current =
             make_result(TR_RAFT_HANDSHAKE_FEATURE_CURRENT);
         uint16_t version = 0U;
+        uint32_t chunk_size = 0U;
 
         check_int_eq(tr_raft_handshake_select_raft_wire_version(
                          &legacy, 1U, &version),
@@ -107,6 +107,18 @@ spec("raft rolling wire upgrades")
         check_int_eq(version, TR_RAFT_WIRE_VERSION);
         check_int_eq(tr_raft_handshake_require_snapshot_v4(&current),
                      TURBO_OK);
+        check_int_eq(tr_raft_handshake_select_snapshot_wire_version(
+                         &current, &version, &chunk_size), TURBO_OK);
+        check_int_eq(version, TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION);
+        check_long_eq(chunk_size,
+                      TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES);
+        current.max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
+        current.max_snapshot_chunk_size =
+            TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+        check_int_eq(tr_raft_handshake_select_snapshot_wire_version(
+                         &current, &version, &chunk_size), TURBO_OK);
+        check_int_eq(version, TR_RAFT_WIRE_SNAPSHOT_VERSION);
+        check_long_eq(chunk_size, TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
     }
 
     it("enforces negotiated versions at the transport boundary")

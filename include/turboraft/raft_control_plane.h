@@ -11,6 +11,7 @@ extern "C" {
 #define TR_RAFT_CONTROL_RPC_ENDPOINT "/raft/rpc"
 #define TR_RAFT_CONTROL_UI_PATH "/raft"
 #define TR_RAFT_CONTROL_STATUS_PATH "/raft/status"
+#define TR_RAFT_CONTROL_WS_PATH "/raft/ws"
 
 struct iris_app;
 

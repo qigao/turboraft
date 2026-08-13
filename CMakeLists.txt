@@ -62,14 +62,16 @@ endif()
 include(CTest)
 
 find_package(TurboUtils CONFIG REQUIRED PATHS "${TURBO_UTILS_ROOT}")
+find_package(TurboParser CONFIG REQUIRED PATHS "${TURBOPARSER_ROOT}")
 find_package(OpenSSL REQUIRED)
 
 find_program(
   TURBORAFT_TBE_COMPILER
   NAMES tbe_compiler
-  HINTS "${CMAKE_CURRENT_SOURCE_DIR}/../turbo-utils/build/Msvc-Release/bin"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../turbo-utils/build/Msvc/bin"
-  DOC "TurboUtils TBE schema compiler")
+  HINTS "${TURBOPARSER_ROOT}/bin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../turbo-parser/build/Msvc-Release/bin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../turbo-parser/build/Msvc/bin"
+  DOC "TurboParser TBE schema compiler")
 if(NOT TURBORAFT_TBE_COMPILER)
   message(
     FATAL_ERROR "tbe_compiler is required to generate the TurboRaft wire codec")
@@ -136,7 +138,7 @@ target_include_directories(
 target_link_libraries(
   turboraft_core
   PUBLIC TurboUtils::Core
-  PRIVATE TurboUtils::DataBind)
+  PRIVATE TurboParser::DataBind)
 
 add_library(turboraft_service STATIC src/service/raft_service.c)
 add_library(TurboRaft::Service ALIAS turboraft_service)
@@ -215,6 +217,7 @@ endif()
 find_package(Threads REQUIRED)
 find_package(TurboNet CONFIG QUIET PATHS "${TURBO_NET_ROOT}")
 find_package(TurboHttp CONFIG QUIET PATHS "${TURBO_HTTP_ROOT}")
+find_package(FlowMQ CONFIG QUIET PATHS "${FLOWMQ_ROOT}")
 
 if(TurboNet_FOUND)
   add_library(
@@ -268,6 +271,21 @@ else()
     "owner adapters are disabled")
 endif()
 
+if(TurboNet_FOUND AND TARGET FlowMQ::FlowMQ)
+  add_library(turboraft_flowmq STATIC
+              src/transport/raft_flowmq_peer_service.c)
+  add_library(TurboRaft::FlowMQ ALIAS turboraft_flowmq)
+  set_target_properties(turboraft_flowmq PROPERTIES EXPORT_NAME FlowMQ)
+  target_include_directories(
+    turboraft_flowmq
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_link_libraries(turboraft_flowmq
+                        PUBLIC TurboRaft::CoroNet FlowMQ::FlowMQ)
+else()
+  message(STATUS "FlowMQ::FlowMQ not found; FlowMQ peer transport is disabled")
+endif()
+
 if(TurboNet_FOUND AND TurboHttp_FOUND)
   add_library(
   turboraft_control_plane STATIC
@@ -283,7 +301,7 @@ target_include_directories(
 target_link_libraries(
   turboraft_control_plane
   PUBLIC TurboRaft::Service
-  PRIVATE TurboHttp::Iris TurboUtils::Parser)
+  PRIVATE TurboHttp::Iris TurboParser::Parser)
 
 if(BUILD_TESTS)
   add_executable(turboraft_control_plane_tests
@@ -303,12 +321,14 @@ if(BUILD_TESTS)
                  tests/control/test_raft_control_plane_http.c)
   target_link_libraries(
     turboraft_control_plane_http_tests
-    PRIVATE TurboRaft::ControlPlane TurboHttp::Iris TurboUtils::TinyTest)
+    PRIVATE TurboRaft::ControlPlane TurboHttp::Iris TurboHttp::TurboHttp
+            TurboUtils::TinyTest)
   add_custom_command(
     TARGET turboraft_control_plane_http_tests
     POST_BUILD
     COMMAND
       ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:TurboHttp::Iris>
+      $<TARGET_FILE:TurboHttp::TurboHttp>
       $<TARGET_FILE_DIR:turboraft_control_plane_http_tests>)
   add_test(NAME turboraft.control_plane_http
            COMMAND turboraft_control_plane_http_tests)
@@ -401,7 +421,7 @@ target_link_libraries(turboraft_text_query_service
 if(TurboHttp_FOUND)
   add_executable(turboraft_console tools/turboraft_console.c)
   target_link_libraries(turboraft_console
-                        PRIVATE TurboRaft::TextSyntax TurboHttp::RPCClient)
+                        PRIVATE TurboRaft::TextSyntax TurboHttp::TurboHttp)
   cmake_config_target(turboraft_console
                       NO_INSTALL
                       FOLDER "TurboRaft/tools")
@@ -435,7 +455,7 @@ target_link_libraries(turboraft_replay_driver PUBLIC TurboRaft::Core)
 add_executable(turboraft_repl tools/turboraft_repl.c)
 target_link_libraries(
   turboraft_repl
-  PRIVATE TurboRaft::TextSyntax TurboRaft::ReplayDriver TurboUtils::Parser)
+  PRIVATE TurboRaft::TextSyntax TurboRaft::ReplayDriver TurboParser::Parser)
 cmake_config_target(turboraft_repl
                     NO_INSTALL
                     FOLDER "TurboRaft/tools")
@@ -488,6 +508,9 @@ if(TARGET turboraft_coronet)
   list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_coronet
        turboraft_snapshot_manager turboraft_service_owner)
 endif()
+if(TARGET turboraft_flowmq)
+  list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_flowmq)
+endif()
 if(TARGET turboraft_control_plane)
   list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_control_plane)
 endif()
@@ -502,6 +525,10 @@ endif()
 set(TURBORAFT_HAVE_CONTROL_PLANE OFF)
 if(TARGET turboraft_control_plane)
   set(TURBORAFT_HAVE_CONTROL_PLANE ON)
+endif()
+set(TURBORAFT_HAVE_FLOWMQ OFF)
+if(TARGET turboraft_flowmq)
+  set(TURBORAFT_HAVE_FLOWMQ ON)
 endif()
 
 configure_package_config_file(

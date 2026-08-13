@@ -21,11 +21,15 @@ extern "C" {
 #define TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE UINT64_C(1)
 #define TR_RAFT_HANDSHAKE_FEATURE_RAFT_BATCH_V3 (UINT64_C(1) << 1)
 #define TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4 (UINT64_C(1) << 2)
+#define TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V5 (UINT64_C(1) << 3)
 #define TR_RAFT_HANDSHAKE_FEATURE_CURRENT                                    \
     (TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE |                        \
      TR_RAFT_HANDSHAKE_FEATURE_RAFT_BATCH_V3 |                              \
-     TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4)
-#define TR_RAFT_HANDSHAKE_MIN_FRAME_SIZE TR_RAFT_WIRE_MAX_FRAME_SIZE
+     TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4 |                              \
+     TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V5)
+/* V4 peers only require the legacy 8 KiB frame ceiling. */
+#define TR_RAFT_HANDSHAKE_MIN_FRAME_SIZE                                  \
+    (TR_RAFT_WIRE_HEADER_SIZE + TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE)
 #define TR_RAFT_HANDSHAKE_MIN_SNAPSHOT_CHUNK_SIZE 4096U
 
 typedef enum tr_raft_handshake_message_type {
@@ -123,6 +127,12 @@ int tr_raft_handshake_select_raft_wire_version(
 /** Returns EPROTONOSUPPORT unless snapshot wire v4 was negotiated. */
 int tr_raft_handshake_require_snapshot_v4(
     const tr_raft_handshake_result_t *result);
+
+/** Selects V5 when negotiated and frame/chunk limits can carry it, else V4. */
+int tr_raft_handshake_select_snapshot_wire_version(
+    const tr_raft_handshake_result_t *result,
+    uint16_t *out_wire_version,
+    uint32_t *out_chunk_size);
 
 /** Marks result complete only when the remote ACK exactly matches negotiation. */
 int tr_raft_handshake_validate_ack(

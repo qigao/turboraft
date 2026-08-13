@@ -77,7 +77,7 @@ find_package(TurboHttp CONFIG REQUIRED)
 target_link_libraries(app PRIVATE
     TurboHttp::HttpClient
     TurboHttp::Iris
-    TurboHttp::RPCClient
+    TurboHttp::TurboHttp
     TurboHttp::S3)
 ```
 

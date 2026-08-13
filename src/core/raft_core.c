@@ -11,6 +11,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct tr_raft_append_inflight {
+    tr_raft_index_t previous_index;
+    tr_raft_index_t last_index;
+    uint32_t elapsed_ticks;
+} tr_raft_append_inflight_t;
+
+typedef struct tr_raft_append_window {
+    tr_raft_append_inflight_t items[TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS];
+    size_t head;
+    size_t count;
+    bool probe;
+} tr_raft_append_window_t;
+
 struct tr_raft_core {
     tr_raft_node_id_t self_id;
     tr_raft_membership_transition_t membership_transition;
@@ -43,9 +56,8 @@ struct tr_raft_core {
     uint32_t votes;
     tr_raft_index_t next_index[TR_RAFT_MAX_VOTERS];
     tr_raft_index_t match_index[TR_RAFT_MAX_VOTERS];
-    bool append_inflight[TR_RAFT_MAX_VOTERS];
-    uint32_t append_inflight_elapsed_ticks[TR_RAFT_MAX_VOTERS];
-    tr_raft_index_t append_inflight_previous_index[TR_RAFT_MAX_VOTERS];
+    tr_raft_append_window_t append_windows[TR_RAFT_MAX_VOTERS];
+    size_t max_inflight_append_requests;
     bool ready_outstanding;
     bool in_call;
 };
@@ -57,6 +69,98 @@ typedef struct tr_raft_before {
 } tr_raft_before_t;
 
 static void tr_become_follower(tr_raft_core_t *core, tr_raft_term_t term);
+
+static void tr_append_window_reset(tr_raft_append_window_t *window,
+                                   bool probe)
+{
+    memset(window, 0, sizeof(*window));
+    window->probe = probe;
+}
+
+static tr_raft_append_inflight_t *tr_append_window_at(
+    tr_raft_append_window_t *window,
+    size_t logical_index)
+{
+    size_t physical_index =
+        (window->head + logical_index) %
+        TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS;
+
+    return &window->items[physical_index];
+}
+
+static const tr_raft_append_inflight_t *tr_append_window_at_const(
+    const tr_raft_append_window_t *window,
+    size_t logical_index)
+{
+    size_t physical_index =
+        (window->head + logical_index) %
+        TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS;
+
+    return &window->items[physical_index];
+}
+
+static bool tr_append_window_push(tr_raft_append_window_t *window,
+                                  tr_raft_index_t previous_index,
+                                  tr_raft_index_t last_index)
+{
+    tr_raft_append_inflight_t *item;
+
+    if (window->count >= TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS) {
+        return false;
+    }
+    item = tr_append_window_at(window, window->count);
+    item->previous_index = previous_index;
+    item->last_index = last_index;
+    item->elapsed_ticks = 0U;
+    ++window->count;
+    return true;
+}
+
+/** Time O(window), space O(1); window is bounded by 64. */
+static int tr_append_window_find(const tr_raft_append_window_t *window,
+                                 tr_raft_index_t previous_index)
+{
+    size_t index;
+
+    for (index = 0U; index < window->count; ++index) {
+        if (tr_append_window_at_const(window, index)->previous_index ==
+            previous_index) {
+            return (int) index;
+        }
+    }
+    return -1;
+}
+
+/** Time O(window), space O(1); releases only a confirmed prefix. */
+static void tr_append_window_release_through(
+    tr_raft_append_window_t *window,
+    tr_raft_index_t match_index)
+{
+    while (window->count != 0U) {
+        const tr_raft_append_inflight_t *front =
+            tr_append_window_at_const(window, 0U);
+
+        if (front->last_index > match_index) {
+            break;
+        }
+        memset(&window->items[window->head], 0,
+               sizeof(window->items[window->head]));
+        window->head = (window->head + 1U) %
+                       TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS;
+        --window->count;
+    }
+    if (window->count == 0U) {
+        window->head = 0U;
+    }
+}
+
+static uint32_t tr_append_window_oldest_elapsed(
+    const tr_raft_append_window_t *window)
+{
+    return window->count == 0U
+               ? 0U
+               : tr_append_window_at_const(window, 0U)->elapsed_ticks;
+}
 
 static bool tr_timeout_valid(const tr_raft_core_t *core, uint32_t timeout)
 {
@@ -188,29 +292,20 @@ static void tr_core_refresh_peers(tr_raft_core_t *core,
                                   const tr_raft_peer_set_t *next_peers)
 {
     tr_raft_peer_set_t old_peers = core->peers;
-    tr_raft_index_t old_next[TR_RAFT_MAX_MEMBERS];
     tr_raft_index_t old_match[TR_RAFT_MAX_MEMBERS];
-    bool old_inflight[TR_RAFT_MAX_MEMBERS];
-    uint32_t old_inflight_elapsed[TR_RAFT_MAX_MEMBERS];
-    tr_raft_index_t old_inflight_previous[TR_RAFT_MAX_MEMBERS];
     uint32_t old_recent_active = core->recent_active;
     tr_raft_index_t last_index = tr_raft_log_last_index(&core->log);
     size_t index;
 
-    memcpy(old_next, core->next_index, sizeof(old_next));
+    if (old_peers.count == next_peers->count &&
+        memcmp(old_peers.node_ids, next_peers->node_ids,
+               old_peers.count * sizeof(old_peers.node_ids[0])) == 0) {
+        return;
+    }
     memcpy(old_match, core->match_index, sizeof(old_match));
-    memcpy(old_inflight, core->append_inflight, sizeof(old_inflight));
-    memcpy(old_inflight_elapsed, core->append_inflight_elapsed_ticks,
-           sizeof(old_inflight_elapsed));
-    memcpy(old_inflight_previous, core->append_inflight_previous_index,
-           sizeof(old_inflight_previous));
     memset(core->next_index, 0, sizeof(core->next_index));
     memset(core->match_index, 0, sizeof(core->match_index));
-    memset(core->append_inflight, 0, sizeof(core->append_inflight));
-    memset(core->append_inflight_elapsed_ticks, 0,
-           sizeof(core->append_inflight_elapsed_ticks));
-    memset(core->append_inflight_previous_index, 0,
-           sizeof(core->append_inflight_previous_index));
+    memset(core->append_windows, 0, sizeof(core->append_windows));
     core->recent_active = 0U;
     core->peers = *next_peers;
 
@@ -219,16 +314,12 @@ static void tr_core_refresh_peers(tr_raft_core_t *core,
             &old_peers, core->peers.node_ids[index]);
 
         core->next_index[index] = last_index + 1U;
+        core->append_windows[index].probe = true;
         if (old_index < 0) {
             continue;
         }
-        core->next_index[index] = old_next[old_index];
         core->match_index[index] = old_match[old_index];
-        core->append_inflight[index] = old_inflight[old_index];
-        core->append_inflight_elapsed_ticks[index] =
-            old_inflight_elapsed[old_index];
-        core->append_inflight_previous_index[index] =
-            old_inflight_previous[old_index];
+        core->next_index[index] = old_match[old_index] + 1U;
         if ((old_recent_active &
              (UINT32_C(1) << (uint32_t) old_index)) != 0U) {
             core->recent_active |= UINT32_C(1) << (uint32_t) index;
@@ -240,6 +331,8 @@ static void tr_core_refresh_peers(tr_raft_core_t *core,
         if (self_index >= 0) {
             core->match_index[self_index] = last_index;
             core->next_index[self_index] = last_index + 1U;
+            tr_append_window_reset(&core->append_windows[self_index],
+                                   false);
             core->recent_active |= UINT32_C(1) << (uint32_t) self_index;
         }
     }
@@ -495,24 +588,28 @@ static void tr_broadcast_read_index(tr_raft_core_t *core,
 
 static bool tr_emit_replication(tr_raft_core_t *core,
                                 tr_raft_ready_t *ready,
-                                size_t voter_index)
+                                size_t peer_index,
+                                bool allow_heartbeat)
 {
-    tr_raft_index_t next_index = core->next_index[voter_index];
+    tr_raft_append_window_t *window = &core->append_windows[peer_index];
+    tr_raft_index_t next_index = core->next_index[peer_index];
     tr_raft_index_t last_index = tr_raft_log_last_index(&core->log);
+    size_t window_limit = window->probe
+                              ? TR_RAFT_DEFAULT_MAX_INFLIGHT_APPEND_REQUESTS
+                              : core->max_inflight_append_requests;
     size_t entry_count = 0U;
     size_t index;
     tr_raft_message_type_t type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
 
     if (next_index <= core->log.base_index) {
-        core->append_inflight[voter_index] = false;
-        core->append_inflight_elapsed_ticks[voter_index] = 0U;
-        core->append_inflight_previous_index[voter_index] = 0U;
-        tr_emit_snapshot_request(core, ready, voter_index);
+        tr_append_window_reset(window, true);
+        tr_emit_snapshot_request(core, ready, peer_index);
         return true;
     }
 
     if (next_index <= last_index) {
-        if (core->append_inflight[voter_index]) {
+        if (window->count >= window_limit ||
+            ready->message_count >= ready->message_capacity) {
             return false;
         }
         entry_count = (size_t) (last_index - next_index + 1U);
@@ -520,8 +617,11 @@ static bool tr_emit_replication(tr_raft_core_t *core,
             entry_count = TR_RAFT_MAX_APPEND_ENTRIES;
         }
         type = TR_RAFT_MSG_APPEND_REQUEST;
+    } else if (!allow_heartbeat ||
+               ready->message_count >= ready->message_capacity) {
+        return false;
     }
-    tr_emit(core, ready, type, tr_peer_id(core, voter_index), false);
+    tr_emit(core, ready, type, tr_peer_id(core, peer_index), false);
     ready->messages[ready->message_count - 1U].previous_log_index =
         next_index - 1U;
     if (next_index - 1U == core->log.base_index) {
@@ -543,9 +643,14 @@ static bool tr_emit_replication(tr_raft_core_t *core,
         ready->messages[ready->message_count - 1U].entries[index] = *entry;
     }
     if (entry_count != 0U) {
-        core->append_inflight[voter_index] = true;
-        core->append_inflight_elapsed_ticks[voter_index] = 0U;
-        core->append_inflight_previous_index[voter_index] = next_index - 1U;
+        if (!tr_append_window_push(window, next_index - 1U,
+                                   next_index + entry_count - 1U)) {
+            --ready->message_count;
+            memset(&ready->messages[ready->message_count], 0,
+                   sizeof(ready->messages[ready->message_count]));
+            return false;
+        }
+        core->next_index[peer_index] = next_index + entry_count;
     }
     return true;
 }
@@ -557,13 +662,68 @@ static void tr_broadcast_replication(tr_raft_core_t *core,
 
     for (index = 0U; index < tr_peer_count(core); ++index) {
         if (tr_peer_id(core, index) != core->self_id) {
-            tr_emit_replication(core, ready, index);
+            tr_emit_replication(core, ready, index, true);
         }
+    }
+}
+
+/**
+ * Fills only data-bearing AppendEntries, round-robin across peers.
+ * Time is O(emitted messages * peers), space O(1); both are caller/config
+ * bounded.
+ */
+static void tr_fill_replication_windows(tr_raft_core_t *core,
+                                        tr_raft_ready_t *ready)
+{
+    bool emitted;
+    size_t index;
+
+    if (core->role != TR_RAFT_LEADER) {
+        return;
+    }
+    for (index = 0U; index < tr_peer_count(core); ++index) {
+        if (tr_peer_id(core, index) != core->self_id &&
+            core->next_index[index] <= core->log.base_index) {
+            (void) tr_emit_replication(core, ready, index, false);
+        }
+    }
+    do {
+        emitted = false;
+        for (index = 0U;
+             index < tr_peer_count(core) &&
+             ready->message_count < ready->message_capacity;
+             ++index) {
+            if (tr_peer_id(core, index) == core->self_id ||
+                core->next_index[index] <= core->log.base_index ||
+                core->next_index[index] >
+                    tr_raft_log_last_index(&core->log)) {
+                continue;
+            }
+            emitted = tr_emit_replication(core, ready, index, false) ||
+                      emitted;
+        }
+    } while (emitted && ready->message_count < ready->message_capacity);
+}
+
+static void tr_fill_peer_replication_window(tr_raft_core_t *core,
+                                            tr_raft_ready_t *ready,
+                                            size_t peer_index)
+{
+    if (core->next_index[peer_index] <= core->log.base_index) {
+        (void) tr_emit_replication(core, ready, peer_index, false);
+        return;
+    }
+    while (ready->message_count < ready->message_capacity &&
+           core->next_index[peer_index] <=
+               tr_raft_log_last_index(&core->log) &&
+           tr_emit_replication(core, ready, peer_index, false)) {
     }
 }
 
 static void tr_become_follower(tr_raft_core_t *core, tr_raft_term_t term)
 {
+    size_t index;
+
     if (term > core->term) {
         core->term = term;
         core->voted_for = 0U;
@@ -583,11 +743,9 @@ static void tr_become_follower(tr_raft_core_t *core, tr_raft_term_t term)
     core->pending_read_context_id = 0U;
     core->pending_read_index = 0U;
     core->pending_read_acks = 0U;
-    memset(core->append_inflight, 0, sizeof(core->append_inflight));
-    memset(core->append_inflight_elapsed_ticks, 0,
-           sizeof(core->append_inflight_elapsed_ticks));
-    memset(core->append_inflight_previous_index, 0,
-           sizeof(core->append_inflight_previous_index));
+    for (index = 0U; index < TR_RAFT_MAX_VOTERS; ++index) {
+        tr_append_window_reset(&core->append_windows[index], true);
+    }
 }
 
 static void tr_become_leader(tr_raft_core_t *core, tr_raft_ready_t *ready)
@@ -611,16 +769,13 @@ static void tr_become_leader(tr_raft_core_t *core, tr_raft_ready_t *ready)
     core->pending_read_context_id = 0U;
     core->pending_read_index = 0U;
     core->pending_read_acks = 0U;
-    memset(core->append_inflight, 0, sizeof(core->append_inflight));
-    memset(core->append_inflight_elapsed_ticks, 0,
-           sizeof(core->append_inflight_elapsed_ticks));
-    memset(core->append_inflight_previous_index, 0,
-           sizeof(core->append_inflight_previous_index));
     for (index = 0U; index < tr_peer_count(core); ++index) {
+        tr_append_window_reset(&core->append_windows[index], true);
         core->next_index[index] = next_index;
         core->match_index[index] = 0U;
     }
     core->match_index[self_index] = next_index - 1U;
+    core->append_windows[self_index].probe = false;
     tr_broadcast_replication(core, ready);
 }
 
@@ -952,7 +1107,9 @@ static int tr_step_heartbeat_response(tr_raft_core_t *core,
                                       tr_raft_ready_t *ready,
                                       int peer_index)
 {
+    tr_raft_append_window_t *window = &core->append_windows[peer_index];
     tr_raft_index_t last_index = tr_raft_log_last_index(&core->log);
+    int inflight_index = -1;
 
     if (response->term > core->term) {
         tr_become_follower(core, response->term);
@@ -965,26 +1122,30 @@ static int tr_step_heartbeat_response(tr_raft_core_t *core,
         return TURBO_OK;
     }
     if (response->type == TR_RAFT_MSG_APPEND_RESPONSE) {
-        if (!core->append_inflight[peer_index] && !response->granted) {
+        inflight_index = tr_append_window_find(
+            window, response->previous_log_index);
+        if (inflight_index < 0) {
             return TURBO_OK;
         }
-        if (core->append_inflight[peer_index] &&
-            response->previous_log_index !=
-                core->append_inflight_previous_index[peer_index]) {
+        if (response->granted &&
+            response->match_index !=
+                tr_append_window_at_const(
+                    window, (size_t) inflight_index)->last_index) {
             return TURBO_OK;
         }
-        core->append_inflight[peer_index] = false;
-        core->append_inflight_elapsed_ticks[peer_index] = 0U;
-        core->append_inflight_previous_index[peer_index] = 0U;
     }
     if (tr_raft_membership_is_voter(tr_core_membership(core),
                                     response->from)) {
         core->recent_active |= UINT32_C(1) << (uint32_t) peer_index;
     }
     if (response->granted) {
+        tr_append_window_release_through(window, response->match_index);
+        window->probe = false;
         if (response->match_index > core->match_index[peer_index]) {
             core->match_index[peer_index] = response->match_index;
-            core->next_index[peer_index] = response->match_index + 1U;
+            if (core->next_index[peer_index] < response->match_index + 1U) {
+                core->next_index[peer_index] = response->match_index + 1U;
+            }
             int result = tr_update_commit(core, ready);
 
             if (result != TURBO_OK) {
@@ -992,13 +1153,25 @@ static int tr_step_heartbeat_response(tr_raft_core_t *core,
             }
         }
     } else {
-        tr_raft_index_t next = core->next_index[peer_index];
+        tr_raft_index_t next;
 
-        if (response->reject_hint != 0U && response->reject_hint < next) {
-            next = response->reject_hint;
-        } else if (next > core->log.base_index + 1U) {
-            --next;
+        if (inflight_index >= 0) {
+            next = tr_append_window_at_const(
+                window, (size_t) inflight_index)->previous_index;
+        } else {
+            next = core->next_index[peer_index];
+            if (next > core->log.base_index + 1U) {
+                --next;
+            }
         }
+        if (response->reject_hint != 0U &&
+            response->reject_hint < next) {
+            next = response->reject_hint;
+        }
+        if (next < core->match_index[peer_index] + 1U) {
+            next = core->match_index[peer_index] + 1U;
+        }
+        tr_append_window_reset(window, true);
         core->next_index[peer_index] = next;
     }
     if (response->granted && !core->leadership_transfer_sent &&
@@ -1008,7 +1181,7 @@ static int tr_step_heartbeat_response(tr_raft_core_t *core,
         core->leadership_transfer_sent = true;
     } else if (core->next_index[peer_index] <= last_index ||
                !response->granted) {
-        tr_emit_replication(core, ready, (size_t) peer_index);
+        tr_fill_peer_replication_window(core, ready, (size_t) peer_index);
     }
     return TURBO_OK;
 }
@@ -1112,7 +1285,9 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
         config->election_min_ticks <= config->heartbeat_ticks ||
         config->election_min_ticks > config->election_max_ticks ||
         config->initial_election_timeout_ticks < config->election_min_ticks ||
-        config->initial_election_timeout_ticks > config->election_max_ticks) {
+        config->initial_election_timeout_ticks > config->election_max_ticks ||
+        config->max_inflight_append_requests >
+            TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS) {
         return TURBO_EINVAL;
     }
     for (index = 0; index < config->voter_count; ++index) {
@@ -1288,6 +1463,13 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
     core->election_min_ticks = config->election_min_ticks;
     core->election_max_ticks = config->election_max_ticks;
     core->election_timeout_ticks = config->initial_election_timeout_ticks;
+    core->max_inflight_append_requests =
+        config->max_inflight_append_requests == 0U
+            ? TR_RAFT_DEFAULT_MAX_INFLIGHT_APPEND_REQUESTS
+            : config->max_inflight_append_requests;
+    for (index = 0U; index < TR_RAFT_MAX_VOTERS; ++index) {
+        core->append_windows[index].probe = true;
+    }
     *out_core = core;
     return TURBO_OK;
 }
@@ -1372,20 +1554,30 @@ int tr_raft_core_tick(tr_raft_core_t *core,
             }
         }
         for (index = 0U; index < tr_peer_count(core); ++index) {
-            if (!core->append_inflight[index]) {
+            tr_raft_append_window_t *window = &core->append_windows[index];
+            bool timed_out = false;
+            size_t inflight_index;
+
+            if (window->count == 0U) {
                 continue;
             }
-            if (UINT32_MAX - core->append_inflight_elapsed_ticks[index] <
-                    tick->elapsed_ticks ||
-                core->append_inflight_elapsed_ticks[index] +
-                        tick->elapsed_ticks >=
-                    core->heartbeat_ticks) {
-                core->append_inflight[index] = false;
-                core->append_inflight_elapsed_ticks[index] = 0U;
-                core->append_inflight_previous_index[index] = 0U;
-            } else {
-                core->append_inflight_elapsed_ticks[index] +=
-                    tick->elapsed_ticks;
+            for (inflight_index = 0U;
+                 inflight_index < window->count; ++inflight_index) {
+                tr_raft_append_inflight_t *inflight =
+                    tr_append_window_at(window, inflight_index);
+
+                if (UINT32_MAX - inflight->elapsed_ticks <
+                        tick->elapsed_ticks ||
+                    inflight->elapsed_ticks + tick->elapsed_ticks >=
+                        core->heartbeat_ticks) {
+                    timed_out = true;
+                    break;
+                }
+                inflight->elapsed_ticks += tick->elapsed_ticks;
+            }
+            if (timed_out) {
+                core->next_index[index] = core->match_index[index] + 1U;
+                tr_append_window_reset(window, true);
             }
         }
         if (UINT32_MAX - core->heartbeat_elapsed_ticks < tick->elapsed_ticks ||
@@ -1484,12 +1676,9 @@ int tr_raft_core_step(tr_raft_core_t *core,
     case TR_RAFT_MSG_HEARTBEAT_RESPONSE:
     case TR_RAFT_MSG_APPEND_RESPONSE:
         if (core->role == TR_RAFT_LEADER && message->term == core->term &&
-            ((!message->granted ||
-              message->match_index < tr_raft_log_last_index(&core->log)) ||
-             (message->granted &&
-              message->match_index <= tr_raft_log_last_index(&core->log) &&
-              !core->leadership_transfer_sent &&
-              core->leadership_transfer_target == message->from))) {
+            message->granted && !core->leadership_transfer_sent &&
+            core->leadership_transfer_target == message->from &&
+            message->match_index == tr_raft_log_last_index(&core->log)) {
             required = 1U;
         }
         break;
@@ -1712,7 +1901,8 @@ int tr_raft_core_transfer_leadership(tr_raft_core_t *core,
         tr_emit(core, ready, TR_RAFT_MSG_TIMEOUT_NOW, transferee_id, false);
         core->leadership_transfer_sent = true;
     } else {
-        tr_emit_replication(core, ready, (size_t) transferee_index);
+        (void) tr_emit_replication(core, ready,
+                                   (size_t) transferee_index, false);
         core->leadership_transfer_sent = false;
     }
     return tr_finish(core, ready, &before);
@@ -1774,6 +1964,7 @@ int tr_raft_core_poll(tr_raft_core_t *core, tr_raft_ready_t *ready)
     if (result != TURBO_OK) {
         return result;
     }
+    tr_fill_replication_windows(core, ready);
     return tr_finish(core, ready, &before);
 }
 
@@ -1894,10 +2085,8 @@ int tr_raft_core_snapshot_completed(tr_raft_core_t *core,
         core->match_index[peer_index] = snapshot_index;
     }
     core->next_index[peer_index] = snapshot_index + 1U;
-    core->append_inflight[peer_index] = false;
-    core->append_inflight_elapsed_ticks[peer_index] = 0U;
-    core->append_inflight_previous_index[peer_index] = 0U;
-    tr_emit_replication(core, ready, (size_t) peer_index);
+    tr_append_window_reset(&core->append_windows[peer_index], true);
+    tr_fill_peer_replication_window(core, ready, (size_t) peer_index);
     return tr_finish(core, ready, &before);
 }
 
@@ -1930,7 +2119,7 @@ int tr_raft_core_status(const tr_raft_core_t *core, tr_raft_status_t *status)
     status->pending_read_context_id = core->pending_read_context_id;
     status->inflight_append_count = 0U;
     for (index = 0U; index < tr_peer_count(core); ++index) {
-        status->inflight_append_count += core->append_inflight[index];
+        status->inflight_append_count += core->append_windows[index].count;
     }
     status->self_is_voter = core->self_is_voter;
     status->voter_count = tr_core_voter_count(core);
@@ -1980,10 +2169,14 @@ int tr_raft_core_progress(const tr_raft_core_t *core,
         peer->match_index = core->match_index[index];
         peer->next_index = core->next_index[index];
         peer->append_inflight_elapsed_ticks =
-            core->append_inflight_elapsed_ticks[index];
+            tr_append_window_oldest_elapsed(&core->append_windows[index]);
+        peer->inflight_append_count = core->append_windows[index].count;
+        peer->max_inflight_append_requests =
+            core->max_inflight_append_requests;
         peer->recent_active = peer->node_id == core->self_id ||
             (core->recent_active & (UINT32_C(1) << (uint32_t) index)) != 0U;
-        peer->append_inflight = core->append_inflight[index];
+        peer->append_inflight = core->append_windows[index].count != 0U;
+        peer->append_probe = core->append_windows[index].probe;
         peer->snapshot_required = core->role == TR_RAFT_LEADER &&
             peer->node_id != core->self_id &&
             peer->next_index <= core->log.base_index;

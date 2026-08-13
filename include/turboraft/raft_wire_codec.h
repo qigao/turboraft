@@ -12,12 +12,19 @@ extern "C" {
 
 #define TR_RAFT_WIRE_MIN_VERSION 2U
 #define TR_RAFT_WIRE_VERSION 3U
-#define TR_RAFT_WIRE_SNAPSHOT_VERSION 4U
+#define TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION 4U
+#define TR_RAFT_WIRE_SNAPSHOT_VERSION 5U
 #define TR_RAFT_WIRE_MAX_VERSION TR_RAFT_WIRE_SNAPSHOT_VERSION
 #define TR_RAFT_WIRE_HEADER_SIZE 40U
-#define TR_RAFT_WIRE_MAX_PAYLOAD_SIZE 8192U
+#define TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE 8192U
 #define TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE 32U
-#define TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES 512U
+#define TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES 512U
+#define TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES (64U * 1024U)
+#define TR_RAFT_WIRE_MAX_INFLIGHT_SNAPSHOT_BYTES \
+    (4U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES)
+#define TR_RAFT_WIRE_MAX_SNAPSHOT_PAYLOAD_SIZE \
+    (TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES + 4096U)
+#define TR_RAFT_WIRE_MAX_PAYLOAD_SIZE TR_RAFT_WIRE_MAX_SNAPSHOT_PAYLOAD_SIZE
 #define TR_RAFT_WIRE_MAX_SNAPSHOT_BYTES (64U * 1024U * 1024U)
 #define TR_RAFT_WIRE_MAX_FRAME_SIZE \
     (TR_RAFT_WIRE_HEADER_SIZE + TR_RAFT_WIRE_MAX_PAYLOAD_SIZE)
@@ -63,7 +70,8 @@ typedef struct tr_raft_snapshot_chunk {
     bool has_configuration;
     tr_raft_conf_t configuration;
     size_t data_length;
-    uint8_t data[TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES];
+    /** Borrowed immutable bytes; valid only for the containing API call. */
+    const uint8_t *data;
     bool done;
 } tr_raft_snapshot_chunk_t;
 
@@ -114,6 +122,16 @@ int tr_raft_wire_encode_snapshot_chunk(
     size_t output_capacity,
     size_t *output_length);
 
+/** Explicit snapshot version encoder for negotiated V4/V5 peers. */
+int tr_raft_wire_encode_snapshot_chunk_version(
+    tr_raft_wire_codec_t *codec,
+    uint16_t wire_version,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_snapshot_chunk_t *chunk,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length);
+
 int tr_raft_wire_decode_snapshot_chunk(
     tr_raft_wire_codec_t *codec,
     const uint8_t *frame,
@@ -123,6 +141,15 @@ int tr_raft_wire_decode_snapshot_chunk(
 
 int tr_raft_wire_encode_snapshot_ack(
     tr_raft_wire_codec_t *codec,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_snapshot_ack_t *ack,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length);
+
+int tr_raft_wire_encode_snapshot_ack_version(
+    tr_raft_wire_codec_t *codec,
+    uint16_t wire_version,
     const tr_raft_wire_metadata_t *metadata,
     const tr_raft_snapshot_ack_t *ack,
     uint8_t *output,

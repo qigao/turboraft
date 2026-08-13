@@ -112,9 +112,13 @@ int tr_raft_snapshot_manager_create(
     for (index = 0U; index < manager->peer_count; ++index) {
         tr_raft_snapshot_peer_config_t peer_config;
 
+        memset(&peer_config, 0, sizeof(peer_config));
         peer_config.self_id = manager->self_id;
         peer_config.peer_id = manager->peer_node_ids[index];
         peer_config.max_snapshot_bytes = config->max_snapshot_bytes;
+        peer_config.chunk_size = config->snapshot_chunk_size;
+        peer_config.max_inflight_chunks =
+            config->snapshot_max_inflight_chunks;
         peer_config.enqueue = tr_snapshot_manager_enqueue;
         peer_config.enqueue_context = manager;
         result = tr_raft_snapshot_peer_create(&peer_config,

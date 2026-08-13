@@ -109,30 +109,46 @@ static bool tr_message_valid(const tr_raft_message_t *message)
 
 static bool tr_snapshot_chunk_valid(const tr_raft_snapshot_chunk_t *chunk)
 {
-    uint64_t remaining;
-    size_t expected_length;
-
     if (chunk == NULL || chunk->from == 0U || chunk->to == 0U ||
         chunk->term == 0U || chunk->snapshot_index == 0U ||
-        chunk->snapshot_term == 0U ||
+        chunk->snapshot_term == 0U || chunk->snapshot_term > chunk->term ||
         chunk->snapshot_size > TR_RAFT_WIRE_MAX_SNAPSHOT_BYTES ||
         chunk->snapshot_offset > chunk->snapshot_size ||
-        chunk->data_length > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
+        chunk->data_length > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES ||
+        (chunk->data_length != 0U && chunk->data == NULL) ||
+        chunk->data_length > chunk->snapshot_size - chunk->snapshot_offset) {
         return false;
     }
-    remaining = chunk->snapshot_size - chunk->snapshot_offset;
-    expected_length = remaining > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES
-                          ? TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES
-                          : (size_t) remaining;
     if ((chunk->snapshot_offset == 0U &&
          (!chunk->has_configuration ||
           tr_raft_conf_validate(&chunk->configuration) != TURBO_OK)) ||
         (chunk->snapshot_offset != 0U && chunk->has_configuration)) {
         return false;
     }
-    return chunk->data_length == expected_length &&
-           chunk->done ==
-               (remaining <= TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
+    return chunk->done ==
+               (chunk->snapshot_offset + chunk->data_length ==
+                chunk->snapshot_size) &&
+           (chunk->done || chunk->data_length != 0U);
+}
+
+static size_t tr_wire_payload_limit(uint16_t wire_version,
+                                    uint32_t payload_kind)
+{
+    if (payload_kind == TR_RAFT_WIRE_PAYLOAD_RAFT) {
+        return wire_version <= TR_RAFT_WIRE_VERSION
+                   ? TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE
+                   : 0U;
+    }
+    if (payload_kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK ||
+        payload_kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK) {
+        if (wire_version == TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION) {
+            return TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE;
+        }
+        if (wire_version == TR_RAFT_WIRE_SNAPSHOT_VERSION) {
+            return TR_RAFT_WIRE_MAX_SNAPSHOT_PAYLOAD_SIZE;
+        }
+    }
+    return 0U;
 }
 
 static bool tr_snapshot_ack_valid(const tr_raft_snapshot_ack_t *ack)
@@ -179,7 +195,8 @@ static int tr_wire_read_envelope(
         return TURBO_EPROTO;
     }
     payload_length = tr_get_u32(frame + 8U);
-    if (payload_length > TR_RAFT_WIRE_MAX_PAYLOAD_SIZE ||
+    if (payload_length > tr_wire_payload_limit(wire_version,
+                                               expected_payload_kind) ||
         frame_length != TR_RAFT_WIRE_HEADER_SIZE + payload_length) {
         return TURBO_EPROTO;
     }
@@ -281,7 +298,7 @@ static int tr_raft_wire_encode_v3(tr_raft_wire_codec_t *codec,
     if (status != DATA_BIND_OK) {
         return *output_length > output_capacity ? TURBO_ENOSPC : TURBO_EPROTO;
     }
-    if (payload_length > TR_RAFT_WIRE_MAX_PAYLOAD_SIZE) {
+    if (payload_length > TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE) {
         return TURBO_EPROTO;
     }
     tr_wire_write_envelope(output, TR_RAFT_WIRE_VERSION,
@@ -414,7 +431,7 @@ int tr_raft_wire_encode_version(tr_raft_wire_codec_t *codec,
     if (status != DATA_BIND_OK) {
         return *output_length > output_capacity ? TURBO_ENOSPC : TURBO_EPROTO;
     }
-    if (payload_length > TR_RAFT_WIRE_MAX_PAYLOAD_SIZE) {
+    if (payload_length > TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE) {
         return TURBO_EPROTO;
     }
 
@@ -435,107 +452,202 @@ int tr_raft_wire_encode(tr_raft_wire_codec_t *codec,
                                        output_length);
 }
 
-static int tr_raft_wire_decode_v3(tr_raft_wire_codec_t *codec,
-                                  const uint8_t *payload,
+typedef struct tr_wire_v3_fields {
+    uint8_t message_type;
+    uint8_t granted;
+    uint16_t reserved;
+    uint32_t entry_count;
+    uint64_t from_node;
+    uint64_t to_node;
+    uint64_t term;
+    uint64_t campaign_term;
+    uint64_t last_log_index;
+    uint64_t last_log_term;
+    uint64_t leader_commit;
+    uint64_t previous_log_index;
+    uint64_t previous_log_term;
+    uint64_t match_index;
+    uint64_t reject_hint;
+    uint64_t entry_indices[TR_RAFT_MAX_APPEND_ENTRIES];
+    uint64_t entry_terms[TR_RAFT_MAX_APPEND_ENTRIES];
+    uint64_t entry_commands[TR_RAFT_MAX_APPEND_ENTRIES];
+    /* Borrowed from the immutable frame and consumed before decode returns. */
+    tbe_var_data_t entry_data[TR_RAFT_MAX_APPEND_ENTRIES];
+} tr_wire_v3_fields_t;
+
+static bool tr_wire_v3_read_fields(const uint8_t *payload,
+                                   size_t payload_length,
+                                   tr_wire_v3_fields_t *fields)
+{
+    RaftWireMessageV3_view_t view;
+
+    if (fields == NULL ||
+        !RaftWireMessageV3_view_bind(&view, payload, payload_length)) {
+        return false;
+    }
+    memset(fields, 0, sizeof(*fields));
+    fields->message_type = RaftWireMessageV3_message_type_get(&view);
+    fields->granted = RaftWireMessageV3_granted_get(&view);
+    fields->reserved = RaftWireMessageV3_reserved_get(&view);
+    fields->entry_count = RaftWireMessageV3_entry_count_get(&view);
+    fields->from_node = RaftWireMessageV3_from_node_get(&view);
+    fields->to_node = RaftWireMessageV3_to_node_get(&view);
+    fields->term = RaftWireMessageV3_term_get(&view);
+    fields->campaign_term = RaftWireMessageV3_campaign_term_get(&view);
+    fields->last_log_index = RaftWireMessageV3_last_log_index_get(&view);
+    fields->last_log_term = RaftWireMessageV3_last_log_term_get(&view);
+    fields->leader_commit = RaftWireMessageV3_leader_commit_get(&view);
+    fields->previous_log_index =
+        RaftWireMessageV3_previous_log_index_get(&view);
+    fields->previous_log_term =
+        RaftWireMessageV3_previous_log_term_get(&view);
+    fields->match_index = RaftWireMessageV3_match_index_get(&view);
+    fields->reject_hint = RaftWireMessageV3_reject_hint_get(&view);
+
+    fields->entry_indices[0] = RaftWireMessageV3_entry1_index_get(&view);
+    fields->entry_indices[1] = RaftWireMessageV3_entry2_index_get(&view);
+    fields->entry_indices[2] = RaftWireMessageV3_entry3_index_get(&view);
+    fields->entry_indices[3] = RaftWireMessageV3_entry4_index_get(&view);
+    fields->entry_indices[4] = RaftWireMessageV3_entry5_index_get(&view);
+    fields->entry_indices[5] = RaftWireMessageV3_entry6_index_get(&view);
+    fields->entry_indices[6] = RaftWireMessageV3_entry7_index_get(&view);
+    fields->entry_indices[7] = RaftWireMessageV3_entry8_index_get(&view);
+    fields->entry_terms[0] = RaftWireMessageV3_entry1_term_get(&view);
+    fields->entry_terms[1] = RaftWireMessageV3_entry2_term_get(&view);
+    fields->entry_terms[2] = RaftWireMessageV3_entry3_term_get(&view);
+    fields->entry_terms[3] = RaftWireMessageV3_entry4_term_get(&view);
+    fields->entry_terms[4] = RaftWireMessageV3_entry5_term_get(&view);
+    fields->entry_terms[5] = RaftWireMessageV3_entry6_term_get(&view);
+    fields->entry_terms[6] = RaftWireMessageV3_entry7_term_get(&view);
+    fields->entry_terms[7] = RaftWireMessageV3_entry8_term_get(&view);
+    fields->entry_commands[0] =
+        RaftWireMessageV3_entry1_command_id_get(&view);
+    fields->entry_commands[1] =
+        RaftWireMessageV3_entry2_command_id_get(&view);
+    fields->entry_commands[2] =
+        RaftWireMessageV3_entry3_command_id_get(&view);
+    fields->entry_commands[3] =
+        RaftWireMessageV3_entry4_command_id_get(&view);
+    fields->entry_commands[4] =
+        RaftWireMessageV3_entry5_command_id_get(&view);
+    fields->entry_commands[5] =
+        RaftWireMessageV3_entry6_command_id_get(&view);
+    fields->entry_commands[6] =
+        RaftWireMessageV3_entry7_command_id_get(&view);
+    fields->entry_commands[7] =
+        RaftWireMessageV3_entry8_command_id_get(&view);
+
+    if (!RaftWireMessageV3_entry1_data(&view, &fields->entry_data[0]) ||
+        !RaftWireMessageV3_entry2_data(&view, &fields->entry_data[1]) ||
+        !RaftWireMessageV3_entry3_data(&view, &fields->entry_data[2]) ||
+        !RaftWireMessageV3_entry4_data(&view, &fields->entry_data[3]) ||
+        !RaftWireMessageV3_entry5_data(&view, &fields->entry_data[4]) ||
+        !RaftWireMessageV3_entry6_data(&view, &fields->entry_data[5]) ||
+        !RaftWireMessageV3_entry7_data(&view, &fields->entry_data[6]) ||
+        !RaftWireMessageV3_entry8_data(&view, &fields->entry_data[7])) {
+        return false;
+    }
+    return tbe_wire_var_data_end(&fields->entry_data[7]) ==
+           payload + payload_length;
+}
+
+static bool tr_wire_v3_fields_valid(const tr_wire_v3_fields_t *fields)
+{
+    bool read_message;
+    size_t index;
+
+    if (fields->reserved != 0U || fields->granted > 1U ||
+        fields->message_type > TR_RAFT_MSG_READ_INDEX_RESPONSE ||
+        fields->from_node == 0U || fields->to_node == 0U ||
+        fields->entry_count > TR_RAFT_MAX_APPEND_ENTRIES) {
+        return false;
+    }
+    read_message =
+        fields->message_type == TR_RAFT_MSG_READ_INDEX_REQUEST ||
+        fields->message_type == TR_RAFT_MSG_READ_INDEX_RESPONSE;
+    if (read_message &&
+        (fields->campaign_term == 0U || fields->term == 0U ||
+         fields->entry_count != 0U)) {
+        return false;
+    }
+    if (fields->entry_count != 0U &&
+        fields->message_type != TR_RAFT_MSG_APPEND_REQUEST) {
+        return false;
+    }
+    for (index = 0U; index < TR_RAFT_MAX_APPEND_ENTRIES; ++index) {
+        bool active = index < fields->entry_count;
+
+        if (fields->entry_data[index].size > TR_RAFT_MAX_ENTRY_BYTES ||
+            (active &&
+             (fields->entry_indices[index] == 0U ||
+              fields->entry_terms[index] == 0U ||
+              fields->entry_indices[index] !=
+                  fields->previous_log_index + index + 1U)) ||
+            (!active &&
+             (fields->entry_indices[index] != 0U ||
+              fields->entry_terms[index] != 0U ||
+              fields->entry_commands[index] != 0U ||
+              fields->entry_data[index].size != 0U))) {
+            return false;
+        }
+        if (active && fields->entry_commands[index] == 0U) {
+            tr_raft_conf_t configuration;
+
+            if (tr_raft_conf_decode(fields->entry_data[index].data,
+                                    fields->entry_data[index].size,
+                                    &configuration) != TURBO_OK) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static int tr_raft_wire_decode_v3(const uint8_t *payload,
                                   size_t payload_length,
                                   tr_raft_message_t *message)
 {
-    RaftWireMessageV3_t wire;
-    DataBindError error = DATA_BIND_ERROR_INIT;
-    DataBindStatus status;
-    uint64_t *entry_indices[TR_RAFT_MAX_APPEND_ENTRIES];
-    uint64_t *entry_terms[TR_RAFT_MAX_APPEND_ENTRIES];
-    uint64_t *entry_commands[TR_RAFT_MAX_APPEND_ENTRIES];
-    tbe_bytes_t *entry_data[TR_RAFT_MAX_APPEND_ENTRIES];
+    tr_wire_v3_fields_t fields;
     size_t index;
 
-    RaftWireMessageV3_init(&wire);
-    status = RaftWireMessageV3_from_bin(codec->binding_v3, &wire, payload,
-                                        payload_length, &error);
-    if (status != DATA_BIND_OK) {
-        RaftWireMessageV3_clear(&wire);
+    if (!tr_wire_v3_read_fields(payload, payload_length, &fields) ||
+        !tr_wire_v3_fields_valid(&fields)) {
         return TURBO_EPROTO;
-    }
-    {
-        uint64_t *indices[] = {
-            &wire.entry1_index, &wire.entry2_index, &wire.entry3_index,
-            &wire.entry4_index, &wire.entry5_index, &wire.entry6_index,
-            &wire.entry7_index, &wire.entry8_index};
-        uint64_t *terms[] = {
-            &wire.entry1_term, &wire.entry2_term, &wire.entry3_term,
-            &wire.entry4_term, &wire.entry5_term, &wire.entry6_term,
-            &wire.entry7_term, &wire.entry8_term};
-        uint64_t *commands[] = {
-            &wire.entry1_command_id, &wire.entry2_command_id,
-            &wire.entry3_command_id, &wire.entry4_command_id,
-            &wire.entry5_command_id, &wire.entry6_command_id,
-            &wire.entry7_command_id, &wire.entry8_command_id};
-        tbe_bytes_t *data[] = {
-            &wire.entry1_data, &wire.entry2_data, &wire.entry3_data,
-            &wire.entry4_data, &wire.entry5_data, &wire.entry6_data,
-            &wire.entry7_data, &wire.entry8_data};
-
-        memcpy(entry_indices, indices, sizeof(indices));
-        memcpy(entry_terms, terms, sizeof(terms));
-        memcpy(entry_commands, commands, sizeof(commands));
-        memcpy(entry_data, data, sizeof(data));
-    }
-    if (wire.reserved != 0U || wire.granted > 1U ||
-        wire.message_type > TR_RAFT_MSG_READ_INDEX_RESPONSE ||
-        wire.from_node == 0U || wire.to_node == 0U ||
-        wire.entry_count > TR_RAFT_MAX_APPEND_ENTRIES) {
-        RaftWireMessageV3_clear(&wire);
-        return TURBO_EPROTO;
-    }
-    for (index = 0U; index < TR_RAFT_MAX_APPEND_ENTRIES; ++index) {
-        size_t data_length = tbe_bytes_t_size(entry_data[index]);
-        bool active = index < wire.entry_count;
-
-        if (data_length > TR_RAFT_MAX_ENTRY_BYTES ||
-            (active && (*entry_indices[index] == 0U ||
-                        *entry_terms[index] == 0U)) ||
-            (!active && (*entry_indices[index] != 0U ||
-                         *entry_terms[index] != 0U ||
-                         *entry_commands[index] != 0U || data_length != 0U))) {
-            RaftWireMessageV3_clear(&wire);
-            return TURBO_EPROTO;
-        }
     }
 
     memset(message, 0, sizeof(*message));
-    message->type = (tr_raft_message_type_t) wire.message_type;
-    message->granted = wire.granted != 0U;
-    message->entry_count = wire.entry_count;
-    message->from = wire.from_node;
-    message->to = wire.to_node;
-    message->term = wire.term;
+    message->type = (tr_raft_message_type_t) fields.message_type;
+    message->granted = fields.granted != 0U;
+    message->entry_count = fields.entry_count;
+    message->from = fields.from_node;
+    message->to = fields.to_node;
+    message->term = fields.term;
     if (message->type == TR_RAFT_MSG_READ_INDEX_REQUEST ||
         message->type == TR_RAFT_MSG_READ_INDEX_RESPONSE) {
-        message->context_id = wire.campaign_term;
+        message->context_id = fields.campaign_term;
     } else {
-        message->campaign_term = wire.campaign_term;
+        message->campaign_term = fields.campaign_term;
     }
-    message->last_log_index = wire.last_log_index;
-    message->last_log_term = wire.last_log_term;
-    message->leader_commit = wire.leader_commit;
-    message->previous_log_index = wire.previous_log_index;
-    message->previous_log_term = wire.previous_log_term;
-    message->match_index = wire.match_index;
-    message->reject_hint = wire.reject_hint;
+    message->last_log_index = fields.last_log_index;
+    message->last_log_term = fields.last_log_term;
+    message->leader_commit = fields.leader_commit;
+    message->previous_log_index = fields.previous_log_index;
+    message->previous_log_term = fields.previous_log_term;
+    message->match_index = fields.match_index;
+    message->reject_hint = fields.reject_hint;
     for (index = 0U; index < message->entry_count; ++index) {
-        size_t data_length = tbe_bytes_t_size(entry_data[index]);
+        tr_raft_entry_t *entry = &message->entries[index];
 
-        message->entries[index].index = *entry_indices[index];
-        message->entries[index].term = *entry_terms[index];
-        message->entries[index].command_id = *entry_commands[index];
-        message->entries[index].data_length = data_length;
-        if (data_length != 0U) {
-            memcpy(message->entries[index].data,
-                   tbe_bytes_t_data(entry_data[index]), data_length);
+        entry->index = fields.entry_indices[index];
+        entry->term = fields.entry_terms[index];
+        entry->command_id = fields.entry_commands[index];
+        entry->data_length = fields.entry_data[index].size;
+        if (entry->data_length != 0U) {
+            memcpy(entry->data, fields.entry_data[index].data,
+                   entry->data_length);
         }
     }
-    RaftWireMessageV3_clear(&wire);
-    return tr_message_valid(message) ? TURBO_OK : TURBO_EPROTO;
+    return TURBO_OK;
 }
 
 int tr_raft_wire_decode(tr_raft_wire_codec_t *codec,
@@ -564,7 +676,7 @@ int tr_raft_wire_decode(tr_raft_wire_codec_t *codec,
     }
     if (wire_version == TR_RAFT_WIRE_VERSION) {
         return tr_raft_wire_decode_v3(
-            codec, frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length, message);
+            frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length, message);
     }
     if (wire_version != TR_RAFT_WIRE_MIN_VERSION) {
         return TURBO_EPROTO;
@@ -630,17 +742,18 @@ int tr_raft_wire_decode(tr_raft_wire_codec_t *codec,
     return tr_message_valid(message) ? TURBO_OK : TURBO_EPROTO;
 }
 
-int tr_raft_wire_encode_snapshot_chunk(
+int tr_raft_wire_encode_snapshot_chunk_version(
     tr_raft_wire_codec_t *codec,
+    uint16_t wire_version,
     const tr_raft_wire_metadata_t *metadata,
     const tr_raft_snapshot_chunk_t *chunk,
     uint8_t *output,
     size_t output_capacity,
     size_t *output_length)
 {
-    InstallSnapshotChunk_t wire;
-    DataBindError error = DATA_BIND_ERROR_INIT;
-    DataBindStatus status;
+    InstallSnapshotChunk_builder_t builder;
+    InstallSnapshotChunk_view_t view;
+    tbe_var_data_t encoded_data;
     size_t payload_length = 0U;
     uint8_t encoded_configuration[TR_RAFT_CONF_MAX_ENCODED_SIZE];
     size_t encoded_configuration_size = 0U;
@@ -654,65 +767,92 @@ int tr_raft_wire_encode_snapshot_chunk(
         output_length == NULL) {
         return TURBO_EINVAL;
     }
+    if ((wire_version != TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
+         wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION) ||
+        (wire_version == TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
+         (chunk->data_length > TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES ||
+          chunk->data_length !=
+              ((chunk->snapshot_size - chunk->snapshot_offset) >
+                       TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES
+                   ? TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES
+                   : (size_t)(chunk->snapshot_size -
+                              chunk->snapshot_offset))))) {
+        return TURBO_EPROTO;
+    }
     if (output_capacity < TR_RAFT_WIRE_HEADER_SIZE) {
         *output_length = TR_RAFT_WIRE_HEADER_SIZE;
         return TURBO_ENOSPC;
     }
-    InstallSnapshotChunk_init(&wire);
-    wire.from_node = chunk->from;
-    wire.to_node = chunk->to;
-    wire.term = chunk->term;
-    wire.snapshot_index = chunk->snapshot_index;
-    wire.snapshot_term = chunk->snapshot_term;
-    wire.snapshot_offset = chunk->snapshot_offset;
-    wire.snapshot_size = chunk->snapshot_size;
-    wire.done = chunk->done ? 1U : 0U;
     result = chunk->has_configuration
                  ? tr_raft_conf_encode(
                        &chunk->configuration, encoded_configuration,
                        sizeof(encoded_configuration),
                        &encoded_configuration_size)
                  : TURBO_OK;
-    if (result == TURBO_OK) {
-        result = turbo_vec_resize(&wire.snapshot_configuration.raw,
-                                  encoded_configuration_size);
-    }
-    if (result == TURBO_OK && encoded_configuration_size != 0U) {
-        memcpy(tbe_bytes_t_data(&wire.snapshot_configuration),
-               encoded_configuration, encoded_configuration_size);
-    }
-    if (result == TURBO_OK) {
-        result = turbo_vec_resize(&wire.snapshot_digest.raw,
-                                  TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE);
-    }
-    if (result == TURBO_OK) {
-        memcpy(tbe_bytes_t_data(&wire.snapshot_digest), chunk->snapshot_digest,
-               TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE);
-        result = turbo_vec_resize(&wire.chunk_data.raw, chunk->data_length);
-    }
-    if (result == TURBO_OK && chunk->data_length != 0U) {
-        memcpy(tbe_bytes_t_data(&wire.chunk_data), chunk->data,
-               chunk->data_length);
-    }
     if (result != TURBO_OK) {
-        InstallSnapshotChunk_clear(&wire);
         return result;
     }
-    status = InstallSnapshotChunk_to_bin_into(
-        &wire, output + TR_RAFT_WIRE_HEADER_SIZE,
-        output_capacity - TR_RAFT_WIRE_HEADER_SIZE, &payload_length, &error);
-    InstallSnapshotChunk_clear(&wire);
-    *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
-    if (status != DATA_BIND_OK) {
-        return *output_length > output_capacity ? TURBO_ENOSPC : TURBO_EPROTO;
+
+    if (!InstallSnapshotChunk_builder_bind(
+            &builder, output + TR_RAFT_WIRE_HEADER_SIZE,
+            output_capacity - TR_RAFT_WIRE_HEADER_SIZE) ||
+        !InstallSnapshotChunk_from_node_set(&builder, chunk->from) ||
+        !InstallSnapshotChunk_to_node_set(&builder, chunk->to) ||
+        !InstallSnapshotChunk_term_set(&builder, chunk->term) ||
+        !InstallSnapshotChunk_snapshot_index_set(&builder,
+                                                 chunk->snapshot_index) ||
+        !InstallSnapshotChunk_snapshot_term_set(&builder,
+                                                chunk->snapshot_term) ||
+        !InstallSnapshotChunk_snapshot_offset_set(&builder,
+                                                  chunk->snapshot_offset) ||
+        !InstallSnapshotChunk_snapshot_size_set(&builder,
+                                                chunk->snapshot_size) ||
+        !InstallSnapshotChunk_done_set(&builder, chunk->done ? 1U : 0U) ||
+        !InstallSnapshotChunk_snapshot_configuration_set(
+            &builder, encoded_configuration, encoded_configuration_size) ||
+        !InstallSnapshotChunk_snapshot_digest_set(
+            &builder, chunk->snapshot_digest,
+            TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) ||
+        !InstallSnapshotChunk_chunk_data_set(
+            &builder, chunk->data, chunk->data_length)) {
+        *output_length = TR_RAFT_WIRE_HEADER_SIZE +
+                         InstallSnapshotChunk_BLOCK_LENGTH + 12U +
+                         encoded_configuration_size +
+                         TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE +
+                         chunk->data_length;
+        return TURBO_ENOSPC;
     }
-    if (payload_length > TR_RAFT_WIRE_MAX_PAYLOAD_SIZE) {
+    if (!InstallSnapshotChunk_view_bind(
+            &view, output + TR_RAFT_WIRE_HEADER_SIZE,
+            output_capacity - TR_RAFT_WIRE_HEADER_SIZE) ||
+        !InstallSnapshotChunk_chunk_data(&view, &encoded_data)) {
         return TURBO_EPROTO;
     }
-    tr_wire_write_envelope(output, TR_RAFT_WIRE_SNAPSHOT_VERSION,
+    payload_length = (size_t)(tbe_wire_var_data_end(&encoded_data) -
+                              (output + TR_RAFT_WIRE_HEADER_SIZE));
+    if (payload_length > tr_wire_payload_limit(
+                             wire_version,
+                             TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK)) {
+        return TURBO_EPROTO;
+    }
+    *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
+    tr_wire_write_envelope(output, wire_version,
                            TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK,
                            payload_length, metadata);
     return TURBO_OK;
+}
+
+int tr_raft_wire_encode_snapshot_chunk(
+    tr_raft_wire_codec_t *codec,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_snapshot_chunk_t *chunk,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length)
+{
+    return tr_raft_wire_encode_snapshot_chunk_version(
+        codec, TR_RAFT_WIRE_SNAPSHOT_VERSION, metadata, chunk, output,
+        output_capacity, output_length);
 }
 
 int tr_raft_wire_decode_snapshot_chunk(
@@ -722,14 +862,12 @@ int tr_raft_wire_decode_snapshot_chunk(
     tr_raft_wire_metadata_t *metadata,
     tr_raft_snapshot_chunk_t *chunk)
 {
-    InstallSnapshotChunk_t wire;
-    DataBindError error = DATA_BIND_ERROR_INIT;
+    InstallSnapshotChunk_view_t wire;
+    tbe_var_data_t digest;
+    tbe_var_data_t configuration;
+    tbe_var_data_t data;
     uint32_t payload_length;
-    size_t digest_length;
-    size_t configuration_length;
-    size_t data_length;
     uint16_t wire_version;
-    DataBindStatus status;
 
     if (codec == NULL || codec->binding_v2 == NULL || frame == NULL ||
         metadata == NULL || chunk == NULL ||
@@ -739,58 +877,61 @@ int tr_raft_wire_decode_snapshot_chunk(
     if (tr_wire_read_envelope(frame, frame_length,
                               TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK, metadata,
                               &payload_length, &wire_version) != TURBO_OK ||
-        wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION) {
+        (wire_version != TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
+         wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION)) {
         return TURBO_EPROTO;
     }
-    InstallSnapshotChunk_init(&wire);
-    status = InstallSnapshotChunk_from_bin(
-        codec->binding_v2, &wire, frame + TR_RAFT_WIRE_HEADER_SIZE,
-        payload_length, &error);
-    if (status != DATA_BIND_OK) {
-        InstallSnapshotChunk_clear(&wire);
+    if (!InstallSnapshotChunk_view_bind(
+            &wire, frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length) ||
+        !InstallSnapshotChunk_snapshot_configuration(&wire, &configuration) ||
+        !InstallSnapshotChunk_snapshot_digest(&wire, &digest) ||
+        !InstallSnapshotChunk_chunk_data(&wire, &data) ||
+        tbe_wire_var_data_end(&data) != frame + frame_length) {
         return TURBO_EPROTO;
     }
-    digest_length = tbe_bytes_t_size(&wire.snapshot_digest);
-    configuration_length =
-        tbe_bytes_t_size(&wire.snapshot_configuration);
-    data_length = tbe_bytes_t_size(&wire.chunk_data);
-    if (wire.done > 1U ||
-        digest_length != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE ||
-        configuration_length > TR_RAFT_CONF_MAX_ENCODED_SIZE ||
-        data_length > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
-        InstallSnapshotChunk_clear(&wire);
+    if (InstallSnapshotChunk_done_get(&wire) > 1U ||
+        digest.size != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE ||
+        configuration.size > TR_RAFT_CONF_MAX_ENCODED_SIZE ||
+        data.size > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES ||
+        InstallSnapshotChunk_snapshot_offset_get(&wire) >
+            InstallSnapshotChunk_snapshot_size_get(&wire) ||
+        (wire_version == TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
+         (data.size > TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES ||
+          data.size !=
+              ((InstallSnapshotChunk_snapshot_size_get(&wire) -
+                InstallSnapshotChunk_snapshot_offset_get(&wire)) >
+                       TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES
+                   ? TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES
+                   : (size_t)(InstallSnapshotChunk_snapshot_size_get(&wire) -
+                              InstallSnapshotChunk_snapshot_offset_get(
+                                  &wire)))))) {
         return TURBO_EPROTO;
     }
     memset(chunk, 0, sizeof(*chunk));
-    chunk->from = wire.from_node;
-    chunk->to = wire.to_node;
-    chunk->term = wire.term;
-    chunk->snapshot_index = wire.snapshot_index;
-    chunk->snapshot_term = wire.snapshot_term;
-    chunk->snapshot_offset = wire.snapshot_offset;
-    chunk->snapshot_size = wire.snapshot_size;
-    chunk->done = wire.done != 0U;
-    chunk->data_length = data_length;
-    if (configuration_length != 0U) {
-        if (tr_raft_conf_decode(
-                tbe_bytes_t_data(&wire.snapshot_configuration),
-                configuration_length, &chunk->configuration) != TURBO_OK) {
-            InstallSnapshotChunk_clear(&wire);
+    chunk->from = InstallSnapshotChunk_from_node_get(&wire);
+    chunk->to = InstallSnapshotChunk_to_node_get(&wire);
+    chunk->term = InstallSnapshotChunk_term_get(&wire);
+    chunk->snapshot_index = InstallSnapshotChunk_snapshot_index_get(&wire);
+    chunk->snapshot_term = InstallSnapshotChunk_snapshot_term_get(&wire);
+    chunk->snapshot_offset = InstallSnapshotChunk_snapshot_offset_get(&wire);
+    chunk->snapshot_size = InstallSnapshotChunk_snapshot_size_get(&wire);
+    chunk->done = InstallSnapshotChunk_done_get(&wire) != 0U;
+    chunk->data_length = data.size;
+    chunk->data = data.data;
+    if (configuration.size != 0U) {
+        if (tr_raft_conf_decode(configuration.data, configuration.size,
+                                &chunk->configuration) != TURBO_OK) {
             return TURBO_EPROTO;
         }
         chunk->has_configuration = true;
     }
-    memcpy(chunk->snapshot_digest, tbe_bytes_t_data(&wire.snapshot_digest),
-           digest_length);
-    if (data_length != 0U) {
-        memcpy(chunk->data, tbe_bytes_t_data(&wire.chunk_data), data_length);
-    }
-    InstallSnapshotChunk_clear(&wire);
+    memcpy(chunk->snapshot_digest, digest.data, digest.size);
     return tr_snapshot_chunk_valid(chunk) ? TURBO_OK : TURBO_EPROTO;
 }
 
-int tr_raft_wire_encode_snapshot_ack(
+int tr_raft_wire_encode_snapshot_ack_version(
     tr_raft_wire_codec_t *codec,
+    uint16_t wire_version,
     const tr_raft_wire_metadata_t *metadata,
     const tr_raft_snapshot_ack_t *ack,
     uint8_t *output,
@@ -810,6 +951,10 @@ int tr_raft_wire_encode_snapshot_ack(
         !tr_snapshot_ack_valid(ack) || output == NULL ||
         output_length == NULL) {
         return TURBO_EINVAL;
+    }
+    if (wire_version != TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
+        wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION) {
+        return TURBO_EPROTO;
     }
     if (output_capacity < TR_RAFT_WIRE_HEADER_SIZE) {
         *output_length = TR_RAFT_WIRE_HEADER_SIZE;
@@ -841,13 +986,28 @@ int tr_raft_wire_encode_snapshot_ack(
     if (status != DATA_BIND_OK) {
         return *output_length > output_capacity ? TURBO_ENOSPC : TURBO_EPROTO;
     }
-    if (payload_length > TR_RAFT_WIRE_MAX_PAYLOAD_SIZE) {
+    if (payload_length > tr_wire_payload_limit(
+                             wire_version,
+                             TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK)) {
         return TURBO_EPROTO;
     }
-    tr_wire_write_envelope(output, TR_RAFT_WIRE_SNAPSHOT_VERSION,
+    tr_wire_write_envelope(output, wire_version,
                            TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK,
                            payload_length, metadata);
     return TURBO_OK;
+}
+
+int tr_raft_wire_encode_snapshot_ack(
+    tr_raft_wire_codec_t *codec,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_snapshot_ack_t *ack,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length)
+{
+    return tr_raft_wire_encode_snapshot_ack_version(
+        codec, TR_RAFT_WIRE_SNAPSHOT_VERSION, metadata, ack, output,
+        output_capacity, output_length);
 }
 
 int tr_raft_wire_decode_snapshot_ack(
@@ -872,7 +1032,8 @@ int tr_raft_wire_decode_snapshot_ack(
     if (tr_wire_read_envelope(frame, frame_length,
                               TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK, metadata,
                               &payload_length, &wire_version) != TURBO_OK ||
-        wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION) {
+        (wire_version != TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
+         wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION)) {
         return TURBO_EPROTO;
     }
     InstallSnapshotAck_init(&wire);
@@ -909,6 +1070,7 @@ int tr_raft_wire_peek_version(
     uint16_t *out_version)
 {
     uint32_t payload_length;
+    uint32_t payload_kind;
     uint16_t wire_version;
 
     if (frame == NULL || out_version == NULL ||
@@ -923,7 +1085,8 @@ int tr_raft_wire_peek_version(
         return TURBO_EPROTO;
     }
     payload_length = tr_get_u32(frame + 8U);
-    if (payload_length > TR_RAFT_WIRE_MAX_PAYLOAD_SIZE ||
+    payload_kind = tr_get_u32(frame + 12U);
+    if (payload_length > tr_wire_payload_limit(wire_version, payload_kind) ||
         frame_length != TR_RAFT_WIRE_HEADER_SIZE + payload_length) {
         return TURBO_EPROTO;
     }
@@ -936,7 +1099,6 @@ int tr_raft_wire_peek_payload_kind(
     size_t frame_length,
     tr_raft_wire_payload_kind_t *out_kind)
 {
-    uint32_t payload_length;
     uint32_t payload_kind;
     uint16_t wire_version;
 
@@ -949,7 +1111,6 @@ int tr_raft_wire_peek_payload_kind(
                    ? TURBO_EINVAL
                    : TURBO_EPROTO;
     }
-    payload_length = tr_get_u32(frame + 8U);
     payload_kind = tr_get_u32(frame + 12U);
     if (payload_kind < TR_RAFT_WIRE_PAYLOAD_RAFT ||
         payload_kind > TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK) {

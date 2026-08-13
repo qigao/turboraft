@@ -39,6 +39,7 @@ int tr_raft_snapshot_peer_create(
         return TURBO_EINVAL;
     }
     *out_peer = NULL;
+    memset(&coordinator_config, 0, sizeof(coordinator_config));
     peer = (tr_raft_snapshot_peer_t *) calloc(1U, sizeof(*peer));
     if (peer == NULL) {
         return TURBO_ENOMEM;
@@ -49,6 +50,8 @@ int tr_raft_snapshot_peer_create(
     coordinator_config.self_id = config->self_id;
     coordinator_config.peer_id = config->peer_id;
     coordinator_config.max_snapshot_bytes = config->max_snapshot_bytes;
+    coordinator_config.chunk_size = config->chunk_size;
+    coordinator_config.max_inflight_chunks = config->max_inflight_chunks;
     coordinator_config.emit = tr_snapshot_peer_emit;
     coordinator_config.emit_context = peer;
     result = tr_raft_snapshot_coordinator_create(&coordinator_config,

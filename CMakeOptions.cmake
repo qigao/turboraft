@@ -28,3 +28,6 @@ set(TURBO_NET_ROOT
 set(TURBO_HTTP_ROOT
     ""
     CACHE PATH "TurboHttp package prefix")
+set(TURBO_FLOW_ROOT
+    ""
+    CACHE PATH "TurboFlow package prefix")
