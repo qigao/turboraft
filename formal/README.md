@@ -2,7 +2,7 @@
 
 这些模型是 TurboRaft Core、membership transition、Ready 处理协议和
 snapshot metadata 的有限状态抽象。模型之间通过显式契约组合，不把
-CoroNet、TLS、SQLite、wire bytes 或应用 snapshot payload 放进同一个状态空间。
+CoroNet、TLS、wire bytes 或应用 snapshot payload 放进同一个状态空间。
 
 ## 模型边界
 
@@ -10,7 +10,7 @@ CoroNet、TLS、SQLite、wire bytes 或应用 snapshot payload 放进同一个�
 |---|---|---|
 | `raft_core.pml` | 静态三节点的 term、vote、leader completeness、commit safety | C 实现的逐条代码等价性、动态 membership |
 | `membership.pml` | stable/joint/final transition、old/new quorum、单一 pending transition | log replication 和网络传输 |
-| `ready_lifecycle.pml` | `persist -> send -> apply -> advance`、失败后 fault、部分发送 | SQLite/WAL 实现细节 |
+| `ready_lifecycle.pml` | `persist -> send -> apply -> advance`、失败后 fault、部分发送 | WAL 文件格式实现细节 |
 | `snapshot_meta.pml` | snapshot boundary、configuration metadata、compact/install 前置条件 | snapshot bytes、digest、chunk transport |
 
 模型中的所有容量都是验证边界，不是生产配置。没有反例只表示在声明的

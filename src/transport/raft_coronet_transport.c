@@ -20,6 +20,7 @@ struct tr_raft_coronet_session {
     tr_raft_node_id_t peer_node_id;
     uint16_t raft_wire_version;
     uint16_t snapshot_wire_version;
+    uint16_t data_wire_version;
     uint32_t snapshot_chunk_size;
     uint32_t max_frame_size;
     uint64_t next_outbound_message_id;
@@ -165,8 +166,12 @@ static int tr_raft_coronet_dispatch_frame(tr_raft_coronet_session_t *session)
     if (result != TURBO_OK ||
         (kind == TR_RAFT_WIRE_PAYLOAD_RAFT &&
          wire_version != session->raft_wire_version) ||
-        (kind != TR_RAFT_WIRE_PAYLOAD_RAFT &&
-         wire_version != session->snapshot_wire_version)) {
+        ((kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK ||
+          kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK) &&
+         wire_version != session->snapshot_wire_version) ||
+        ((kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK ||
+          kind == TR_RAFT_WIRE_PAYLOAD_DATA_ACK) &&
+         wire_version != session->data_wire_version)) {
         return tr_raft_coronet_fault(session, TURBO_EPROTO);
     }
     payload.kind = kind;
@@ -196,6 +201,20 @@ static int tr_raft_coronet_dispatch_frame(tr_raft_coronet_session_t *session)
             &metadata, &payload.data.snapshot_ack);
         from = payload.data.snapshot_ack.from;
         to = payload.data.snapshot_ack.to;
+        break;
+    case TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK:
+        result = tr_raft_wire_decode_data_chunk(
+            session->codec, session->frame, session->expected_frame_size,
+            &metadata, &payload.data.data_chunk);
+        from = payload.data.data_chunk.from;
+        to = payload.data.data_chunk.to;
+        break;
+    case TR_RAFT_WIRE_PAYLOAD_DATA_ACK:
+        result = tr_raft_wire_decode_data_ack(
+            session->codec, session->frame, session->expected_frame_size,
+            &metadata, &payload.data.data_ack);
+        from = payload.data.data_ack.from;
+        to = payload.data.data_ack.to;
         break;
     default:
         return tr_raft_coronet_fault(session, TURBO_EPROTO);
@@ -284,6 +303,7 @@ int tr_raft_coronet_session_create(
     session->peer_node_id = config->peer_node_id;
     session->raft_wire_version = TR_RAFT_WIRE_VERSION;
     session->snapshot_wire_version = TR_RAFT_WIRE_SNAPSHOT_VERSION;
+    session->data_wire_version = TR_RAFT_WIRE_SNAPSHOT_VERSION;
     session->snapshot_chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
     session->max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
     if (config->handshake != NULL) {
@@ -306,6 +326,11 @@ int tr_raft_coronet_session_create(
             return result;
         }
         session->max_frame_size = config->handshake->max_frame_size;
+        session->data_wire_version =
+            (config->handshake->feature_bits &
+             TR_RAFT_HANDSHAKE_FEATURE_DATA_STREAM_V5) != 0U
+                ? TR_RAFT_WIRE_SNAPSHOT_VERSION
+                : 0U;
     }
     session->next_outbound_message_id = config->first_outbound_message_id;
     session->on_message = config->on_message;
@@ -358,6 +383,14 @@ static int tr_raft_coronet_payload_nodes(
     case TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK:
         *out_from = payload->data.snapshot_ack.from;
         *out_to = payload->data.snapshot_ack.to;
+        return TURBO_OK;
+    case TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK:
+        *out_from = payload->data.data_chunk.from;
+        *out_to = payload->data.data_chunk.to;
+        return TURBO_OK;
+    case TR_RAFT_WIRE_PAYLOAD_DATA_ACK:
+        *out_from = payload->data.data_ack.from;
+        *out_to = payload->data.data_ack.to;
         return TURBO_OK;
     default:
         return TURBO_EPROTO;
@@ -428,6 +461,26 @@ int tr_raft_coronet_encode_payload_packet(
         result = tr_raft_wire_encode_snapshot_ack_version(
             session->codec, session->snapshot_wire_version, &metadata,
             &payload->data.snapshot_ack,
+            output + TR_RAFT_CORONET_LENGTH_PREFIX_SIZE,
+            output_capacity - TR_RAFT_CORONET_LENGTH_PREFIX_SIZE,
+            &frame_size);
+        break;
+    case TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK:
+        if (session->data_wire_version == 0U) {
+            return TURBO_EPROTONOSUPPORT;
+        }
+        result = tr_raft_wire_encode_data_chunk(
+            session->codec, &metadata, &payload->data.data_chunk,
+            output + TR_RAFT_CORONET_LENGTH_PREFIX_SIZE,
+            output_capacity - TR_RAFT_CORONET_LENGTH_PREFIX_SIZE,
+            &frame_size);
+        break;
+    case TR_RAFT_WIRE_PAYLOAD_DATA_ACK:
+        if (session->data_wire_version == 0U) {
+            return TURBO_EPROTONOSUPPORT;
+        }
+        result = tr_raft_wire_encode_data_ack(
+            session->codec, &metadata, &payload->data.data_ack,
             output + TR_RAFT_CORONET_LENGTH_PREFIX_SIZE,
             output_capacity - TR_RAFT_CORONET_LENGTH_PREFIX_SIZE,
             &frame_size);

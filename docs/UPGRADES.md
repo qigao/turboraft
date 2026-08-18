@@ -26,11 +26,11 @@ binary to its advertised feature bits.
 | Handshake | Major 1/minor 0 accepted | Major 1/minor 0 accepted | Both peers must retain the fixed handshake format |
 | Raft messages | Negotiates v2; batches split into ordered single-entry frames | Negotiates v3; bounded batches enabled | Retain v2 support and uncompacted log history |
 | Snapshot transfer | Rejected before transfer | v4 chunk and acknowledgement frames | A legacy node that needs a snapshot must be upgraded again |
-| SQLite storage | Schema 1 and 2 migrate forward to schema 3 | Schema 3 opens directly | An older binary cannot reopen schema 3; restore a pre-migration backup |
+| WAL storage | Exact local format version required | Matching WAL and snapshot files open directly | Restore a backup written by the target binary version |
 | RPC control plane | Administrative HTTP/JSON-RPC is outside peer negotiation | Same method compatibility aliases remain available | Rollback must preserve the deployed RPC client contract |
 
 The executable evidence for the peer rows is `turboraft.wire_upgrade`. Storage
-migration evidence is in `turboraft.sqlite_storage`. A version pair is not
+recovery evidence is in `turboraft.wal_storage`. A version pair is not
 declared rolling-upgrade compatible unless both tests cover its advertised
 feature and storage boundaries.
 
@@ -53,7 +53,7 @@ Inbound sessions reject a frame whose version differs from the negotiated
 capability. This prevents an on-path or misconfigured peer from silently
 downgrading v3 replication or injecting snapshot payloads into a legacy session.
 
-SQLite schema migration is a separate rollback boundary from peer wire
-negotiation. Take a consistent backup before starting a binary that may migrate
-the database. Do not edit `PRAGMA user_version` to force a downgrade. Follow
+WAL format compatibility is a separate rollback boundary from peer wire
+negotiation. Take a consistent backup before starting a binary with a new local
+format. Do not edit WAL headers to force a downgrade. Follow
 [`RECOVERY.md`](RECOVERY.md) for backup and restore procedures.

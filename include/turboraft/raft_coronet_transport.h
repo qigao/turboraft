@@ -40,6 +40,8 @@ typedef struct tr_raft_coronet_payload {
         tr_raft_message_t raft;
         tr_raft_snapshot_chunk_t snapshot_chunk;
         tr_raft_snapshot_ack_t snapshot_ack;
+        tr_raft_data_chunk_t data_chunk;
+        tr_raft_data_ack_t data_ack;
     } data;
 } tr_raft_coronet_payload_t;
 

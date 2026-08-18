@@ -9,8 +9,6 @@ option(ENABLE_MSVC_ANALYZE "Enable MSVC static code analysis" OFF)
 option(TURBORAFT_BUILD_FUZZERS
        "Build opt-in Clang/libFuzzer protocol fuzz targets" OFF)
 
-option(TURBORAFT_BUILD_SQLITE_STORAGE
-       "Build the optional SQLite durable storage adapter" ON)
 option(BUILD_BENCHMARKS "Build TurboRaft performance benchmarks" OFF)
 option(BUILD_EXAMPLES "Build TurboRaft examples" OFF)
 

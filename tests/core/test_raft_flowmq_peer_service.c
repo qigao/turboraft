@@ -1,4 +1,5 @@
 #include <turboraft/raft_flowmq_peer_service.h>
+#include <turboraft/raft_data_stream.h>
 
 #include <platform.h>
 #include <tinytest.h>
@@ -14,6 +15,19 @@
 #define FLOWMQ_TEST_TIMEOUT_MS 10000U
 #define FLOWMQ_TEST_OUTBOUND_CAPACITY 4U
 #define FLOWMQ_TEST_SEND_BATCH_ITEMS 4U
+enum {
+  FLOWMQ_TEST_STREAM_BYTES = 256U * 1024U,
+  FLOWMQ_TEST_STREAM_ID = 44U,
+  FLOWMQ_TEST_STREAM_TERM = 12U
+};
+
+typedef struct flowmq_stream_sink {
+  size_t used;
+  size_t writes;
+  int committed;
+  int aborted;
+} flowmq_stream_sink_t;
+
 typedef struct flowmq_node {
   tr_raft_node_id_t node_id;
   const char *identity;
@@ -28,9 +42,15 @@ typedef struct flowmq_node {
   flowmq_connect_endpoint_config_t dealer_endpoint;
   tr_raft_flowmq_peer_config_t peer;
   tr_raft_flowmq_peer_service_t *service;
+  tr_raft_data_stream_sender_t *stream_sender;
+  tr_raft_data_stream_receiver_t *stream_receiver;
+  flowmq_stream_sink_t stream_sink;
   size_t received_count;
   tr_raft_node_id_t received_from;
   tr_raft_term_t received_terms[FLOWMQ_TEST_OUTBOUND_CAPACITY];
+  size_t received_stream_chunks;
+  size_t received_stream_bytes;
+  size_t received_stream_acks;
 } flowmq_node_t;
 
 typedef struct flowmq_cluster {
@@ -74,6 +94,81 @@ static int flowmq_receive_message(void *context, const tr_raft_message_t *messag
     node->received_terms[node->received_count - 1U] = message->term;
   }
   return TURBO_OK;
+}
+
+static int flowmq_stream_begin(
+    void *context, tr_raft_node_id_t leader_id, tr_raft_term_t term,
+    uint64_t stream_id, uint64_t stream_size,
+    const uint8_t digest[TR_RAFT_WIRE_DATA_DIGEST_SIZE]) {
+  flowmq_stream_sink_t *sink = (flowmq_stream_sink_t *)context;
+  (void)digest;
+  if (sink == NULL || leader_id != 1U || term != FLOWMQ_TEST_STREAM_TERM ||
+      stream_id != FLOWMQ_TEST_STREAM_ID ||
+      stream_size != FLOWMQ_TEST_STREAM_BYTES) {
+    return TURBO_EPROTO;
+  }
+  sink->used = 0U;
+  sink->writes = 0U;
+  sink->committed = 0;
+  sink->aborted = 0;
+  return TURBO_OK;
+}
+
+static int flowmq_stream_write(
+    void *context, uint64_t offset, const uint8_t *data, size_t size) {
+  flowmq_stream_sink_t *sink = (flowmq_stream_sink_t *)context;
+  if (sink == NULL || data == NULL || offset != sink->used ||
+      size > FLOWMQ_TEST_STREAM_BYTES - sink->used) {
+    return TURBO_EPROTO;
+  }
+  sink->used += size;
+  ++sink->writes;
+  return TURBO_OK;
+}
+
+static int flowmq_stream_commit(void *context) {
+  flowmq_stream_sink_t *sink = (flowmq_stream_sink_t *)context;
+  if (sink == NULL || sink->used != FLOWMQ_TEST_STREAM_BYTES) {
+    return TURBO_EPROTO;
+  }
+  sink->committed = 1;
+  return TURBO_OK;
+}
+
+static void flowmq_stream_abort(void *context) {
+  flowmq_stream_sink_t *sink = (flowmq_stream_sink_t *)context;
+  if (sink != NULL) sink->aborted = 1;
+}
+
+static int flowmq_receive_payload(
+    void *context, const tr_raft_coronet_payload_t *payload) {
+  flowmq_node_t *node = (flowmq_node_t *)context;
+  if (node == NULL || payload == NULL) {
+    return TURBO_EPROTO;
+  }
+  if (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
+      node->stream_receiver != NULL) {
+    tr_raft_data_stream_receive_result_t received;
+    tr_raft_coronet_payload_t ack_payload;
+    int result = tr_raft_data_stream_receiver_handle(
+        node->stream_receiver, &payload->data.data_chunk, &received);
+    if (result != TURBO_OK) return result;
+    ++node->received_stream_chunks;
+    node->received_stream_bytes += payload->data.data_chunk.data_length;
+    memset(&ack_payload, 0, sizeof(ack_payload));
+    ack_payload.kind = TR_RAFT_WIRE_PAYLOAD_DATA_ACK;
+    ack_payload.data.data_ack = received.ack;
+    return tr_raft_flowmq_peer_service_enqueue_payload(node->service,
+                                                       &ack_payload);
+  }
+  if (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_ACK &&
+      node->stream_sender != NULL) {
+    int result = tr_raft_data_stream_sender_acknowledge(
+        node->stream_sender, &payload->data.data_ack);
+    if (result == TURBO_OK) ++node->received_stream_acks;
+    return result;
+  }
+  return TURBO_EPROTO;
 }
 
 static void flowmq_node_endpoint_initialize(flowmq_node_t *node, const flowmq_node_t *peer) {
@@ -131,6 +226,8 @@ static void flowmq_node_service_create(flowmq_node_t *node, const flowmq_node_t 
   config.inbound_queue_capacity_bytes = TR_RAFT_FLOWMQ_MIN_INBOUND_QUEUE_BYTES;
   config.on_message = flowmq_receive_message;
   config.message_context = node;
+  config.on_snapshot = flowmq_receive_payload;
+  config.snapshot_context = node;
   check_int_eq(tr_raft_flowmq_peer_service_create(&config, &node->service), TURBO_OK);
 }
 
@@ -223,6 +320,39 @@ static int flowmq_drive(flowmq_cluster_t *cluster) {
        cluster->nodes[1].received_count != FLOWMQ_TEST_OUTBOUND_CAPACITY)) {
     driver_result = TURBO_ETIMEDOUT;
   }
+  if (driver_result == TURBO_OK) {
+    static uint8_t stream_data[FLOWMQ_TEST_STREAM_BYTES];
+    size_t chunk_index;
+    memset(stream_data, 0x5c, sizeof(stream_data));
+    driver_result = tr_raft_data_stream_sender_begin(
+        cluster->nodes[0].stream_sender, FLOWMQ_TEST_STREAM_TERM,
+        FLOWMQ_TEST_STREAM_ID, stream_data, sizeof(stream_data));
+    for (chunk_index = 0U; chunk_index < 4U; ++chunk_index) {
+      tr_raft_coronet_payload_t payload;
+      memset(&payload, 0, sizeof(payload));
+      payload.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+      if (driver_result == TURBO_OK) {
+        driver_result = tr_raft_data_stream_sender_next(
+            cluster->nodes[0].stream_sender, &payload.data.data_chunk);
+      }
+      if (driver_result != TURBO_OK) break;
+      driver_result = tr_raft_flowmq_peer_service_enqueue_payload(
+          cluster->nodes[0].service, &payload);
+      if (driver_result != TURBO_OK) break;
+    }
+  }
+  while (driver_result == TURBO_OK &&
+         (!cluster->nodes[1].stream_sink.committed ||
+          cluster->nodes[0].received_stream_acks != 4U) &&
+         turbo_monotonic_ms() < deadline) {
+    driver_result = flowmq_step_both(cluster);
+    turbo_sleep_ms(1U);
+  }
+  if (driver_result == TURBO_OK &&
+      (!cluster->nodes[1].stream_sink.committed ||
+       cluster->nodes[0].received_stream_acks != 4U)) {
+    driver_result = TURBO_ETIMEDOUT;
+  }
   for (index = 0U; index < 2U; ++index) {
     int result = tr_raft_flowmq_peer_service_stop(cluster->nodes[index].service);
     if (driver_result == TURBO_OK && result != TURBO_OK) {
@@ -235,9 +365,14 @@ static int flowmq_drive(flowmq_cluster_t *cluster) {
 spec("Raft FlowMQ peer service") {
   it("replicates bidirectionally over public WSS ROUTER DEALER endpoints") {
     flowmq_cluster_t cluster;
+    tr_raft_data_stream_sender_config_t sender_config;
+    tr_raft_data_stream_receiver_config_t receiver_config;
+    tr_raft_data_stream_sender_status_t sender_status;
     size_t index;
 
     memset(&cluster, 0, sizeof(cluster));
+    memset(&sender_config, 0, sizeof(sender_config));
+    memset(&receiver_config, 0, sizeof(receiver_config));
     cluster.nodes[0].node_id = 1U;
     cluster.nodes[0].identity = "node-1";
     cluster.nodes[0].peer_identity = "node-2";
@@ -250,6 +385,22 @@ spec("Raft FlowMQ peer service") {
     cluster.nodes[1].certificate = FLOWMQ_TEST_FIXTURE("node2-cert.pem");
     cluster.nodes[1].private_key = FLOWMQ_TEST_FIXTURE("node2-key.pem");
     cluster.nodes[1].server_name = "node-2.mesh";
+    sender_config.self_id = cluster.nodes[0].node_id;
+    sender_config.peer_id = cluster.nodes[1].node_id;
+    sender_config.max_stream_bytes = FLOWMQ_TEST_STREAM_BYTES;
+    receiver_config.self_id = cluster.nodes[1].node_id;
+    receiver_config.max_stream_bytes = FLOWMQ_TEST_STREAM_BYTES;
+    receiver_config.sink.begin = flowmq_stream_begin;
+    receiver_config.sink.write = flowmq_stream_write;
+    receiver_config.sink.commit = flowmq_stream_commit;
+    receiver_config.sink.abort = flowmq_stream_abort;
+    receiver_config.sink.context = &cluster.nodes[1].stream_sink;
+    check_int_eq(tr_raft_data_stream_sender_create(
+                     &sender_config, &cluster.nodes[0].stream_sender),
+                 TURBO_OK);
+    check_int_eq(tr_raft_data_stream_receiver_create(
+                     &receiver_config, &cluster.nodes[1].stream_receiver),
+                 TURBO_OK);
     check_int_eq(tr_test_reserve_loopback_port(&cluster.nodes[0].port), TURBO_OK);
     check_int_eq(tr_test_reserve_loopback_port(&cluster.nodes[1].port), TURBO_OK);
     check_int_ne(cluster.nodes[0].port, cluster.nodes[1].port);
@@ -263,10 +414,21 @@ spec("Raft FlowMQ peer service") {
     cluster.driver_result = flowmq_drive(&cluster);
     check_int_eq(cluster.driver_result, TURBO_OK);
     check(cluster.backpressure_ok);
-    check_size_eq(cluster.payload_batches_sent, 2U);
-    check_size_eq(cluster.payload_frames_sent, 2U * FLOWMQ_TEST_OUTBOUND_CAPACITY);
+    check_size_eq(cluster.payload_batches_sent, 4U);
+    check_size_eq(cluster.payload_frames_sent,
+                  4U * FLOWMQ_TEST_OUTBOUND_CAPACITY);
     check_size_eq(cluster.nodes[0].received_count, FLOWMQ_TEST_OUTBOUND_CAPACITY);
     check_size_eq(cluster.nodes[1].received_count, FLOWMQ_TEST_OUTBOUND_CAPACITY);
+    check_size_eq(cluster.nodes[1].received_stream_chunks, 4U);
+    check_size_eq(cluster.nodes[1].received_stream_bytes, 256U * 1024U);
+    check_size_eq(cluster.nodes[0].received_stream_acks, 4U);
+    check_size_eq(cluster.nodes[1].stream_sink.writes, 4U);
+    check_false(cluster.nodes[1].stream_sink.aborted);
+    check_int_eq(tr_raft_data_stream_sender_get_status(
+                     cluster.nodes[0].stream_sender, &sender_status),
+                 TURBO_OK);
+    check_true(sender_status.complete);
+    check_size_eq(sender_status.inflight_chunks, 0U);
     check_long_eq(cluster.nodes[0].received_from, 2U);
     check_long_eq(cluster.nodes[1].received_from, 1U);
     for (index = 0U; index < FLOWMQ_TEST_OUTBOUND_CAPACITY; ++index) {
@@ -277,5 +439,7 @@ spec("Raft FlowMQ peer service") {
     for (index = 0U; index < 2U; ++index) {
       check_int_eq(tr_raft_flowmq_peer_service_destroy(cluster.nodes[index].service), TURBO_OK);
     }
+    tr_raft_data_stream_receiver_destroy(cluster.nodes[1].stream_receiver);
+    tr_raft_data_stream_sender_destroy(cluster.nodes[0].stream_sender);
   }
 }

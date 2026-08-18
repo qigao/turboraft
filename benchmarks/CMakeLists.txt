@@ -1,15 +1,13 @@
 add_executable(turboraft_benchmarks benchmark_turboraft.c)
 target_link_libraries(turboraft_benchmarks
-                      PRIVATE TurboRaft::Core TurboUtils::TinyTest)
+                      PRIVATE TurboRaft::Core TurboRaft::WalStorage
+                              TurboUtils::TinyTest)
+target_compile_definitions(turboraft_benchmarks
+                           PRIVATE TURBORAFT_BENCHMARK_WAL=1)
 
-if(TARGET TurboRaft::SQLiteStorage)
-  target_link_libraries(turboraft_benchmarks
-                        PRIVATE TurboRaft::SQLiteStorage)
-  target_compile_definitions(turboraft_benchmarks
-                             PRIVATE TURBORAFT_BENCHMARK_SQLITE=1)
-endif()
-
-set_target_properties(turboraft_benchmarks PROPERTIES FOLDER "benchmarks")
+cmake_config_target(turboraft_benchmarks
+                    NO_INSTALL
+                    FOLDER "benchmarks")
 
 if(WIN32)
   add_custom_command(

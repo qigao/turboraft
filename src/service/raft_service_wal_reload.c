@@ -1,13 +1,13 @@
-#include "raft_service_sqlite_reload.h"
+#include "raft_service_wal_reload.h"
 
 #include <turbo_error.h>
 
 #include <stdlib.h>
 #include <string.h>
 
-struct tr_raft_service_sqlite_reload {
+struct tr_raft_service_wal_reload {
     tr_raft_service_t *service;
-    tr_raft_sqlite_storage_t *storage;
+    tr_raft_wal_storage_t *storage;
     tr_raft_node_id_t self_id;
     tr_raft_node_id_t voters[TR_RAFT_MAX_VOTERS];
     size_t voter_count;
@@ -21,11 +21,11 @@ struct tr_raft_service_sqlite_reload {
     size_t max_inflight_append_requests;
 };
 
-int tr_raft_service_sqlite_reload_create(
-    const tr_raft_service_sqlite_reload_config_t *config,
-    tr_raft_service_sqlite_reload_t **out_reload)
+int tr_raft_service_wal_reload_create(
+    const tr_raft_service_wal_reload_config_t *config,
+    tr_raft_service_wal_reload_t **out_reload)
 {
-    tr_raft_service_sqlite_reload_t *reload;
+    tr_raft_service_wal_reload_t *reload;
     size_t index;
 
     if (config == NULL || out_reload == NULL || config->service == NULL ||
@@ -70,7 +70,7 @@ int tr_raft_service_sqlite_reload_create(
     }
 
     *out_reload = NULL;
-    reload = (tr_raft_service_sqlite_reload_t *) calloc(
+    reload = (tr_raft_service_wal_reload_t *) calloc(
         1U, sizeof(*reload));
     if (reload == NULL) {
         return TURBO_ENOMEM;
@@ -98,20 +98,19 @@ int tr_raft_service_sqlite_reload_create(
     return TURBO_OK;
 }
 
-void tr_raft_service_sqlite_reload_destroy(
-    tr_raft_service_sqlite_reload_t *reload)
+void tr_raft_service_wal_reload_destroy(tr_raft_service_wal_reload_t *reload)
 {
     free(reload);
 }
 
-int tr_raft_service_sqlite_reload_runtime(
+int tr_raft_service_wal_reload_runtime(
     void *context,
     tr_raft_index_t snapshot_index,
     tr_raft_term_t snapshot_term)
 {
-    tr_raft_service_sqlite_reload_t *reload =
-        (tr_raft_service_sqlite_reload_t *) context;
-    tr_raft_sqlite_recovery_t recovery;
+    tr_raft_service_wal_reload_t *reload =
+        (tr_raft_service_wal_reload_t *) context;
+    tr_raft_wal_recovery_t recovery;
     tr_raft_core_config_t core_config;
     int result;
 
@@ -119,14 +118,14 @@ int tr_raft_service_sqlite_reload_runtime(
         return TURBO_EINVAL;
     }
     memset(&recovery, 0, sizeof(recovery));
-    result = tr_raft_sqlite_storage_load(reload->storage, &recovery);
+    result = tr_raft_wal_storage_load(reload->storage, &recovery);
     if (result != TURBO_OK) {
         return result;
     }
     if (recovery.snapshot_index != snapshot_index ||
         recovery.snapshot_term != snapshot_term ||
         recovery.commit_index < snapshot_index) {
-        tr_raft_sqlite_recovery_destroy(&recovery);
+        tr_raft_wal_recovery_destroy(&recovery);
         return TURBO_EPROTO;
     }
 
@@ -151,7 +150,9 @@ int tr_raft_service_sqlite_reload_runtime(
     core_config.initial_vote = recovery.voted_for;
     core_config.initial_last_log_index = recovery.snapshot_index;
     core_config.initial_last_log_term = recovery.snapshot_term;
-    core_config.initial_log_entries = recovery.entries;
+    core_config.initial_log_entries = recovery.entry_count == 0U
+                                          ? NULL
+                                          : recovery.entries;
     core_config.initial_log_entry_count = recovery.entry_count;
     core_config.initial_commit_index = recovery.commit_index;
     core_config.initial_applied_index = recovery.snapshot_index;
@@ -159,6 +160,6 @@ int tr_raft_service_sqlite_reload_runtime(
     core_config.max_inflight_append_requests =
         reload->max_inflight_append_requests;
     result = tr_raft_service_reload(reload->service, &core_config);
-    tr_raft_sqlite_recovery_destroy(&recovery);
+    tr_raft_wal_recovery_destroy(&recovery);
     return result;
 }

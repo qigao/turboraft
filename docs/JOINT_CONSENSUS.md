@@ -15,7 +15,7 @@ static clusters, but changing voters in place would allow two disjoint
 majorities to commit conflicting logs.
 
 Dynamic membership affects Core quorum calculations, log semantics, Runtime
-application, SQLite recovery, snapshot metadata, transport peer ownership, and
+application, WAL recovery, snapshot metadata, transport peer ownership, and
 the future RPC control plane. The committed Raft log remains the primary fact
 source. RPC and UI code may request a transition, but may not directly mutate
 membership.
@@ -114,7 +114,7 @@ past failed durable state.
 
 ### Recovery and snapshots
 
-SQLite schema version 3 adds versioned configuration metadata to the snapshot
+The WAL snapshot record adds versioned configuration metadata to the snapshot
 record. Migration from version 2 creates an empty metadata value. Empty metadata
 is accepted only for a legacy snapshot and uses the explicitly supplied
 bootstrap configuration.
@@ -149,7 +149,7 @@ not own separate membership state.
 - Normal command behavior and Raft AppendEntries wire versions remain
   compatible.
 - `command_id == 0` remains invalid for public normal proposals.
-- SQLite version 2 databases migrate transactionally to version 3.
+- WAL recovery validates snapshot configuration transactionally.
 - A version-3 database is not writable by an older TurboRaft binary. Deployment
   must retain a pre-migration backup for binary rollback.
 - Legacy snapshots can recover using bootstrap configuration, but the next
@@ -175,9 +175,9 @@ change would add migration cost without carrying additional information.
 Rejected because it couples Raft recovery to application serialization and
 would change bytes observed by existing restore callbacks.
 
-### Store membership only in SQLite
+### Store membership only in durable storage
 
-Rejected because SQLite would become an independent mutable fact source. The
+Rejected because storage would become an independent mutable fact source. The
 committed log and snapshot configuration must be sufficient to reconstruct the
 same state.
 
@@ -190,10 +190,10 @@ same state.
 - A committed joint state must be finalized before another transition.
 - Transport peer creation/removal is derived from committed configuration.
   Connection failure does not roll back membership.
-- Schema migration is one SQLite transaction. Migration failure leaves version
-  2 intact.
-- Binary rollback after successful migration requires restoring the retained
-  version-2 database backup.
+- Snapshot configuration and its FSM payload become authoritative through one
+  WAL transaction. Failure leaves the previous snapshot authoritative.
+- Binary rollback across a WAL format change requires restoring a matching
+  WAL and snapshot backup.
 
 ## Verification gates
 
@@ -209,5 +209,5 @@ Implementation is not complete until all gates pass:
 7. Snapshot install restores the exact configuration at the snapshot index.
 8. Partition tests prove no two sides can commit conflicting commands during a
    transition.
-9. SQLite version-2 migration and legacy snapshot recovery pass.
+9. WAL snapshot configuration recovery and corruption rejection pass.
 10. `ctest --preset win-release-user` passes in full.

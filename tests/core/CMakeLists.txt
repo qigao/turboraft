@@ -167,9 +167,8 @@ target_link_libraries(turboraft_compaction_replication_tests
 add_test(NAME turboraft.compaction_replication
          COMMAND turboraft_compaction_replication_tests)
 
-if(TARGET turboraft_sqlite_storage)
-  add_executable(turboraft_snapshot_installer_tests
-                 test_raft_snapshot_installer.c)
+add_executable(turboraft_snapshot_installer_tests
+               test_raft_snapshot_installer.c)
   target_include_directories(
     turboraft_snapshot_installer_tests
     PRIVATE ${PROJECT_SOURCE_DIR}/src/service)
@@ -179,32 +178,23 @@ if(TARGET turboraft_sqlite_storage)
   add_test(NAME turboraft.snapshot_installer
            COMMAND turboraft_snapshot_installer_tests)
 
-  add_executable(turboraft_service_sqlite_reload_tests
-                 test_raft_service_sqlite_reload.c)
+add_executable(turboraft_service_wal_reload_tests
+               test_raft_service_wal_reload.c)
   target_include_directories(
-    turboraft_service_sqlite_reload_tests
+    turboraft_service_wal_reload_tests
     PRIVATE ${PROJECT_SOURCE_DIR}/src/service)
-  target_link_libraries(turboraft_service_sqlite_reload_tests
-                        PRIVATE turboraft_service_sqlite_reload
+target_link_libraries(turboraft_service_wal_reload_tests
+                        PRIVATE turboraft_service_wal_reload
                                 turboraft_snapshot_installer
                                 TurboUtils::TinyTest)
-  add_test(NAME turboraft.service_sqlite_reload
-           COMMAND turboraft_service_sqlite_reload_tests)
-
-  add_executable(turboraft_sqlite_storage_tests
-                 test_raft_sqlite_storage.c)
-  target_link_libraries(turboraft_sqlite_storage_tests
-                        PRIVATE TurboRaft::SQLiteStorage
-                                TurboUtils::TinyTest
-                                unofficial::sqlite3::sqlite3)
-  add_test(NAME turboraft.sqlite_storage
-           COMMAND turboraft_sqlite_storage_tests)
+add_test(NAME turboraft.service_wal_reload
+         COMMAND turboraft_service_wal_reload_tests)
 
   add_executable(turboraft_multiprocess_node
                  ../chaos/raft_multiprocess_node.c)
   target_link_libraries(turboraft_multiprocess_node
                         PRIVATE TurboRaft::Service
-                                TurboRaft::SQLiteStorage)
+                                TurboRaft::WalStorage)
 
   add_executable(turboraft_multiprocess_chaos_tests
                  ../chaos/test_raft_multiprocess_chaos.c)
@@ -220,12 +210,27 @@ if(TARGET turboraft_sqlite_storage)
                "TURBORAFT_CHAOS_NODE=$<TARGET_FILE:turboraft_multiprocess_node>"
                TIMEOUT 180
                LABELS "chaos;multiprocess")
-endif()
 
 add_executable(turboraft_wire_tests test_raft_wire_codec.c)
 target_link_libraries(turboraft_wire_tests PRIVATE TurboRaft::Core
                                                    TurboUtils::TinyTest)
 add_test(NAME turboraft.wire COMMAND turboraft_wire_tests)
+
+add_executable(turboraft_data_stream_tests test_raft_data_stream.c)
+target_link_libraries(turboraft_data_stream_tests
+                      PRIVATE TurboRaft::DataStream TurboUtils::TinyTest)
+cmake_config_target(turboraft_data_stream_tests
+                    NO_INSTALL
+                    FOLDER "tests/core")
+add_test(NAME turboraft.data_stream COMMAND turboraft_data_stream_tests)
+
+add_executable(turboraft_wal_storage_tests test_raft_wal_storage.c)
+target_link_libraries(turboraft_wal_storage_tests
+                      PRIVATE TurboRaft::WalStorage TurboUtils::TinyTest)
+cmake_config_target(turboraft_wal_storage_tests
+                    NO_INSTALL
+                    FOLDER "tests/core")
+add_test(NAME turboraft.wal_storage COMMAND turboraft_wal_storage_tests)
 
 add_executable(turboraft_wire_fuzz_corpus_tests
                test_raft_wire_fuzz_corpus.c
@@ -455,7 +460,8 @@ if(TARGET turboraft_coronet)
       turboraft_flowmq_peer_service_tests
       PRIVATE TURBORAFT_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
     target_link_libraries(turboraft_flowmq_peer_service_tests
-                          PRIVATE TurboRaft::FlowMQ TurboUtils::TinyTest)
+                          PRIVATE TurboRaft::FlowMQ TurboRaft::DataStream
+                                  TurboUtils::TinyTest)
     if(WIN32)
       target_link_libraries(turboraft_flowmq_peer_service_tests PRIVATE ws2_32)
       add_custom_command(
@@ -475,3 +481,5 @@ if(TARGET turboraft_coronet)
                          PROPERTIES TIMEOUT 30)
   endif()
 endif()
+
+cmake_config_directory_targets(FOLDER "tests/core")

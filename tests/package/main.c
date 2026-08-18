@@ -6,7 +6,7 @@
 #include <turboraft/raft_snapshot_receiver.h>
 #include <turboraft/raft_snapshot_sender.h>
 #include <turboraft/raft_snapshot_manager.h>
-#include <turboraft/raft_sqlite_storage.h>
+#include <turboraft/raft_wal_storage.h>
 #ifdef TURBORAFT_PACKAGE_HAVE_FLOWMQ
 #include <turboraft/raft_flowmq_peer_service.h>
 #endif

@@ -1,8 +1,8 @@
 # TurboRaft
 
-TurboRaft is a C11 Raft library for the TurboNet ecosystem. It separates a deterministic consensus core from CoroNet peer transport, SQLite durability, application state machines, and an optional TurboHTTP JSON-RPC/HTMX management plane.
+TurboRaft is a C11 Raft library for the TurboNet ecosystem. It separates a deterministic consensus core from CoroNet peer transport, segmented WAL durability, application state machines, and an optional TurboHTTP JSON-RPC/HTMX management plane.
 
-The repository contains a native Ready-style Raft core, pre-vote and check-quorum elections, batched replication, ReadIndex, leadership transfer, learners and Joint Consensus, SQLite recovery, resumable snapshot transport, durable Snapshot ConfState, live log compaction with lagging-peer snapshot recovery, CoroNet mTLS peer services, a single-owner Service loop, and an authenticated HTMX control plane. Production readiness still requires the chaos, fuzz, long-duration, rolling-upgrade, and platform validation defined in the implementation plan.
+The repository contains a native Ready-style Raft core, pre-vote and check-quorum elections, batched replication, ReadIndex, leadership transfer, learners and Joint Consensus, segmented WAL recovery, resumable snapshot transport, durable Snapshot ConfState, live log compaction with lagging-peer snapshot recovery, CoroNet mTLS peer services, a single-owner Service loop, and an authenticated HTMX control plane. Production readiness still requires the chaos, fuzz, long-duration, rolling-upgrade, and platform validation defined in the implementation plan.
 
 ## Design goals
 
@@ -32,7 +32,7 @@ cmake --build --preset win-release-user
 ctest --preset win-release-user --output-on-failure
 ```
 
-The SQLite storage adapter is controlled by `TURBORAFT_BUILD_SQLITE_STORAGE`. The CoroNet transport, snapshot manager, service owner, control plane, and console are built automatically when the TurboNet/TurboHttp packages are found; a configure without those packages still succeeds and builds the deterministic core, SQLite storage, and text-syntax tooling.
+`TurboRaft::WalStorage` is the sole durable Raft storage backend. The CoroNet transport, snapshot manager, service owner, control plane, and console are built automatically when the TurboNet/TurboHttp packages are found; a configure without those packages still succeeds and builds the deterministic core, WAL storage, and text-syntax tooling.
 
 ## Installed package
 
@@ -47,7 +47,7 @@ find_package(TurboRaft CONFIG REQUIRED)
 target_link_libraries(app PRIVATE TurboRaft::Service)
 ```
 
-Optional installed targets are `TurboRaft::SQLiteStorage`, `TurboRaft::CoroNet`, `TurboRaft::SnapshotManager`, `TurboRaft::ServiceOwner`, and `TurboRaft::ControlPlane` when the corresponding dependencies were found at configure time.
+Installed storage is `TurboRaft::WalStorage`. Optional targets are `TurboRaft::CoroNet`, `TurboRaft::SnapshotManager`, `TurboRaft::ServiceOwner`, and `TurboRaft::ControlPlane` when the corresponding dependencies were found at configure time.
 
 ## Examples
 

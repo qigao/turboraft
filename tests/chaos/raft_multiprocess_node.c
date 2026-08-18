@@ -1,7 +1,7 @@
 #include "raft_multiprocess_protocol.h"
 
 #include <turboraft/raft_service.h>
-#include <turboraft/raft_sqlite_storage.h>
+#include <turboraft/raft_wal_storage.h>
 #include <turboraft/raft_wire_codec.h>
 
 #include <turbo_error.h>
@@ -16,14 +16,13 @@
 #endif
 
 #define TR_CHAOS_NODE_MAX_LOG_ENTRIES 256U
-#define TR_CHAOS_NODE_BUSY_TIMEOUT_MS 1000
 #define TR_CHAOS_HASH_OFFSET UINT64_C(1469598103934665603)
 #define TR_CHAOS_HASH_PRIME UINT64_C(1099511628211)
 
 typedef struct tr_chaos_node {
     tr_raft_node_id_t node_id;
     tr_raft_cluster_id_t cluster_id;
-    tr_raft_sqlite_storage_t *storage;
+    tr_raft_wal_storage_t *storage;
     tr_raft_service_t *service;
     tr_raft_wire_codec_t *codec;
     uint64_t next_message_id;
@@ -152,8 +151,8 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
                               const char *database_path)
 {
     static const tr_raft_node_id_t voters[] = {1U, 2U, 3U};
-    tr_raft_sqlite_storage_config_t storage_config;
-    tr_raft_sqlite_recovery_t recovery;
+    tr_raft_wal_storage_config_t storage_config;
+    tr_raft_wal_recovery_t recovery;
     tr_raft_storage_t storage_adapter;
     tr_raft_service_config_t service_config;
     int result;
@@ -178,20 +177,23 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
         return result;
     }
 
-    storage_config.path = database_path;
-    storage_config.busy_timeout_ms = TR_CHAOS_NODE_BUSY_TIMEOUT_MS;
+    storage_config.path_prefix = database_path;
+    storage_config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
+    storage_config.max_transaction_bytes = 32U * 1024U;
+    storage_config.max_segments = 64U;
+    storage_config.max_log_entries = TR_CHAOS_NODE_MAX_LOG_ENTRIES;
     storage_config.create_if_missing = true;
     storage_config.max_snapshot_bytes = 1024U * 1024U;
-    result = tr_raft_sqlite_storage_open(&storage_config, &node->storage);
+    result = tr_raft_wal_storage_open(&storage_config, &node->storage);
     if (result == TURBO_OK) {
-        result = tr_raft_sqlite_storage_bind(node->storage, &storage_adapter);
+        result = tr_raft_wal_storage_bind(node->storage, &storage_adapter);
     }
     if (result == TURBO_OK) {
-        result = tr_raft_sqlite_storage_load(node->storage, &recovery);
+        result = tr_raft_wal_storage_load(node->storage, &recovery);
     }
     if (result != TURBO_OK) {
         if (node->storage != NULL) {
-            tr_raft_sqlite_storage_close(node->storage);
+            tr_raft_wal_storage_close(node->storage);
         }
         tr_raft_wire_codec_destroy(node->codec);
         free(node->outbound);
@@ -211,7 +213,9 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
     service_config.core.initial_vote = recovery.voted_for;
     service_config.core.initial_last_log_index = recovery.snapshot_index;
     service_config.core.initial_last_log_term = recovery.snapshot_term;
-    service_config.core.initial_log_entries = recovery.entries;
+    service_config.core.initial_log_entries = recovery.entry_count == 0U
+                                                  ? NULL
+                                                  : recovery.entries;
     service_config.core.initial_log_entry_count = recovery.entry_count;
     service_config.core.initial_commit_index = recovery.commit_index;
     service_config.core.initial_applied_index = recovery.snapshot_index;
@@ -222,7 +226,7 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
     service_config.state_machine.context = node;
     service_config.state_machine.apply_batch = tr_chaos_apply;
     result = tr_raft_service_create(&service_config, &node->service);
-    tr_raft_sqlite_recovery_destroy(&recovery);
+    tr_raft_wal_recovery_destroy(&recovery);
     if (result == TURBO_OK) {
         result = tr_raft_service_poll(node->service);
     }
@@ -230,7 +234,7 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
         if (node->service != NULL) {
             tr_raft_service_destroy(node->service);
         }
-        tr_raft_sqlite_storage_close(node->storage);
+        tr_raft_wal_storage_close(node->storage);
         tr_raft_wire_codec_destroy(node->codec);
         free(node->outbound);
         memset(node, 0, sizeof(*node));
@@ -244,7 +248,7 @@ static void tr_chaos_node_close(tr_chaos_node_t *node)
         tr_raft_service_destroy(node->service);
     }
     if (node->storage != NULL) {
-        tr_raft_sqlite_storage_close(node->storage);
+        tr_raft_wal_storage_close(node->storage);
     }
     tr_raft_wire_codec_destroy(node->codec);
     free(node->outbound);

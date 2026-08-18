@@ -31,3 +31,5 @@ target_link_libraries(turboraft_replay_driver_tests
                               TurboUtils::TinyTest)
 add_test(NAME turboraft.replay_driver
          COMMAND turboraft_replay_driver_tests)
+
+cmake_config_directory_targets(FOLDER "tests/text_syntax")

@@ -435,4 +435,66 @@ spec("raft wire codec")
                          &frame_length), TURBO_EPROTO);
         tr_raft_wire_codec_destroy(codec);
     }
+
+    it("round trips a 64 KiB data stream chunk and durable ack")
+    {
+        tr_raft_wire_codec_t *codec = NULL;
+        tr_raft_wire_metadata_t metadata = {{0}, 7U};
+        tr_raft_wire_metadata_t decoded_metadata;
+        tr_raft_data_chunk_t chunk;
+        tr_raft_data_chunk_t decoded_chunk;
+        tr_raft_data_ack_t ack;
+        tr_raft_data_ack_t decoded_ack;
+        static uint8_t data[TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES];
+        static uint8_t frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+        size_t frame_length = 0U;
+
+        memset(data, 0x6d, sizeof(data));
+        memset(&chunk, 0, sizeof(chunk));
+        chunk.from = 1U;
+        chunk.to = 2U;
+        chunk.term = 9U;
+        chunk.stream_id = 11U;
+        chunk.stream_size = sizeof(data);
+        chunk.data = data;
+        chunk.data_length = sizeof(data);
+        chunk.done = true;
+        memset(chunk.stream_digest, 0xa7, sizeof(chunk.stream_digest));
+
+        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_int_eq(tr_raft_wire_encode_data_chunk(
+                         codec, &metadata, &chunk, frame, sizeof(frame),
+                         &frame_length), TURBO_OK);
+        check_int_eq(tr_raft_wire_decode_data_chunk(
+                         codec, frame, frame_length, &decoded_metadata,
+                         &decoded_chunk), TURBO_OK);
+        check_long_eq(decoded_chunk.stream_id, chunk.stream_id);
+        check_size_eq(decoded_chunk.data_length, sizeof(data));
+        check_mem_eq(decoded_chunk.data, data, sizeof(data));
+        check_mem_eq(decoded_chunk.stream_digest, chunk.stream_digest,
+                     sizeof(chunk.stream_digest));
+        check_true(decoded_chunk.done);
+
+        memset(&ack, 0, sizeof(ack));
+        ack.from = 2U;
+        ack.to = 1U;
+        ack.term = chunk.term;
+        ack.stream_id = chunk.stream_id;
+        ack.stream_size = chunk.stream_size;
+        ack.next_offset = chunk.stream_size;
+        ack.accepted = true;
+        ack.durable = true;
+        memcpy(ack.stream_digest, chunk.stream_digest,
+               sizeof(ack.stream_digest));
+        check_int_eq(tr_raft_wire_encode_data_ack(
+                         codec, &metadata, &ack, frame, sizeof(frame),
+                         &frame_length), TURBO_OK);
+        check_int_eq(tr_raft_wire_decode_data_ack(
+                         codec, frame, frame_length, &decoded_metadata,
+                         &decoded_ack), TURBO_OK);
+        check_true(decoded_ack.accepted);
+        check_true(decoded_ack.durable);
+        check_long_eq(decoded_ack.next_offset, sizeof(data));
+        tr_raft_wire_codec_destroy(codec);
+    }
 }

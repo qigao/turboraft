@@ -11,10 +11,13 @@ extern "C" {
 
 #define TR_RAFT_FLOWMQ_MAX_IDENTITY_SIZE 255U
 #define TR_RAFT_FLOWMQ_MAX_OUTBOUND_QUEUE_CAPACITY 65536U
-#define TR_RAFT_FLOWMQ_DEFAULT_SEND_BATCH_ITEMS 1U
+#define TR_RAFT_FLOWMQ_DEFAULT_SEND_BATCH_ITEMS 4U
 #define TR_RAFT_FLOWMQ_MAX_SEND_BATCH_ITEMS 256U
-#define TR_RAFT_FLOWMQ_MIN_INBOUND_QUEUE_BYTES 16384U
+#define TR_RAFT_FLOWMQ_DEFAULT_STREAM_RECV_BUFFER_BYTES (256U * 1024U)
+#define TR_RAFT_FLOWMQ_MIN_INBOUND_QUEUE_BYTES (512U * 1024U)
 #define TR_RAFT_FLOWMQ_MAX_INBOUND_QUEUE_BYTES (64U * 1024U * 1024U)
+#define TR_RAFT_FLOWMQ_DEFAULT_INFLIGHT_DATA_BYTES (4U * 1024U * 1024U)
+#define TR_RAFT_FLOWMQ_MAX_INFLIGHT_DATA_BYTES (64U * 1024U * 1024U)
 
 typedef struct tr_raft_flowmq_peer_service tr_raft_flowmq_peer_service_t;
 
@@ -34,10 +37,12 @@ typedef struct tr_raft_flowmq_peer_service_config {
   const tr_raft_flowmq_peer_config_t *peers;
   size_t peer_count;
   size_t outbound_queue_capacity;
-  /** Zero preserves the historical one-payload-per-peer step behavior. */
+  /** Zero selects the four-frame/256 KiB throughput-oriented default. */
   size_t max_send_batch_items;
   /** Zero derives the bound from max_send_batch_items and max frame size. */
   size_t max_send_batch_bytes;
+  /** Per-peer retained DATA_CHUNK payload budget; zero selects 4 MiB. */
+  size_t max_inflight_data_bytes;
   /** Power-of-two byte capacity between I/O callbacks and step(). */
   size_t inbound_queue_capacity_bytes;
   tr_raft_coronet_message_handler_fn on_message;
@@ -61,6 +66,8 @@ typedef struct tr_raft_flowmq_peer_service_status {
   size_t outbound_queue_capacity;
   size_t max_send_batch_items;
   size_t max_send_batch_bytes;
+  size_t max_inflight_data_bytes;
+  size_t queued_data_bytes;
   size_t inbound_queue_capacity_bytes;
   size_t queued_inbound_bytes;
   size_t queued_payload_count;

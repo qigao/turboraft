@@ -64,6 +64,7 @@ include(CTest)
 find_package(TurboUtils CONFIG REQUIRED PATHS "${TURBO_UTILS_ROOT}")
 find_package(TurboParser CONFIG REQUIRED PATHS "${TURBOPARSER_ROOT}")
 find_package(OpenSSL REQUIRED)
+find_package(xxHash CONFIG REQUIRED)
 
 find_program(
   TURBORAFT_TBE_COMPILER
@@ -177,6 +178,37 @@ target_link_libraries(
   PUBLIC TurboRaft::Core
   PRIVATE OpenSSL::Crypto)
 
+add_library(turboraft_data_stream STATIC
+            src/stream/raft_data_stream.c)
+cmake_config_target(turboraft_data_stream
+                    NO_INSTALL
+                    ALIAS TurboRaft::DataStream
+                    EXPORT_NAME DataStream
+                    FOLDER "libraries/stream")
+target_include_directories(
+  turboraft_data_stream
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(
+  turboraft_data_stream
+  PUBLIC TurboRaft::Core
+  PRIVATE OpenSSL::Crypto)
+
+add_library(turboraft_wal_storage STATIC
+            src/storage/raft_wal_storage.c)
+cmake_config_target(turboraft_wal_storage
+                    NO_INSTALL
+                    ALIAS TurboRaft::WalStorage
+                    EXPORT_NAME WalStorage
+                    FOLDER "libraries/storage")
+target_include_directories(
+  turboraft_wal_storage
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(turboraft_wal_storage
+                      PUBLIC TurboRaft::Core
+                      PRIVATE TurboUtils::Core xxHash::xxhash)
+
 add_library(turboraft_snapshot_coordinator STATIC
             src/service/raft_snapshot_coordinator.c)
 target_include_directories(turboraft_snapshot_coordinator
@@ -184,35 +216,19 @@ target_include_directories(turboraft_snapshot_coordinator
 target_link_libraries(turboraft_snapshot_coordinator
                       PUBLIC TurboRaft::SnapshotSender)
 
-if(TURBORAFT_BUILD_SQLITE_STORAGE)
-  find_package(unofficial-sqlite3 CONFIG REQUIRED)
-  add_library(turboraft_sqlite_storage STATIC src/storage/raft_sqlite_storage.c)
-  add_library(TurboRaft::SQLiteStorage ALIAS turboraft_sqlite_storage)
-  set_target_properties(turboraft_sqlite_storage PROPERTIES EXPORT_NAME
-                                                            SQLiteStorage)
-  target_include_directories(
-    turboraft_sqlite_storage
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-  target_link_libraries(
-    turboraft_sqlite_storage
-    PUBLIC TurboRaft::Core
-    PRIVATE unofficial::sqlite3::sqlite3)
+add_library(turboraft_snapshot_installer STATIC
+            src/service/raft_snapshot_installer.c)
+target_include_directories(turboraft_snapshot_installer
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/service)
+target_link_libraries(turboraft_snapshot_installer
+                      PUBLIC TurboRaft::WalStorage)
 
-  add_library(turboraft_snapshot_installer STATIC
-              src/service/raft_snapshot_installer.c)
-  target_include_directories(turboraft_snapshot_installer
-                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/service)
-  target_link_libraries(turboraft_snapshot_installer
-                        PUBLIC TurboRaft::SQLiteStorage)
-
-  add_library(turboraft_service_sqlite_reload STATIC
-              src/service/raft_service_sqlite_reload.c)
-  target_include_directories(turboraft_service_sqlite_reload
-                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/service)
-  target_link_libraries(turboraft_service_sqlite_reload
-                        PUBLIC TurboRaft::Service TurboRaft::SQLiteStorage)
-endif()
+add_library(turboraft_service_wal_reload STATIC
+            src/service/raft_service_wal_reload.c)
+target_include_directories(turboraft_service_wal_reload
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/service)
+target_link_libraries(turboraft_service_wal_reload
+                      PUBLIC TurboRaft::Service TurboRaft::WalStorage)
 
 find_package(Threads REQUIRED)
 find_package(TurboNet CONFIG QUIET PATHS "${TURBO_NET_ROOT}")
@@ -316,6 +332,9 @@ if(BUILD_TESTS)
       ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:TurboHttp::Iris>
       $<TARGET_FILE_DIR:turboraft_control_plane_tests>)
   add_test(NAME turboraft.control_plane COMMAND turboraft_control_plane_tests)
+  cmake_config_target(turboraft_control_plane_tests
+                      NO_INSTALL
+                      FOLDER "tests/control")
 
   add_executable(turboraft_control_plane_http_tests
                  tests/control/test_raft_control_plane_http.c)
@@ -332,6 +351,9 @@ if(BUILD_TESTS)
       $<TARGET_FILE_DIR:turboraft_control_plane_http_tests>)
   add_test(NAME turboraft.control_plane_http
            COMMAND turboraft_control_plane_http_tests)
+  cmake_config_target(turboraft_control_plane_http_tests
+                      NO_INSTALL
+                      FOLDER "tests/control")
   endif()
 else()
   message(
@@ -495,15 +517,16 @@ if(TurboNet_FOUND AND TurboHttp_FOUND)
                                PRIVATE TURBORAFT_HAS_SERVICE_OWNER=1)
     add_test(NAME turboraft.control_owner_bridge
              COMMAND turboraft_control_owner_bridge_tests)
+    cmake_config_target(turboraft_control_owner_bridge_tests
+                        NO_INSTALL
+                        FOLDER "tests/control")
   endif()
 endif()
 
 set(TURBORAFT_INSTALL_TARGETS
     turboraft_core turboraft_service turboraft_snapshot_receiver
+    turboraft_data_stream turboraft_wal_storage
     turboraft_snapshot_sender)
-if(TARGET turboraft_sqlite_storage)
-  list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_sqlite_storage)
-endif()
 if(TARGET turboraft_coronet)
   list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_coronet
        turboraft_snapshot_manager turboraft_service_owner)
@@ -564,3 +587,5 @@ endif()
 if(BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()
+
+cmake_config_directory_targets(FOLDER "libraries")

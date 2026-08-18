@@ -1,9 +1,12 @@
-#include "raft_service_sqlite_reload.h"
+#include "raft_service_wal_reload.h"
 #include "raft_snapshot_installer.h"
 
 #include <tinytest.h>
 #include <turbo_error.h>
+#include <turbo_fs.h>
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct reload_application_capture {
@@ -43,7 +46,7 @@ static int reload_restore(
     return TURBO_OK;
 }
 
-spec("raft service sqlite reload")
+spec("raft service WAL reload")
 {
     it("rebuilds Service from an installed durable snapshot")
     {
@@ -58,19 +61,22 @@ spec("raft service sqlite reload")
             }
         };
         const uint8_t snapshot[] = {0x61U, 0x62U, 0x63U};
-        tr_raft_sqlite_storage_config_t storage_config;
-        tr_raft_sqlite_storage_t *storage = NULL;
+        tr_raft_wal_storage_config_t storage_config;
+        tr_raft_wal_storage_t *storage = NULL;
         tr_raft_storage_t storage_adapter;
         tr_raft_service_config_t service_config;
         tr_raft_service_t *service = NULL;
-        tr_raft_service_sqlite_reload_config_t reload_config;
-        tr_raft_service_sqlite_reload_t *reload = NULL;
+        tr_raft_service_wal_reload_config_t reload_config;
+        tr_raft_service_wal_reload_t *reload = NULL;
         tr_raft_snapshot_installer_config_t installer_config;
         tr_raft_snapshot_installer_t *installer = NULL;
         tr_raft_service_status_t service_status;
         tr_raft_progress_view_t progress;
         tr_raft_snapshot_installer_status_t installer_status;
         reload_application_capture_t application;
+        char *path_prefix = tt_make_temp_file("turboraft-service-reload",
+                                              ".data");
+        char path[TURBO_FS_MAX_PATH];
 
         memset(&storage_config, 0, sizeof(storage_config));
         memset(&storage_adapter, 0, sizeof(storage_adapter));
@@ -79,13 +85,16 @@ spec("raft service sqlite reload")
         memset(&installer_config, 0, sizeof(installer_config));
         memset(&application, 0, sizeof(application));
 
-        storage_config.path = ":memory:";
-        storage_config.busy_timeout_ms = 1000;
+        storage_config.path_prefix = path_prefix;
+        storage_config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
+        storage_config.max_transaction_bytes = 8192U;
+        storage_config.max_segments = 2U;
+        storage_config.max_log_entries = 16U;
         storage_config.create_if_missing = true;
         storage_config.max_snapshot_bytes = 1024U;
-        check_int_eq(tr_raft_sqlite_storage_open(
+        check_int_eq(tr_raft_wal_storage_open(
                          &storage_config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_sqlite_storage_bind(storage, &storage_adapter),
+        check_int_eq(tr_raft_wal_storage_bind(storage, &storage_adapter),
                      TURBO_OK);
 
         service_config.core.self_id = 1U;
@@ -114,14 +123,14 @@ spec("raft service sqlite reload")
         reload_config.initial_election_timeout_ticks = 3U;
         reload_config.max_log_entries = 16U;
         reload_config.max_inflight_append_requests = 4U;
-        check_int_eq(tr_raft_service_sqlite_reload_create(
+        check_int_eq(tr_raft_service_wal_reload_create(
                          &reload_config, &reload), TURBO_OK);
 
         installer_config.storage = storage;
         installer_config.restore_application = reload_restore;
         installer_config.application_context = &application;
         installer_config.reload_runtime =
-            tr_raft_service_sqlite_reload_runtime;
+            tr_raft_service_wal_reload_runtime;
         installer_config.runtime_context = reload;
         check_int_eq(tr_raft_snapshot_installer_create(
                          &installer_config, &installer), TURBO_OK);
@@ -151,8 +160,16 @@ spec("raft service sqlite reload")
                      TR_RAFT_SNAPSHOT_INSTALL_COMPLETE);
 
         tr_raft_snapshot_installer_destroy(installer);
-        tr_raft_service_sqlite_reload_destroy(reload);
+        tr_raft_service_wal_reload_destroy(reload);
         tr_raft_service_destroy(service);
-        check_int_eq(tr_raft_sqlite_storage_close(storage), TURBO_OK);
+        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        snprintf(path, sizeof(path), "%s.snapshot.9.6", path_prefix);
+        check_int_eq(tt_remove_file(path), 0);
+        snprintf(path, sizeof(path), "%s.00000001.wal", path_prefix);
+        check_int_eq(tt_remove_file(path), 0);
+        snprintf(path, sizeof(path), "%s.lock", path_prefix);
+        check_int_eq(tt_remove_file(path), 0);
+        check_int_eq(tt_remove_file(path_prefix), 0);
+        free(path_prefix);
     }
 }

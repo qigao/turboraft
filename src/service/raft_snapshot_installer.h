@@ -1,7 +1,7 @@
 #ifndef TURBORAFT_RAFT_SNAPSHOT_INSTALLER_H
 #define TURBORAFT_RAFT_SNAPSHOT_INSTALLER_H
 
-#include <turboraft/raft_sqlite_storage.h>
+#include <turboraft/raft_wal_storage.h>
 
 #include <stdbool.h>
 
@@ -29,7 +29,7 @@ typedef enum tr_raft_snapshot_install_stage {
 
 typedef struct tr_raft_snapshot_installer_config {
     /* Borrowed and must outlive the installer. */
-    tr_raft_sqlite_storage_t *storage;
+    tr_raft_wal_storage_t *storage;
     tr_raft_snapshot_restore_application_fn restore_application;
     void *application_context;
     tr_raft_snapshot_reload_runtime_fn reload_runtime;

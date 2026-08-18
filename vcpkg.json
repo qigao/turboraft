@@ -10,7 +10,6 @@
       "host": true
     },
     "simde",
-    "sqlite3",
     {
       "name": "xxhash",
       "version>=": "0.8.3"

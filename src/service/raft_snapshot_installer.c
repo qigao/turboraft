@@ -71,7 +71,7 @@ int tr_raft_snapshot_installer_install(
     }
 
     installer->status.stage = TR_RAFT_SNAPSHOT_INSTALL_DURABLE;
-    result = tr_raft_sqlite_storage_install_snapshot(
+    result = tr_raft_wal_storage_install_snapshot(
         installer->config.storage, leader_term, snapshot_index,
         snapshot_term, configuration, data, size);
     if (result != TURBO_OK) {

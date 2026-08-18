@@ -6,6 +6,8 @@ Every frame has the fixed 40-byte authenticated transport payload header:
 magic, protocol version, header size, bounded payload size, payload kind,
 cluster ID, and message ID. Version 2 assigns payload kind 1 to ordinary Raft
 messages, 2 to InstallSnapshot chunks, and 3 to InstallSnapshot acknowledgements.
+The current V5 profile adds kind 4 for data-stream chunks and kind 5 for
+data-stream acknowledgements.
 Version 1 frames and unknown payload kinds fail with `TURBO_EPROTO`.
 
 ## Snapshot transfer V4/V5
@@ -33,6 +35,15 @@ Snapshot sender configuration must match the selected transport profile:
 zero `chunk_size`/`max_inflight_chunks` selects V4 compatibility; V5 uses
 64 KiB and four slots. A mismatch fails at the transport boundary instead of
 silently changing protocol behavior.
+
+## FlowMQ data streams
+
+Large application bytes use ordered 64 KiB `DATA_CHUNK` frames rather than
+larger Raft entries or frames. The default FlowMQ batch contains four chunks
+(256 KiB), and `DATA_ACK` reports cumulative offset plus final durable state.
+Raft commits only the stream descriptor after voting-quorum durability. The
+ownership, backpressure, validation, and apply protocol is specified in
+[DATA_STREAM.md](DATA_STREAM.md).
 
 CoroNet stores ordinary Raft messages, snapshot chunks, and acknowledgements in
 the same per-peer tagged FIFO. One writer coroutine assigns monotonically

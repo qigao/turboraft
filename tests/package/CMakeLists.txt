@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.23)
 
 project(TurboRaftPackageConsumer LANGUAGES C)
 
+include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/CmakeUtils.cmake)
+
 find_package(TurboRaft CONFIG REQUIRED)
 
 add_executable(turboraft_package_consumer main.c)
@@ -11,7 +13,7 @@ target_link_libraries(turboraft_package_consumer
                               TurboRaft::SnapshotReceiver
                               TurboRaft::SnapshotSender)
 
-foreach(optional_target IN ITEMS SQLiteStorage CoroNet SnapshotManager
+foreach(optional_target IN ITEMS CoroNet SnapshotManager
                                  ServiceOwner ControlPlane FlowMQ)
     if(TARGET TurboRaft::${optional_target})
         target_link_libraries(turboraft_package_consumer
@@ -22,3 +24,5 @@ foreach(optional_target IN ITEMS SQLiteStorage CoroNet SnapshotManager
         endif()
     endif()
 endforeach()
+
+cmake_config_directory_targets(FOLDER "tests/package")

@@ -2,7 +2,7 @@
 
 ## Decision
 
-SQLite is the local durable fact source for the current snapshot, hard state,
+The segmented WAL is the local durable fact source for the current snapshot, hard state,
 commit index, and the log suffix. Snapshot creation and covered-prefix deletion
 are one atomic transaction. The application state machine remains responsible
 for producing and restoring the opaque snapshot bytes.
@@ -38,7 +38,7 @@ snapshot requests use separate transport contexts.
 
 ## Recovery order
 
-1. Open SQLite and atomically migrate schema version 1 to version 2 when needed.
+1. Open and strictly replay consecutive WAL segments.
 2. Load the owned snapshot bytes and restore the application state machine.
 3. Create Raft core with the snapshot index and term as its compacted log base.
 4. Set the initial applied index to the snapshot index and provide only the
@@ -60,7 +60,7 @@ installed snapshot boundary.
 The receiver owns one bounded in-memory staging buffer and enforces exact chunk
 offsets. Duplicate chunks receive the current next offset without advancing
 state. A complete transfer is SHA-256 verified before the install callback.
-SQLite remote installation atomically updates hard term, clears a stale vote,
+WAL remote installation atomically updates hard term, clears a stale vote,
 advances the commit index, installs the snapshot, and reconciles the log suffix.
 The suffix is preserved only when the local entry at the snapshot boundary has
 the same term.
@@ -84,8 +84,7 @@ per-peer FIFO used by Raft messages.
 
 ## Compatibility and rollback
 
-Schema version 1 databases migrate automatically and atomically. Unknown schema
-versions fail with `TURBO_EPROTO`. Migration is forward-only because version 1
-binaries do not understand compacted logs; rollback requires a pre-migration
-backup or application export. Wire schema version 2 rejects version 1 peers;
-capability negotiation can be added before a mixed-version rolling upgrade.
+The WAL format is strict and does not import the removed database format.
+Unknown format versions fail with `TURBO_EPROTO`. Rollback requires a WAL and
+snapshot backup from the target binary version. Wire compatibility is a
+separate concern from local storage format compatibility.

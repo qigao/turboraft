@@ -68,6 +68,7 @@ struct tr_raft_flowmq_peer {
   tr_raft_coronet_session_t *session;
   tr_raft_flowmq_payload_queue_t outbound;
   size_t outbound_snapshot_bytes;
+  size_t outbound_data_bytes;
   tr_raft_flowmq_control_queue_t control;
   tr_raft_flowmq_send_command_t send_command;
   uint64_t next_fmq_message_id;
@@ -86,6 +87,7 @@ struct tr_raft_flowmq_peer_service {
   size_t outbound_queue_capacity;
   size_t max_send_batch_items;
   size_t max_send_batch_bytes;
+  size_t max_inflight_data_bytes;
   tstr_t *send_frames;
   uint8_t *send_packets;
   ring_spsc_t inbound;
@@ -670,6 +672,7 @@ int tr_raft_flowmq_peer_service_create(const tr_raft_flowmq_peer_service_config_
       config->max_send_batch_items > TR_RAFT_FLOWMQ_MAX_SEND_BATCH_ITEMS ||
       config->inbound_queue_capacity_bytes < TR_RAFT_FLOWMQ_MIN_INBOUND_QUEUE_BYTES ||
       config->inbound_queue_capacity_bytes > TR_RAFT_FLOWMQ_MAX_INBOUND_QUEUE_BYTES ||
+      config->max_inflight_data_bytes > TR_RAFT_FLOWMQ_MAX_INFLIGHT_DATA_BYTES ||
       !tr_raft_flowmq_is_power_of_two(config->inbound_queue_capacity_bytes)) {
     return TURBO_EINVAL;
   }
@@ -706,6 +709,10 @@ int tr_raft_flowmq_peer_service_create(const tr_raft_flowmq_peer_service_config_
   service->outbound_queue_capacity = config->outbound_queue_capacity;
   service->max_send_batch_items = send_batch_items;
   service->max_send_batch_bytes = send_batch_bytes;
+  service->max_inflight_data_bytes =
+      config->max_inflight_data_bytes == 0U
+          ? TR_RAFT_FLOWMQ_DEFAULT_INFLIGHT_DATA_BYTES
+          : config->max_inflight_data_bytes;
   service->inbound_queue_capacity_bytes = config->inbound_queue_capacity_bytes;
   service->on_message = config->on_message;
   service->message_context = config->message_context;
@@ -736,6 +743,10 @@ int tr_raft_flowmq_peer_service_create(const tr_raft_flowmq_peer_service_config_
   }
 
   router_endpoint = config->router_endpoint;
+  if (router_endpoint.stream_recv_buffer_bytes == 0U) {
+    router_endpoint.stream_recv_buffer_bytes =
+        TR_RAFT_FLOWMQ_DEFAULT_STREAM_RECV_BUFFER_BYTES;
+  }
   flowmq_coronet_timeouts_resolve(&router_endpoint.timeouts,
                                   FLOWMQ_ROUTER_ENDPOINT_DEFAULT_TIMEOUT_MS);
   service->router_start_timeout_ns = tr_raft_flowmq_timeout_ns(&router_endpoint.timeouts);
@@ -760,6 +771,10 @@ int tr_raft_flowmq_peer_service_create(const tr_raft_flowmq_peer_service_config_
     const tr_raft_flowmq_peer_config_t *source = &config->peers[index];
     tr_raft_flowmq_peer_t *peer = &service->peers[index];
     flowmq_connect_endpoint_config_t dealer_endpoint = source->endpoint;
+    if (dealer_endpoint.stream_recv_buffer_bytes == 0U) {
+      dealer_endpoint.stream_recv_buffer_bytes =
+          TR_RAFT_FLOWMQ_DEFAULT_STREAM_RECV_BUFFER_BYTES;
+    }
 
     peer->service = service;
     peer->index = index;
@@ -1015,6 +1030,8 @@ static int tr_raft_flowmq_peer_step(tr_raft_flowmq_peer_t *peer,
       }
       if (discarded.payload.kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
         peer->outbound_snapshot_bytes -= discarded.payload.data.snapshot_chunk.data_length;
+      } else if (discarded.payload.kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK) {
+        peer->outbound_data_bytes -= discarded.payload.data.data_chunk.data_length;
       }
       tr_raft_owned_coronet_payload_release(&discarded);
     }
@@ -1147,6 +1164,14 @@ static int tr_raft_flowmq_payload_nodes(const tr_raft_coronet_payload_t *payload
     *from = payload->data.snapshot_ack.from;
     *to = payload->data.snapshot_ack.to;
     return TURBO_OK;
+  case TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK:
+    *from = payload->data.data_chunk.from;
+    *to = payload->data.data_chunk.to;
+    return TURBO_OK;
+  case TR_RAFT_WIRE_PAYLOAD_DATA_ACK:
+    *from = payload->data.data_ack.from;
+    *to = payload->data.data_ack.to;
+    return TURBO_OK;
   default:
     return TURBO_EPROTO;
   }
@@ -1196,6 +1221,12 @@ int tr_raft_flowmq_peer_service_enqueue_payload(tr_raft_flowmq_peer_service_t *s
            TR_RAFT_WIRE_MAX_INFLIGHT_SNAPSHOT_BYTES - peer->outbound_snapshot_bytes)) {
     return TURBO_ENOSPC;
   }
+  if (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
+      (peer->outbound_data_bytes > service->max_inflight_data_bytes ||
+       payload->data.data_chunk.data_length >
+           service->max_inflight_data_bytes - peer->outbound_data_bytes)) {
+    return TURBO_ENOSPC;
+  }
   result = tr_raft_owned_coronet_payload_copy(&owned, payload);
   if (result != TURBO_OK) {
     return result;
@@ -1205,6 +1236,8 @@ int tr_raft_flowmq_peer_service_enqueue_payload(tr_raft_flowmq_peer_service_t *s
     tr_raft_owned_coronet_payload_release(&owned);
   } else if (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
     peer->outbound_snapshot_bytes += payload->data.snapshot_chunk.data_length;
+  } else if (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK) {
+    peer->outbound_data_bytes += payload->data.data_chunk.data_length;
   }
   return result;
 }
@@ -1221,6 +1254,7 @@ int tr_raft_flowmq_peer_service_get_status(const tr_raft_flowmq_peer_service_t *
   out_status->outbound_queue_capacity = service->outbound_queue_capacity;
   out_status->max_send_batch_items = service->max_send_batch_items;
   out_status->max_send_batch_bytes = service->max_send_batch_bytes;
+  out_status->max_inflight_data_bytes = service->max_inflight_data_bytes;
   out_status->inbound_queue_capacity_bytes = service->inbound_queue_capacity_bytes;
   out_status->queued_inbound_bytes = ring_spsc_read_available(&service->inbound);
   out_status->callback_depth = atomic_load_explicit(&service->callback_depth, memory_order_acquire);
@@ -1231,6 +1265,7 @@ int tr_raft_flowmq_peer_service_get_status(const tr_raft_flowmq_peer_service_t *
   for (index = 0U; index < service->peer_count; ++index) {
     out_status->queued_payload_count +=
         tr_raft_flowmq_payload_queue_t_size(&service->peers[index].outbound);
+    out_status->queued_data_bytes += service->peers[index].outbound_data_bytes;
     if (service->peers[index].handshake_complete) {
       ++out_status->handshake_complete_count;
     }

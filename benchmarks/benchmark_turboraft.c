@@ -1,14 +1,16 @@
 #include <turboraft/raft_core.h>
 #include <turboraft/raft_wire_codec.h>
 
-#ifdef TURBORAFT_BENCHMARK_SQLITE
-#include <turboraft/raft_sqlite_storage.h>
+#ifdef TURBORAFT_BENCHMARK_WAL
+#include <turboraft/raft_wal_storage.h>
+#include <turbo_fs.h>
 #endif
 
 #include <tinytest.h>
 #include <turbo_error.h>
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -18,7 +20,7 @@ enum {
     WIRE_BENCHMARK_BURST_ITEMS = 16,
     REPLICATION_MODEL_ENTRY_COUNT = 257,
     REPLICATION_MODEL_MAX_WINDOW = 8,
-    SQLITE_BENCHMARK_SAMPLE_COUNT = 64
+    STORAGE_BENCHMARK_SAMPLE_COUNT = 64
 };
 
 static volatile int benchmark_result_sink;
@@ -255,7 +257,7 @@ static void benchmark_wire_message(tr_raft_message_t *message)
     }
 }
 
-#ifdef TURBORAFT_BENCHMARK_SQLITE
+#if defined(TURBORAFT_BENCHMARK_WAL)
 static tr_raft_entry_t benchmark_storage_entry(tr_raft_index_t index)
 {
     static const char payload[] = "durable-benchmark";
@@ -462,27 +464,32 @@ spec("TurboRaft performance baselines")
         tr_raft_wire_codec_destroy(codec);
     }
 
-#ifdef TURBORAFT_BENCHMARK_SQLITE
-    bench("SQLite durable storage")
+#ifdef TURBORAFT_BENCHMARK_WAL
+    bench("segmented WAL durable storage")
     {
-        char *path = tt_make_temp_file("turboraft-benchmark", ".db");
-        tr_raft_sqlite_storage_config_t config;
-        tr_raft_sqlite_storage_t *storage = NULL;
+        char *prefix = tt_make_temp_file("turboraft-wal-benchmark", ".data");
+        char segment_path[TURBO_FS_MAX_PATH];
+        char lock_path[TURBO_FS_MAX_PATH];
+        tr_raft_wal_storage_config_t config;
+        tr_raft_wal_storage_t *storage = NULL;
         tr_raft_storage_t adapter;
         tr_raft_index_t index = 0U;
         int first_error = TURBO_OK;
 
-        check_not_null(path);
+        check_not_null(prefix);
         memset(&config, 0, sizeof(config));
-        config.path = path;
-        config.busy_timeout_ms = 5000;
+        config.path_prefix = prefix;
+        config.segment_bytes = TR_RAFT_WAL_DEFAULT_SEGMENT_BYTES;
+        config.max_transaction_bytes =
+            TR_RAFT_WAL_DEFAULT_TRANSACTION_BYTES;
+        config.max_segments = 1U;
+        config.max_log_entries = STORAGE_BENCHMARK_SAMPLE_COUNT;
         config.create_if_missing = true;
-        config.max_snapshot_bytes = 1024U;
-        check_int_eq(tr_raft_sqlite_storage_open(&config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_sqlite_storage_bind(storage, &adapter), TURBO_OK);
+        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_int_eq(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
 
-        benchmark_batch("SQLite WAL FULL single-entry commit",
-                        SQLITE_BENCHMARK_SAMPLE_COUNT)
+        benchmark_batch("segmented WAL fsync single-entry commit",
+                        STORAGE_BENCHMARK_SAMPLE_COUNT)
         {
             tr_raft_entry_t entry = benchmark_storage_entry(++index);
             int result = adapter.begin(adapter.context);
@@ -501,7 +508,7 @@ spec("TurboRaft performance baselines")
             if (result == TURBO_OK) {
                 result = adapter.commit(adapter.context);
             } else {
-                (void) adapter.rollback(adapter.context);
+                (void)adapter.rollback(adapter.context);
             }
             if (first_error == TURBO_OK && result != TURBO_OK) {
                 first_error = result;
@@ -509,10 +516,15 @@ spec("TurboRaft performance baselines")
             benchmark_result_sink = result;
         }
         check_int_eq(first_error, TURBO_OK);
-        check_long_eq(index, SQLITE_BENCHMARK_SAMPLE_COUNT);
-        check_int_eq(tr_raft_sqlite_storage_close(storage), TURBO_OK);
-        check_int_eq(tt_remove_file(path), 0);
-        free(path);
+        check_long_eq(index, STORAGE_BENCHMARK_SAMPLE_COUNT);
+        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        snprintf(segment_path, sizeof(segment_path), "%s.00000001.wal",
+                 prefix);
+        snprintf(lock_path, sizeof(lock_path), "%s.lock", prefix);
+        check_int_eq(tt_remove_file(segment_path), 0);
+        check_int_eq(tt_remove_file(lock_path), 0);
+        check_int_eq(tt_remove_file(prefix), 0);
+        free(prefix);
     }
 #endif
 }

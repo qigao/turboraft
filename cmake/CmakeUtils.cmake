@@ -63,6 +63,27 @@ function(cmake_config_target target_name)
 
 endfunction()
 
+function(cmake_config_directory_targets)
+    set(options)
+    set(oneValueArgs FOLDER)
+    set(multiValueArgs)
+    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    if(NOT ARG_FOLDER)
+        message(FATAL_ERROR "cmake_config_directory_targets: FOLDER is required")
+    endif()
+
+    get_property(directory_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(target_name IN LISTS directory_targets)
+        get_target_property(target_folder ${target_name} FOLDER)
+        if(NOT target_folder)
+            cmake_config_target(${target_name}
+                                NO_INSTALL
+                                FOLDER "${ARG_FOLDER}")
+        endif()
+    endforeach()
+endfunction()
+
 function(cmake_install_headers)
     set(options)
     set(oneValueArgs DIRECTORY DESTINATION)

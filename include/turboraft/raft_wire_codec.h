@@ -26,6 +26,11 @@ extern "C" {
     (TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES + 4096U)
 #define TR_RAFT_WIRE_MAX_PAYLOAD_SIZE TR_RAFT_WIRE_MAX_SNAPSHOT_PAYLOAD_SIZE
 #define TR_RAFT_WIRE_MAX_SNAPSHOT_BYTES (64U * 1024U * 1024U)
+#define TR_RAFT_WIRE_DATA_DIGEST_SIZE 32U
+#define TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES (64U * 1024U)
+#define TR_RAFT_WIRE_MAX_DATA_STREAM_BYTES (1024ULL * 1024ULL * 1024ULL)
+#define TR_RAFT_WIRE_MAX_DATA_PAYLOAD_SIZE \
+    (TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES + 128U)
 #define TR_RAFT_WIRE_MAX_FRAME_SIZE \
     (TR_RAFT_WIRE_HEADER_SIZE + TR_RAFT_WIRE_MAX_PAYLOAD_SIZE)
 
@@ -43,8 +48,36 @@ typedef struct tr_raft_wire_metadata {
 typedef enum tr_raft_wire_payload_kind {
     TR_RAFT_WIRE_PAYLOAD_RAFT = 1,
     TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK = 2,
-    TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK = 3
+    TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK = 3,
+    TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK = 4,
+    TR_RAFT_WIRE_PAYLOAD_DATA_ACK = 5
 } tr_raft_wire_payload_kind_t;
+
+typedef struct tr_raft_data_chunk {
+    tr_raft_node_id_t from;
+    tr_raft_node_id_t to;
+    tr_raft_term_t term;
+    uint64_t stream_id;
+    uint64_t stream_offset;
+    uint64_t stream_size;
+    uint8_t stream_digest[TR_RAFT_WIRE_DATA_DIGEST_SIZE];
+    size_t data_length;
+    /** Borrowed immutable bytes; valid only for the containing API call. */
+    const uint8_t *data;
+    bool done;
+} tr_raft_data_chunk_t;
+
+typedef struct tr_raft_data_ack {
+    tr_raft_node_id_t from;
+    tr_raft_node_id_t to;
+    tr_raft_term_t term;
+    uint64_t stream_id;
+    uint64_t stream_size;
+    uint64_t next_offset;
+    uint8_t stream_digest[TR_RAFT_WIRE_DATA_DIGEST_SIZE];
+    bool accepted;
+    bool durable;
+} tr_raft_data_ack_t;
 
 /** Validates the envelope and returns its payload discriminator. */
 int tr_raft_wire_peek_payload_kind(
@@ -162,6 +195,36 @@ int tr_raft_wire_decode_snapshot_ack(
     size_t frame_length,
     tr_raft_wire_metadata_t *metadata,
     tr_raft_snapshot_ack_t *ack);
+
+int tr_raft_wire_encode_data_chunk(
+    tr_raft_wire_codec_t *codec,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_data_chunk_t *chunk,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length);
+
+int tr_raft_wire_decode_data_chunk(
+    tr_raft_wire_codec_t *codec,
+    const uint8_t *frame,
+    size_t frame_length,
+    tr_raft_wire_metadata_t *metadata,
+    tr_raft_data_chunk_t *chunk);
+
+int tr_raft_wire_encode_data_ack(
+    tr_raft_wire_codec_t *codec,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_data_ack_t *ack,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length);
+
+int tr_raft_wire_decode_data_ack(
+    tr_raft_wire_codec_t *codec,
+    const uint8_t *frame,
+    size_t frame_length,
+    tr_raft_wire_metadata_t *metadata,
+    tr_raft_data_ack_t *ack);
 
 #ifdef __cplusplus
 }

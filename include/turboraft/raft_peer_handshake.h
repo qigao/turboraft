@@ -22,11 +22,13 @@ extern "C" {
 #define TR_RAFT_HANDSHAKE_FEATURE_RAFT_BATCH_V3 (UINT64_C(1) << 1)
 #define TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4 (UINT64_C(1) << 2)
 #define TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V5 (UINT64_C(1) << 3)
+#define TR_RAFT_HANDSHAKE_FEATURE_DATA_STREAM_V5 (UINT64_C(1) << 4)
 #define TR_RAFT_HANDSHAKE_FEATURE_CURRENT                                    \
     (TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE |                        \
      TR_RAFT_HANDSHAKE_FEATURE_RAFT_BATCH_V3 |                              \
-     TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4 |                              \
-     TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V5)
+     TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4 |                                \
+     TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V5 |                                \
+     TR_RAFT_HANDSHAKE_FEATURE_DATA_STREAM_V5)
 /* V4 peers only require the legacy 8 KiB frame ceiling. */
 #define TR_RAFT_HANDSHAKE_MIN_FRAME_SIZE                                  \
     (TR_RAFT_WIRE_HEADER_SIZE + TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE)
