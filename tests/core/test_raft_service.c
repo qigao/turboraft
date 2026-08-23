@@ -206,29 +206,29 @@ spec("raft service")
 
         memset(&state, 0, sizeof(state));
         service_configure(&config, &state, voters, 1U);
-        check_int_eq(tr_raft_service_create(&config, &service), TURBO_OK);
-        check_int_eq(tr_raft_service_tick(service, &tick), TURBO_OK);
-        check_int_eq(tr_raft_service_status(service, &status), TURBO_OK);
-        check_int_eq(status.core.role, TR_RAFT_LEADER);
+        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
+        check_equal(tr_raft_service_tick(service, &tick), TURBO_OK);
+        check_equal(tr_raft_service_status(service, &status), TURBO_OK);
+        check_equal(status.core.role, TR_RAFT_LEADER);
 
         proposal.command_id = 1U;
         proposal.data = command;
         proposal.data_length = sizeof(command) - 1U;
-        check_int_eq(tr_raft_service_propose(service, &proposal), TURBO_OK);
-        check_size_eq(state.apply_count, 1U);
+        check_equal(tr_raft_service_propose(service, &proposal), TURBO_OK);
+        check_equal(state.apply_count, 1U);
         check(state.commit_count >= 2U);
-        check_int_eq(tr_raft_service_status(service, &status), TURBO_OK);
-        check_long_eq(status.core.commit_index, 1U);
-        check_long_eq(status.core.applied_index, 1U);
+        check_equal(tr_raft_service_status(service, &status), TURBO_OK);
+        check_equal(status.core.commit_index, 1U);
+        check_equal(status.core.applied_index, 1U);
         {
             tr_raft_read_state_t read_state;
 
-            check_int_eq(tr_raft_service_read_index(service, 21U), TURBO_OK);
-            check_int_eq(tr_raft_service_take_read_state(service, &read_state),
+            check_equal(tr_raft_service_read_index(service, 21U), TURBO_OK);
+            check_equal(tr_raft_service_take_read_state(service, &read_state),
                          TURBO_OK);
-            check_long_eq(read_state.context_id, 21U);
-            check_long_eq(read_state.index, 1U);
-            check_int_eq(tr_raft_service_take_read_state(service, &read_state),
+            check_equal(read_state.context_id, 21U);
+            check_equal(read_state.index, 1U);
+            check_equal(tr_raft_service_take_read_state(service, &read_state),
                          TURBO_ENOENT);
         }
 
@@ -237,11 +237,11 @@ spec("raft service")
         config.core.initial_last_log_term = 2U;
         config.core.initial_commit_index = 5U;
         config.core.initial_applied_index = 5U;
-        check_int_eq(tr_raft_service_reload(service, &config.core), TURBO_OK);
-        check_int_eq(tr_raft_service_status(service, &status), TURBO_OK);
+        check_equal(tr_raft_service_reload(service, &config.core), TURBO_OK);
+        check_equal(tr_raft_service_status(service, &status), TURBO_OK);
         check(!status.faulted);
-        check_long_eq(status.core.last_log_index, 5U);
-        check_long_eq(status.core.applied_index, 5U);
+        check_equal(status.core.last_log_index, 5U);
+        check_equal(status.core.applied_index, 5U);
 
         tr_raft_service_destroy(service);
     }
@@ -258,12 +258,12 @@ spec("raft service")
         memset(&state, 0, sizeof(state));
         state.enqueue_result = TURBO_EPIPE;
         service_configure(&config, &state, voters, 3U);
-        check_int_eq(tr_raft_service_create(&config, &service), TURBO_OK);
-        check_int_eq(tr_raft_service_tick(service, &tick), TURBO_EPIPE);
-        check_int_eq(tr_raft_service_status(service, &status), TURBO_OK);
+        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
+        check_equal(tr_raft_service_tick(service, &tick), TURBO_EPIPE);
+        check_equal(tr_raft_service_status(service, &status), TURBO_OK);
         check(status.faulted);
-        check_int_eq(status.cause, TURBO_EPIPE);
-        check_int_eq(tr_raft_service_tick(service, &tick), TURBO_EPROTO);
+        check_equal(status.cause, TURBO_EPIPE);
+        check_equal(tr_raft_service_tick(service, &tick), TURBO_EPROTO);
 
         tr_raft_service_destroy(service);
     }
@@ -290,7 +290,7 @@ spec("raft service")
         context = coro_context_create_ex(NULL, &coro_config);
         check_not_null(context);
         service_configure(&config, &service_state, voters, 1U);
-        check_int_eq(tr_raft_service_create(&config, &service), TURBO_OK);
+        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
         owner_config.service = service;
         owner_config.context = context;
         owner_config.tick_interval_ms = 1U;
@@ -298,36 +298,36 @@ spec("raft service")
         owner_config.max_pending_commands = 1U;
         owner_config.max_command_bytes = 64U;
         owner_config.next_election_timeout = service_owner_timeout;
-        check_int_eq(tr_raft_service_owner_create(&owner_config, &owner),
+        check_equal(tr_raft_service_owner_create(&owner_config, &owner),
                      TURBO_OK);
         owner_state.owner = owner;
         owner_state.context = context;
         owner_state.submit_result = TURBO_EPROTO;
         owner_state.overflow_result = TURBO_EPROTO;
         owner_state.completion_result = TURBO_EPROTO;
-        check_int_eq(tr_raft_service_owner_start(owner), TURBO_OK);
-        check_int_eq(tr_raft_service_owner_execute_current(
+        check_equal(tr_raft_service_owner_start(owner), TURBO_OK);
+        check_equal(tr_raft_service_owner_execute_current(
                          owner, service_owner_command, "owner-command",
                          sizeof("owner-command")),
                      TURBO_EPROTO);
-        check_int_eq(coro_context_spawn(context, service_owner_driver,
+        check_equal(coro_context_spawn(context, service_owner_driver,
                                         &owner_state),
                      TURBO_OK);
         (void)coro_context_run(context, TURBO_RUN_DEFAULT);
 
-        check_int_eq(owner_state.submit_result, TURBO_OK);
-        check_int_eq(owner_state.overflow_result, TURBO_EBUSY);
-        check_int_eq(owner_state.completion_result, TURBO_OK);
+        check_equal(owner_state.submit_result, TURBO_OK);
+        check_equal(owner_state.overflow_result, TURBO_EBUSY);
+        check_equal(owner_state.completion_result, TURBO_OK);
         check(owner_state.completion_on_owner);
-        check_int_eq(tr_raft_service_owner_status(owner, &owner_status),
+        check_equal(tr_raft_service_owner_status(owner, &owner_status),
                      TURBO_OK);
         check(!owner_status.running);
         check(owner_status.stopping);
         check(!owner_status.faulted);
-        check_size_eq(owner_status.pending_commands, 0U);
-        check_long_eq(owner_status.completed_commands, 1U);
+        check_equal(owner_status.pending_commands, 0U);
+        check_equal(owner_status.completed_commands, 1U);
         check(owner_status.tick_count >= 3U);
-        check_int_eq(tr_raft_service_owner_close(owner), TURBO_OK);
+        check_equal(tr_raft_service_owner_close(owner), TURBO_OK);
         tr_raft_service_destroy(service);
         coro_context_destroy(context);
     }

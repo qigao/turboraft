@@ -145,26 +145,26 @@ spec("raft snapshot receiver")
         config.max_snapshot_bytes = 1024U;
         config.install = snapshot_capture_install;
         config.install_context = &capture;
-        check_int_eq(tr_raft_snapshot_receiver_create(&config, &receiver),
+        check_equal(tr_raft_snapshot_receiver_create(&config, &receiver),
                      TURBO_OK);
-        check_int_eq(tr_raft_snapshot_receiver_handle(receiver, &chunk,
+        check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
                                                        &result),
                      TURBO_OK);
         check(result.installed);
         check(result.ack.accepted);
-        check_long_eq(result.ack.next_offset, 3U);
-        check_int_eq(capture.calls, 1);
-        check_long_eq(capture.leader_term, 5U);
-        check_long_eq(capture.snapshot_index, 9U);
-        check_size_eq(capture.configuration.member_count, 1U);
-        check_mem_eq(capture.data, "abc", 3U);
-        check_int_eq(tr_raft_snapshot_receiver_handle(receiver, &chunk,
+        check_equal(result.ack.next_offset, 3U);
+        check_equal(capture.calls, 1);
+        check_equal(capture.leader_term, 5U);
+        check_equal(capture.snapshot_index, 9U);
+        check_equal(capture.configuration.member_count, 1U);
+        check_equal(capture.data, "abc", 3U);
+        check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
                                                        &result),
                      TURBO_OK);
         check(!result.installed);
         check(result.ack.accepted);
-        check_long_eq(result.ack.next_offset, 3U);
-        check_int_eq(capture.calls, 1);
+        check_equal(result.ack.next_offset, 3U);
+        check_equal(capture.calls, 1);
         tr_raft_snapshot_receiver_destroy(receiver);
     }
 
@@ -183,14 +183,14 @@ spec("raft snapshot receiver")
         config.install = snapshot_capture_install;
         config.install_context = &capture;
         chunk.snapshot_digest[0] ^= 0xffU;
-        check_int_eq(tr_raft_snapshot_receiver_create(&config, &receiver),
+        check_equal(tr_raft_snapshot_receiver_create(&config, &receiver),
                      TURBO_OK);
-        check_int_eq(tr_raft_snapshot_receiver_handle(receiver, &chunk,
+        check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
                                                        &result),
                      TURBO_EPROTO);
         check(!result.installed);
         check(!result.ack.accepted);
-        check_int_eq(capture.calls, 0);
+        check_equal(capture.calls, 0);
         tr_raft_snapshot_receiver_destroy(receiver);
     }
 
@@ -216,7 +216,7 @@ spec("raft snapshot receiver")
         config.stream.commit = snapshot_stream_commit;
         config.stream.abort = snapshot_stream_abort;
         config.stream.context = &capture;
-        check_int_eq(tr_raft_snapshot_receiver_create(&config, &receiver),
+        check_equal(tr_raft_snapshot_receiver_create(&config, &receiver),
                      TURBO_OK);
 
         memset(&chunk, 0, sizeof(chunk));
@@ -235,20 +235,20 @@ spec("raft snapshot receiver")
         memcpy(chunk.snapshot_digest, digest, sizeof(digest));
         chunk.data = (const uint8_t *)"abc";
         chunk.data_length = 3U;
-        check_int_eq(tr_raft_snapshot_receiver_handle(receiver, &chunk,
+        check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
                                                        &result), TURBO_OK);
         check(!result.installed);
         chunk.snapshot_offset = 3U;
         chunk.has_configuration = false;
         chunk.data = (const uint8_t *)"def";
         chunk.done = true;
-        check_int_eq(tr_raft_snapshot_receiver_handle(receiver, &chunk,
+        check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
                                                        &result), TURBO_OK);
         check(result.installed);
         check(capture.begun);
         check(capture.committed);
         check(!capture.aborted);
-        check_mem_eq(capture.data, "abcdef", 6U);
+        check_equal(capture.data, "abcdef", 6U);
         tr_raft_snapshot_receiver_destroy(receiver);
     }
 }

@@ -93,16 +93,16 @@ spec("TurboRaft text syntax") {
     tr_text_query_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_query_parse(input, strlen(input), NULL, &plan,
+    check_equal(tr_text_query_parse(input, strlen(input), NULL, &plan,
                                      &diagnostic),
                  TURBO_OK);
-    check_size_eq(plan.command_count, 4u);
-    check_int_eq(plan.commands[0].kind, TR_TEXT_QUERY_SHOW_STATUS);
-    check_int_eq(plan.commands[1].kind, TR_TEXT_QUERY_SHOW_MEMBERS);
-    check_int_eq(plan.commands[1].role, TR_TEXT_QUERY_ROLE_ANY);
-    check_int_eq(plan.commands[2].role, TR_TEXT_QUERY_ROLE_VOTER);
-    check_int_eq(plan.commands[3].kind, TR_TEXT_QUERY_SHOW_PROGRESS);
-    check_long_eq(plan.commands[3].node_id, 2u);
+    check_equal(plan.command_count, 4u);
+    check_equal(plan.commands[0].kind, TR_TEXT_QUERY_SHOW_STATUS);
+    check_equal(plan.commands[1].kind, TR_TEXT_QUERY_SHOW_MEMBERS);
+    check_equal(plan.commands[1].role, TR_TEXT_QUERY_ROLE_ANY);
+    check_equal(plan.commands[2].role, TR_TEXT_QUERY_ROLE_VOTER);
+    check_equal(plan.commands[3].kind, TR_TEXT_QUERY_SHOW_PROGRESS);
+    check_equal(plan.commands[3].node_id, 2u);
   }
 
   it("parses protocol debug frames without touching Raft state") {
@@ -118,16 +118,16 @@ spec("TurboRaft text syntax") {
     tr_text_protocol_debug_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_protocol_debug_parse(input, strlen(input), NULL,
+    check_equal(tr_text_protocol_debug_parse(input, strlen(input), NULL,
                                                &plan, &diagnostic),
                  TURBO_OK);
-    check_size_eq(plan.frame_count, 1u);
-    check_long_eq(plan.frames[0].version, 3u);
-    check_long_eq(plan.frames[0].from, 1u);
-    check_long_eq(plan.frames[0].to, 2u);
-    check_mem_eq(plan.frames[0].message.data, "append_request",
+    check_equal(plan.frame_count, 1u);
+    check_equal(plan.frames[0].version, 3u);
+    check_equal(plan.frames[0].from, 1u);
+    check_equal(plan.frames[0].to, 2u);
+    check_equal(plan.frames[0].message.data, "append_request",
                  plan.frames[0].message.len);
-    check_mem_eq(plan.frames[0].payload_hex.data, "0x0102a0ff",
+    check_equal(plan.frames[0].payload_hex.data, "0x0102a0ff",
                  plan.frames[0].payload_hex.len);
   }
 
@@ -142,11 +142,11 @@ spec("TurboRaft text syntax") {
     tr_text_protocol_debug_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_protocol_debug_parse(input, strlen(input), NULL,
+    check_equal(tr_text_protocol_debug_parse(input, strlen(input), NULL,
                                                &plan, &diagnostic),
                  TURBO_OK);
-    check_size_eq(plan.frame_count, 1u);
-    check_size_eq(plan.frames[0].payload_hex.len, 0u);
+    check_equal(plan.frame_count, 1u);
+    check_equal(plan.frames[0].payload_hex.len, 0u);
   }
 
   it("rejects protocol payloads with an odd hex digit count") {
@@ -161,11 +161,11 @@ spec("TurboRaft text syntax") {
     tr_text_protocol_debug_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_protocol_debug_parse(input, strlen(input), NULL,
+    check_equal(tr_text_protocol_debug_parse(input, strlen(input), NULL,
                                                &plan, &diagnostic),
                  TURBO_EPROTO);
-    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
-    check_size_eq(plan.frame_count, 0u);
+    check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
+    check_equal(plan.frame_count, 0u);
   }
 
   it("rejects duplicate protocol frame fields") {
@@ -180,11 +180,11 @@ spec("TurboRaft text syntax") {
     tr_text_protocol_debug_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_protocol_debug_parse(input, strlen(input), NULL,
+    check_equal(tr_text_protocol_debug_parse(input, strlen(input), NULL,
                                                &plan, &diagnostic),
                  TURBO_EPROTO);
-    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
-    check_size_eq(plan.frame_count, 0u);
+    check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
+    check_equal(plan.frame_count, 0u);
   }
 
   it("rejects a query without a statement terminator") {
@@ -192,11 +192,11 @@ spec("TurboRaft text syntax") {
     tr_text_query_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_query_parse(input, strlen(input), NULL, &plan,
+    check_equal(tr_text_query_parse(input, strlen(input), NULL, &plan,
                                      &diagnostic),
                  TURBO_EPROTO);
-    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SYNTAX);
-    check_size_eq(plan.command_count, 0u);
+    check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SYNTAX);
+    check_equal(plan.command_count, 0u);
   }
 
   it("rejects protocol frames missing required fields") {
@@ -209,11 +209,11 @@ spec("TurboRaft text syntax") {
     tr_text_protocol_debug_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_protocol_debug_parse(input, strlen(input), NULL,
+    check_equal(tr_text_protocol_debug_parse(input, strlen(input), NULL,
                                                &plan, &diagnostic),
                  TURBO_EPROTO);
-    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
-    check_size_eq(plan.frame_count, 0u);
+    check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
+    check_equal(plan.frame_count, 0u);
   }
 
   it("enforces the configured statement limit") {
@@ -222,11 +222,11 @@ spec("TurboRaft text syntax") {
     tr_text_query_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_query_parse(input, strlen(input), &options, &plan,
+    check_equal(tr_text_query_parse(input, strlen(input), &options, &plan,
                                      &diagnostic),
                  TURBO_ENOSPC);
-    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
-    check_size_eq(plan.command_count, 0u);
+    check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
+    check_equal(plan.command_count, 0u);
   }
 
   it("enforces the configured input limit") {
@@ -235,11 +235,11 @@ spec("TurboRaft text syntax") {
     tr_text_query_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_query_parse(input, strlen(input), &options, &plan,
+    check_equal(tr_text_query_parse(input, strlen(input), &options, &plan,
                                      &diagnostic),
                  TURBO_ENOSPC);
-    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
-    check_size_eq(plan.command_count, 0u);
+    check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
+    check_equal(plan.command_count, 0u);
   }
 
   it("parses replay actions and reports syntax locations") {
@@ -255,21 +255,21 @@ spec("TurboRaft text syntax") {
     tr_text_replay_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_replay_parse(input, strlen(input), NULL, &plan,
+    check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
                  TURBO_OK);
-    check_size_eq(plan.action_count, 7u);
-    check_int_eq(plan.actions[3].kind, TR_TEXT_REPLAY_SEND);
-    check_long_eq(plan.actions[3].node_id, 1u);
-    check_long_eq(plan.actions[3].peer_id, 2u);
-    check_int_eq(plan.actions[6].comparison, TR_TEXT_REPLAY_COMPARE_GE);
+    check_equal(plan.action_count, 7u);
+    check_equal(plan.actions[3].kind, TR_TEXT_REPLAY_SEND);
+    check_equal(plan.actions[3].node_id, 1u);
+    check_equal(plan.actions[3].peer_id, 2u);
+    check_equal(plan.actions[6].comparison, TR_TEXT_REPLAY_COMPARE_GE);
 
-    check_int_eq(tr_text_replay_parse("tick ;", 6u, NULL, &plan,
+    check_equal(tr_text_replay_parse("tick ;", 6u, NULL, &plan,
                                       &diagnostic),
                  TURBO_EPROTO);
-    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SYNTAX);
-    check_size_eq(diagnostic.line, 1u);
-    check_size_eq(diagnostic.column, 6u);
+    check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SYNTAX);
+    check_equal(diagnostic.line, 1u);
+    check_equal(diagnostic.column, 6u);
   }
 
   it("parses replay fault injection actions") {
@@ -281,26 +281,26 @@ spec("TurboRaft text syntax") {
     tr_text_replay_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_replay_parse(input, strlen(input), NULL, &plan,
+    check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
                  TURBO_OK);
-    check_size_eq(plan.action_count, 4u);
+    check_equal(plan.action_count, 4u);
 
-    check_int_eq(plan.actions[0].kind, TR_TEXT_REPLAY_PARTITION);
-    check_long_eq(plan.actions[0].node_id, 1u);
-    check_long_eq(plan.actions[0].peer_id, 2u);
+    check_equal(plan.actions[0].kind, TR_TEXT_REPLAY_PARTITION);
+    check_equal(plan.actions[0].node_id, 1u);
+    check_equal(plan.actions[0].peer_id, 2u);
 
-    check_int_eq(plan.actions[1].kind, TR_TEXT_REPLAY_HEAL);
-    check_long_eq(plan.actions[1].node_id, 1u);
-    check_long_eq(plan.actions[1].peer_id, 2u);
+    check_equal(plan.actions[1].kind, TR_TEXT_REPLAY_HEAL);
+    check_equal(plan.actions[1].node_id, 1u);
+    check_equal(plan.actions[1].peer_id, 2u);
 
-    check_int_eq(plan.actions[2].kind, TR_TEXT_REPLAY_DELAY_NEXT);
-    check_mem_eq(plan.actions[2].name.data, "append_request",
+    check_equal(plan.actions[2].kind, TR_TEXT_REPLAY_DELAY_NEXT);
+    check_equal(plan.actions[2].name.data, "append_request",
                  plan.actions[2].name.len);
-    check_long_eq(plan.actions[2].value, 3u);
+    check_equal(plan.actions[2].value, 3u);
 
-    check_int_eq(plan.actions[3].kind, TR_TEXT_REPLAY_DUPLICATE_NEXT);
-    check_mem_eq(plan.actions[3].name.data, "append_request",
+    check_equal(plan.actions[3].kind, TR_TEXT_REPLAY_DUPLICATE_NEXT);
+    check_equal(plan.actions[3].name.data, "append_request",
                  plan.actions[3].name.len);
   }
 
@@ -312,24 +312,24 @@ spec("TurboRaft text syntax") {
     tr_text_replay_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_replay_parse(input, strlen(input), NULL, &plan,
+    check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
                  TURBO_OK);
-    check_size_eq(plan.action_count, 2u);
+    check_equal(plan.action_count, 2u);
 
-    check_int_eq(plan.actions[0].kind, TR_TEXT_REPLAY_SUBMIT);
-    check_long_eq(plan.actions[0].request_id, 3u);
-    check_long_eq(plan.actions[0].node_id, 1u);
-    check_long_eq(plan.actions[0].client_id, 7u);
-    check_long_eq(plan.actions[0].sequence, 9u);
-    check_mem_eq(plan.actions[0].payload_hex.data, "0x0102a0ff",
+    check_equal(plan.actions[0].kind, TR_TEXT_REPLAY_SUBMIT);
+    check_equal(plan.actions[0].request_id, 3u);
+    check_equal(plan.actions[0].node_id, 1u);
+    check_equal(plan.actions[0].client_id, 7u);
+    check_equal(plan.actions[0].sequence, 9u);
+    check_equal(plan.actions[0].payload_hex.data, "0x0102a0ff",
                  plan.actions[0].payload_hex.len);
 
-    check_int_eq(plan.actions[1].kind, TR_TEXT_REPLAY_POLL);
-    check_long_eq(plan.actions[1].request_id, 3u);
-    check_int_eq(plan.actions[1].poll_target,
+    check_equal(plan.actions[1].kind, TR_TEXT_REPLAY_POLL);
+    check_equal(plan.actions[1].request_id, 3u);
+    check_equal(plan.actions[1].poll_target,
                  TR_TEXT_REPLAY_POLL_COMMITTED);
-    check_long_eq(plan.actions[1].timeout_ticks, 20u);
+    check_equal(plan.actions[1].timeout_ticks, 20u);
   }
 
   it("rejects replay submit payloads with an odd hex digit count") {
@@ -338,11 +338,11 @@ spec("TurboRaft text syntax") {
     tr_text_replay_plan_t plan;
     tr_text_diagnostic_t diagnostic;
 
-    check_int_eq(tr_text_replay_parse(input, strlen(input), NULL, &plan,
+    check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
                  TURBO_EPROTO);
-    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
-    check_size_eq(plan.action_count, 0u);
+    check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
+    check_equal(plan.action_count, 0u);
   }
 
   it("executes submit and poll with decoded payload and no implicit tick") {
@@ -355,26 +355,26 @@ spec("TurboRaft text syntax") {
     tr_text_replay_executor_test_state_t state = {0};
     const uint8_t expected_payload[] = {0x01u, 0x02u, 0xa0u, 0xffu};
 
-    check_int_eq(tr_text_replay_parse(input, strlen(input), NULL, &plan,
+    check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
                  TURBO_OK);
-    check_int_eq(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
+    check_equal(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
                                         &state),
                  TURBO_OK);
-    check_int_eq(state.submit_calls, 1);
-    check_long_eq(state.submit_request_id, 3u);
-    check_long_eq(state.submit_node_id, 1u);
-    check_long_eq(state.submit_client_id, 7u);
-    check_long_eq(state.submit_sequence, 9u);
-    check_size_eq(state.payload_size, sizeof(expected_payload));
-    check_mem_eq(state.payload, expected_payload, sizeof(expected_payload));
-    check_int_eq(state.poll_calls, 1);
-    check_long_eq(state.poll_request_id, 3u);
-    check_long_eq(state.poll_term, 11u);
-    check_long_eq(state.poll_index, 101u);
-    check_long_eq(state.poll_timeout_ticks, 20u);
-    check_int_eq(state.poll_target, TR_TEXT_REPLAY_POLL_COMMITTED);
-    check_int_eq(state.tick_calls, 0);
+    check_equal(state.submit_calls, 1);
+    check_equal(state.submit_request_id, 3u);
+    check_equal(state.submit_node_id, 1u);
+    check_equal(state.submit_client_id, 7u);
+    check_equal(state.submit_sequence, 9u);
+    check_equal(state.payload_size, sizeof(expected_payload));
+    check_equal(state.payload, expected_payload, sizeof(expected_payload));
+    check_equal(state.poll_calls, 1);
+    check_equal(state.poll_request_id, 3u);
+    check_equal(state.poll_term, 11u);
+    check_equal(state.poll_index, 101u);
+    check_equal(state.poll_timeout_ticks, 20u);
+    check_equal(state.poll_target, TR_TEXT_REPLAY_POLL_COMMITTED);
+    check_equal(state.tick_calls, 0);
   }
 
   it("rejects duplicate and unknown replay request ids") {
@@ -387,23 +387,23 @@ spec("TurboRaft text syntax") {
     tr_text_diagnostic_t diagnostic;
     tr_text_replay_executor_test_state_t state = {0};
 
-    check_int_eq(tr_text_replay_parse(duplicate_input,
+    check_equal(tr_text_replay_parse(duplicate_input,
                                       strlen(duplicate_input), NULL, &plan,
                                       &diagnostic),
                  TURBO_OK);
-    check_int_eq(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
+    check_equal(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
                                         &state),
                  TURBO_EALREADY);
-    check_int_eq(state.submit_calls, 1);
+    check_equal(state.submit_calls, 1);
 
     memset(&state, 0, sizeof(state));
-    check_int_eq(tr_text_replay_parse(unknown_input, strlen(unknown_input),
+    check_equal(tr_text_replay_parse(unknown_input, strlen(unknown_input),
                                       NULL, &plan, &diagnostic),
                  TURBO_OK);
-    check_int_eq(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
+    check_equal(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
                                         &state),
                  TURBO_ENOENT);
-    check_int_eq(state.poll_calls, 0);
+    check_equal(state.poll_calls, 0);
   }
 
   it("stops the replay at the first callback failure") {
@@ -415,14 +415,14 @@ spec("TurboRaft text syntax") {
     tr_text_replay_executor_test_state_t state = {
         .submit_result = TURBO_EIO};
 
-    check_int_eq(tr_text_replay_parse(input, strlen(input), NULL, &plan,
+    check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
                  TURBO_OK);
-    check_int_eq(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
+    check_equal(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
                                         &state),
                  TURBO_EIO);
-    check_int_eq(state.submit_calls, 1);
-    check_int_eq(state.tick_calls, 0);
+    check_equal(state.submit_calls, 1);
+    check_equal(state.tick_calls, 0);
   }
 
   it("rejects replay payloads larger than a Raft entry") {
@@ -447,10 +447,10 @@ spec("TurboRaft text syntax") {
     plan.actions[0].payload_hex.data = payload;
     plan.actions[0].payload_hex.len = strlen(payload);
 
-    check_int_eq(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
+    check_equal(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
                                         &state),
                  TURBO_ENOSPC);
-    check_int_eq(state.submit_calls, 0);
+    check_equal(state.submit_calls, 0);
   }
 
   it("rejects replay submit payloads larger than a Raft entry at parse") {
@@ -473,11 +473,11 @@ spec("TurboRaft text syntax") {
     input[offset++] = ';';
     input[offset] = '\0';
 
-    check_int_eq(tr_text_replay_parse(input, offset, NULL, &plan,
+    check_equal(tr_text_replay_parse(input, offset, NULL, &plan,
                                       &diagnostic),
                  TURBO_ENOSPC);
-    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
-    check_size_eq(plan.action_count, 0u);
+    check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
+    check_equal(plan.action_count, 0u);
   }
 
   it("accepts replay submit payloads of exactly one Raft entry") {
@@ -500,11 +500,11 @@ spec("TurboRaft text syntax") {
     input[offset++] = ';';
     input[offset] = '\0';
 
-    check_int_eq(tr_text_replay_parse(input, offset, NULL, &plan,
+    check_equal(tr_text_replay_parse(input, offset, NULL, &plan,
                                       &diagnostic),
                  TURBO_OK);
-    check_size_eq(plan.action_count, 1u);
-    check_size_eq(plan.actions[0].payload_hex.len,
+    check_equal(plan.action_count, 1u);
+    check_equal(plan.actions[0].payload_hex.len,
                   2u + PAYLOAD_BYTES * 2u);
   }
 
@@ -533,11 +533,11 @@ spec("TurboRaft text syntax") {
     offset += (size_t)snprintf(input + offset, sizeof(input) - offset,
                                ";\n}");
 
-    check_int_eq(tr_text_protocol_debug_parse(input, offset, NULL, &plan,
+    check_equal(tr_text_protocol_debug_parse(input, offset, NULL, &plan,
                                               &diagnostic),
                  TURBO_ENOSPC);
-    check_int_eq(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
-    check_size_eq(plan.frame_count, 0u);
+    check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
+    check_equal(plan.frame_count, 0u);
   }
 
   it("accepts protocol frame payloads of exactly the wire frame limit") {
@@ -565,11 +565,11 @@ spec("TurboRaft text syntax") {
     offset += (size_t)snprintf(input + offset, sizeof(input) - offset,
                                ";\n}");
 
-    check_int_eq(tr_text_protocol_debug_parse(input, offset, NULL, &plan,
+    check_equal(tr_text_protocol_debug_parse(input, offset, NULL, &plan,
                                               &diagnostic),
                  TURBO_OK);
-    check_size_eq(plan.frame_count, 1u);
-    check_size_eq(plan.frames[0].payload_hex.len,
+    check_equal(plan.frame_count, 1u);
+    check_equal(plan.frames[0].payload_hex.len,
                   2u + PAYLOAD_BYTES * 2u);
   }
 }

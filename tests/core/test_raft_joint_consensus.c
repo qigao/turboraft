@@ -32,14 +32,14 @@ static tr_raft_core_t *joint_single_node_leader(void)
     config.election_max_ticks = 10U;
     config.initial_election_timeout_ticks = 5U;
     config.max_log_entries = 16U;
-    check_int_eq(tr_raft_core_create(&config, &core), TURBO_OK);
+    check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
 
     tick.elapsed_ticks = 5U;
     tick.next_election_timeout_ticks = 6U;
     joint_ready(&ready, messages, TR_RAFT_MAX_MEMBERS);
-    check_int_eq(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
-    check_int_eq(ready.role, TR_RAFT_LEADER);
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+    check_equal(ready.role, TR_RAFT_LEADER);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
     return core;
 }
 
@@ -61,17 +61,17 @@ spec("raft joint consensus")
         change.voters = target_voters;
         change.voter_count = 2U;
         joint_ready(&ready, messages, TR_RAFT_MAX_MEMBERS);
-        check_int_eq(tr_raft_core_change_membership(core, &change, &ready),
+        check_equal(tr_raft_core_change_membership(core, &change, &ready),
                      TURBO_OK);
         check(ready.log_changed);
         check(ready.commit_changed);
-        check_long_eq(ready.commit_index, 1U);
-        check_size_eq(ready.message_count, 1U);
-        check_long_eq(ready.messages[0].to, 2U);
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(ready.commit_index, 1U);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].to, 2U);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
         check(status.joint_configuration);
-        check_size_eq(status.peer_count, 2U);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(status.peer_count, 2U);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
 
         memset(&response, 0, sizeof(response));
         response.type = TR_RAFT_MSG_APPEND_RESPONSE;
@@ -82,29 +82,29 @@ spec("raft joint consensus")
         response.previous_log_index = 0U;
         response.match_index = 1U;
         joint_ready(&ready, messages, TR_RAFT_MAX_MEMBERS);
-        check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
 
         tick.elapsed_ticks = 1U;
         tick.next_election_timeout_ticks = 6U;
         joint_ready(&ready, messages, TR_RAFT_MAX_MEMBERS);
-        check_int_eq(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
         check(ready.log_changed);
         check(!ready.commit_changed);
-        check_size_eq(ready.message_count, 1U);
-        check_long_eq(ready.messages[0].entry.index, 2U);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].entry.index, 2U);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
 
         response.previous_log_index = 1U;
         response.match_index = 2U;
         joint_ready(&ready, messages, TR_RAFT_MAX_MEMBERS);
-        check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
         check(ready.commit_changed);
-        check_long_eq(ready.commit_index, 2U);
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(ready.commit_index, 2U);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
         check(!status.joint_configuration);
-        check_size_eq(status.pending_configuration_count, 0U);
-        check_size_eq(status.voter_count, 2U);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(status.pending_configuration_count, 0U);
+        check_equal(status.voter_count, 2U);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
         tr_raft_core_destroy(core);
     }
 }

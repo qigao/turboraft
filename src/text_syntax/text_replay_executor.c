@@ -25,7 +25,7 @@ static int tr_text_replay_hex_value(char value)
 }
 
 static int tr_text_replay_decode_payload(
-    tstr_v payload,
+    vstr payload,
     uint8_t *output,
     size_t output_capacity,
     size_t *output_size)

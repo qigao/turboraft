@@ -71,15 +71,15 @@ suite("text query executor") {
     plan.commands[2].kind = TR_TEXT_QUERY_SHOW_PROGRESS;
     plan.commands[2].node_id = 7u;
 
-    check_int_eq(tr_text_query_execute(
+    check_equal(tr_text_query_execute(
                      &plan, &tr_text_query_executor_test_ops, &state),
                  TURBO_OK);
-    check_int_eq(state.calls, 3);
-    check_int_eq(state.status_calls, 1);
-    check_int_eq(state.members_calls, 1);
-    check_int_eq(state.progress_calls, 1);
-    check_int_eq(state.members_role, TR_TEXT_QUERY_ROLE_LEARNER);
-    check_long_eq(state.progress_node_id, 7u);
+    check_equal(state.calls, 3);
+    check_equal(state.status_calls, 1);
+    check_equal(state.members_calls, 1);
+    check_equal(state.progress_calls, 1);
+    check_equal(state.members_role, TR_TEXT_QUERY_ROLE_LEARNER);
+    check_equal(state.progress_node_id, 7u);
   }
 
   it("rejects a command without a runtime callback") {
@@ -89,7 +89,7 @@ suite("text query executor") {
     plan.command_count = 1u;
     plan.commands[0].kind = TR_TEXT_QUERY_SHOW_PROGRESS;
 
-    check_int_eq(tr_text_query_execute(&plan, &ops, NULL), TURBO_ENOTSUP);
+    check_equal(tr_text_query_execute(&plan, &ops, NULL), TURBO_ENOTSUP);
   }
 
   it("stops after the first callback error") {
@@ -101,12 +101,12 @@ suite("text query executor") {
     plan.commands[0].kind = TR_TEXT_QUERY_SHOW_STATUS;
     plan.commands[1].kind = TR_TEXT_QUERY_SHOW_MEMBERS;
 
-    check_int_eq(tr_text_query_execute(
+    check_equal(tr_text_query_execute(
                      &plan, &tr_text_query_executor_test_ops, &state),
                  TURBO_EIO);
-    check_int_eq(state.calls, 1);
-    check_int_eq(state.status_calls, 1);
-    check_int_eq(state.members_calls, 0);
+    check_equal(state.calls, 1);
+    check_equal(state.status_calls, 1);
+    check_equal(state.members_calls, 0);
   }
 
   it("rejects an over-capacity manually constructed plan") {
@@ -115,9 +115,9 @@ suite("text query executor") {
 
     plan.command_count = TR_TEXT_MAX_STATEMENTS + 1u;
 
-    check_int_eq(tr_text_query_execute(
+    check_equal(tr_text_query_execute(
                      &plan, &tr_text_query_executor_test_ops, &state),
                  TURBO_EINVAL);
-    check_int_eq(state.calls, 0);
+    check_equal(state.calls, 0);
   }
 }

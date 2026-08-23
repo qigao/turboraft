@@ -1,4 +1,5 @@
 #include "raft_log.h"
+#include "../turboraft_stl_status.h"
 
 #include <turbo_error.h>
 
@@ -63,13 +64,15 @@ int tr_raft_log_init(tr_raft_log_t *log,
     }
 
     memset(log, 0, sizeof(*log));
-    result = tr_raft_log_entry_vec_t_init(&log->entries);
+    result = tr_raft_stl_status_to_error(vec_init_bytes(
+        &log->entries, sizeof(tr_raft_log_entry_t),
+        _Alignof(tr_raft_log_entry_t), max_entries));
     if (result != TURBO_OK) {
         return result;
     }
-    result = tr_raft_log_entry_vec_t_reserve(&log->entries, max_entries);
+    result = tr_raft_stl_status_to_error(vec_reserve(&log->entries, max_entries));
     if (result != TURBO_OK) {
-        tr_raft_log_entry_vec_t_destroy(&log->entries);
+        vec_destroy(&log->entries);
         memset(log, 0, sizeof(*log));
         return result;
     }
@@ -84,13 +87,13 @@ void tr_raft_log_destroy(tr_raft_log_t *log)
     if (log == NULL) {
         return;
     }
-    tr_raft_log_entry_vec_t_destroy(&log->entries);
+    vec_destroy(&log->entries);
     memset(log, 0, sizeof(*log));
 }
 
 size_t tr_raft_log_count(const tr_raft_log_t *log)
 {
-    return log == NULL ? 0U : tr_raft_log_entry_vec_t_size(&log->entries);
+    return log == NULL ? 0U : vec_size(&log->entries);
 }
 
 tr_raft_log_index_t tr_raft_log_last_index(const tr_raft_log_t *log)
@@ -105,7 +108,7 @@ tr_raft_log_term_t tr_raft_log_last_term(const tr_raft_log_t *log)
     if (log == NULL || tr_raft_log_count(log) == 0U) {
         return log == NULL ? 0U : log->base_term;
     }
-    entry = tr_raft_log_entry_vec_t_at_const(
+    entry = (const tr_raft_log_entry_t *)vec_at_const(
         &log->entries, tr_raft_log_count(log) - 1U);
     return entry->term;
 }
@@ -120,7 +123,8 @@ const tr_raft_log_entry_t *tr_raft_log_get(const tr_raft_log_t *log,
         return NULL;
     }
     offset = index - log->base_index - 1U;
-    return tr_raft_log_entry_vec_t_at_const(&log->entries, (size_t) offset);
+    return (const tr_raft_log_entry_t *)vec_at_const(
+        &log->entries, (size_t)offset);
 }
 
 bool tr_raft_log_matches(const tr_raft_log_t *log,
@@ -158,12 +162,12 @@ int tr_raft_log_compact(tr_raft_log_t *log,
 
     removed_count = (size_t) (index - log->base_index);
     retained_count = tr_raft_log_count(log) - removed_count;
-    entries = tr_raft_log_entry_vec_t_at(&log->entries, 0U);
+    entries = (tr_raft_log_entry_t *)vec_at(&log->entries, 0U);
     if (retained_count != 0U) {
         memmove(entries, entries + removed_count,
                 retained_count * sizeof(*entries));
     }
-    result = turbo_vec_resize(&log->entries.raw, retained_count);
+    result = tr_raft_stl_status_to_error(vec_resize(&log->entries, retained_count));
     if (result != TURBO_OK) {
         return result;
     }
@@ -200,7 +204,7 @@ int tr_raft_log_append_local(tr_raft_log_t *log,
         memcpy(entry.data, data, data_length);
     }
 
-    result = tr_raft_log_entry_vec_t_push(&log->entries, entry);
+    result = tr_raft_stl_status_to_error(vec_push(&log->entries, &entry));
     if (result != TURBO_OK) {
         return result;
     }
@@ -230,7 +234,7 @@ int tr_raft_log_append_configuration(
     if (result != TURBO_OK) {
         return result;
     }
-    result = tr_raft_log_entry_vec_t_push(&log->entries, entry);
+    result = tr_raft_stl_status_to_error(vec_push(&log->entries, &entry));
     if (result != TURBO_OK) {
         return result;
     }
@@ -312,12 +316,13 @@ int tr_raft_log_reconcile(tr_raft_log_t *log,
     }
     final_count = retained_count + incoming_count - first_change;
 
-    resize_result = turbo_vec_resize(&log->entries.raw, final_count);
+    resize_result = tr_raft_stl_status_to_error(
+        vec_resize(&log->entries, final_count));
     if (resize_result != TURBO_OK) {
         return resize_result;
     }
     for (index = first_change; index < incoming_count; ++index) {
-        tr_raft_log_entry_t *destination = tr_raft_log_entry_vec_t_at(
+        tr_raft_log_entry_t *destination = (tr_raft_log_entry_t *)vec_at(
             &log->entries,
             (size_t) (incoming[index].index - log->base_index - 1U));
 

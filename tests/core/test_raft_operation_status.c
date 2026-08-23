@@ -48,39 +48,39 @@ spec("raft operation receipt status")
         entries[1].command_id = 11U;
         config = operation_test_config(voters, entries);
 
-        check_int_eq(tr_raft_core_create(&config, &core), TURBO_OK);
+        check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
 
-        check_int_eq(tr_raft_core_operation_status(core, 3U, 7U, &status),
+        check_equal(tr_raft_core_operation_status(core, 3U, 7U, &status),
                      TURBO_OK);
-        check_int_eq(status.state, TR_RAFT_OPERATION_PENDING);
-        check_long_eq(status.commit_index, 6U);
-        check_long_eq(status.applied_index, 5U);
+        check_equal(status.state, TR_RAFT_OPERATION_PENDING);
+        check_equal(status.commit_index, 6U);
+        check_equal(status.applied_index, 5U);
 
-        check_int_eq(tr_raft_core_operation_status(core, 3U, 6U, &status),
+        check_equal(tr_raft_core_operation_status(core, 3U, 6U, &status),
                      TURBO_OK);
-        check_int_eq(status.state, TR_RAFT_OPERATION_COMMITTED);
+        check_equal(status.state, TR_RAFT_OPERATION_COMMITTED);
 
-        check_int_eq(tr_raft_core_operation_status(core, 2U, 5U, &status),
+        check_equal(tr_raft_core_operation_status(core, 2U, 5U, &status),
                      TURBO_OK);
-        check_int_eq(status.state, TR_RAFT_OPERATION_APPLIED);
+        check_equal(status.state, TR_RAFT_OPERATION_APPLIED);
 
-        check_int_eq(tr_raft_core_operation_status(core, 1U, 4U, &status),
+        check_equal(tr_raft_core_operation_status(core, 1U, 4U, &status),
                      TURBO_OK);
-        check_int_eq(status.state, TR_RAFT_OPERATION_EXPIRED);
+        check_equal(status.state, TR_RAFT_OPERATION_EXPIRED);
 
-        check_int_eq(tr_raft_core_operation_status(core, 2U, 6U, &status),
+        check_equal(tr_raft_core_operation_status(core, 2U, 6U, &status),
                      TURBO_OK);
-        check_int_eq(status.state, TR_RAFT_OPERATION_LOST);
+        check_equal(status.state, TR_RAFT_OPERATION_LOST);
 
-        check_int_eq(tr_raft_core_operation_status(core, 3U, 8U, &status),
+        check_equal(tr_raft_core_operation_status(core, 3U, 8U, &status),
                      TURBO_OK);
-        check_int_eq(status.state, TR_RAFT_OPERATION_LOST);
+        check_equal(status.state, TR_RAFT_OPERATION_LOST);
 
-        check_int_eq(tr_raft_core_operation_status(core, 4U, 8U, &status),
+        check_equal(tr_raft_core_operation_status(core, 4U, 8U, &status),
                      TURBO_EINVAL);
-        check_int_eq(tr_raft_core_operation_status(core, 0U, 1U, &status),
+        check_equal(tr_raft_core_operation_status(core, 0U, 1U, &status),
                      TURBO_EINVAL);
-        check_int_eq(tr_raft_core_operation_status(core, 1U, 0U, &status),
+        check_equal(tr_raft_core_operation_status(core, 1U, 0U, &status),
                      TURBO_EINVAL);
 
         tr_raft_core_destroy(core);

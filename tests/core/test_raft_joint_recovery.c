@@ -15,18 +15,18 @@ static void joint_recovery_entries(tr_raft_entry_t entries[2])
     tr_raft_membership_t joint;
     tr_raft_membership_t final_membership;
 
-    check_int_eq(tr_raft_membership_transition_init(
+    check_equal(tr_raft_membership_transition_init(
                      &transition, voters, 1U, NULL, 0U),
                  TURBO_OK);
-    check_int_eq(tr_raft_membership_transition_propose(
+    check_equal(tr_raft_membership_transition_propose(
                      &transition, target_voters, 2U, NULL, 0U, 201U,
                      &joint),
                  TURBO_OK);
-    check_int_eq(tr_raft_membership_final(&joint, &final_membership),
+    check_equal(tr_raft_membership_final(&joint, &final_membership),
                  TURBO_OK);
-    check_int_eq(tr_raft_conf_entry_encode(&joint, 1U, 1U, &entries[0]),
+    check_equal(tr_raft_conf_entry_encode(&joint, 1U, 1U, &entries[0]),
                  TURBO_OK);
-    check_int_eq(tr_raft_conf_entry_encode(
+    check_equal(tr_raft_conf_entry_encode(
                      &final_membership, 2U, 1U, &entries[1]),
                  TURBO_OK);
 }
@@ -64,13 +64,13 @@ spec("raft joint recovery")
         tr_raft_status_t status;
 
         joint_recovery_entries(entries);
-        check_int_eq(joint_recovery_core(entries, 2U, 2U, &core), TURBO_OK);
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(joint_recovery_core(entries, 2U, 2U, &core), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
         check(!status.joint_configuration);
-        check_long_eq(status.membership_transition_id, 201U);
-        check_size_eq(status.voter_count, 2U);
-        check_size_eq(status.pending_configuration_count, 0U);
-        check_size_eq(status.peer_count, 2U);
+        check_equal(status.membership_transition_id, 201U);
+        check_equal(status.voter_count, 2U);
+        check_equal(status.pending_configuration_count, 0U);
+        check_equal(status.peer_count, 2U);
         tr_raft_core_destroy(core);
     }
 
@@ -81,11 +81,11 @@ spec("raft joint recovery")
         tr_raft_status_t status;
 
         joint_recovery_entries(entries);
-        check_int_eq(joint_recovery_core(entries, 2U, 1U, &core), TURBO_OK);
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(joint_recovery_core(entries, 2U, 1U, &core), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
         check(status.joint_configuration);
-        check_size_eq(status.pending_configuration_count, 1U);
-        check_size_eq(status.peer_count, 2U);
+        check_equal(status.pending_configuration_count, 1U);
+        check_equal(status.peer_count, 2U);
         tr_raft_core_destroy(core);
     }
 
@@ -103,9 +103,9 @@ spec("raft joint recovery")
         invalid.members[0].roles = TR_RAFT_CONF_NEW_VOTER;
         invalid.members[1].node_id = 2U;
         invalid.members[1].roles = TR_RAFT_CONF_OLD_VOTER;
-        check_int_eq(tr_raft_conf_entry_encode(&invalid, 1U, 1U, &entry),
+        check_equal(tr_raft_conf_entry_encode(&invalid, 1U, 1U, &entry),
                      TURBO_OK);
-        check_int_eq(joint_recovery_core(&entry, 1U, 1U, &core),
+        check_equal(joint_recovery_core(&entry, 1U, 1U, &core),
                      TURBO_EPROTO);
         check_null(core);
     }

@@ -520,39 +520,39 @@ spec("raft deterministic cluster simulation")
         tr_raft_status_t second;
         tr_raft_status_t third;
 
-        check_int_eq(sim_cluster_create(cluster), TURBO_OK);
-        check_int_eq(sim_tick(cluster, 1U, 4U), TURBO_OK);
-        check_int_eq(sim_status(cluster, 1U, &first), TURBO_OK);
-        check_int_eq(first.role, TR_RAFT_LEADER);
+        check_equal(sim_cluster_create(cluster), TURBO_OK);
+        check_equal(sim_tick(cluster, 1U, 4U), TURBO_OK);
+        check_equal(sim_status(cluster, 1U, &first), TURBO_OK);
+        check_equal(first.role, TR_RAFT_LEADER);
 
         sim_partition(cluster, 1U, 2U, false);
         sim_partition(cluster, 1U, 3U, false);
-        check_int_eq(sim_tick(cluster, 1U, 4U), TURBO_OK);
-        check_int_eq(sim_tick(cluster, 1U, 4U), TURBO_OK);
-        check_int_eq(sim_status(cluster, 1U, &first), TURBO_OK);
-        check_int_eq(first.role, TR_RAFT_FOLLOWER);
-        check_int_eq(sim_tick(cluster, 2U, 4U), TURBO_OK);
-        check_int_eq(sim_status(cluster, 2U, &second), TURBO_OK);
-        check_int_eq(second.role, TR_RAFT_LEADER);
+        check_equal(sim_tick(cluster, 1U, 4U), TURBO_OK);
+        check_equal(sim_tick(cluster, 1U, 4U), TURBO_OK);
+        check_equal(sim_status(cluster, 1U, &first), TURBO_OK);
+        check_equal(first.role, TR_RAFT_FOLLOWER);
+        check_equal(sim_tick(cluster, 2U, 4U), TURBO_OK);
+        check_equal(sim_status(cluster, 2U, &second), TURBO_OK);
+        check_equal(second.role, TR_RAFT_LEADER);
         check(second.term > first.term);
 
-        check_int_eq(sim_propose(cluster, 2U, 41U, "partition-value"),
+        check_equal(sim_propose(cluster, 2U, 41U, "partition-value"),
                      TURBO_OK);
-        check_int_eq(sim_tick(cluster, 2U, 1U), TURBO_OK);
-        check_int_eq(sim_status(cluster, 2U, &second), TURBO_OK);
-        check_int_eq(sim_status(cluster, 3U, &third), TURBO_OK);
-        check_long_eq(second.commit_index, 1U);
-        check_long_eq(third.commit_index, 1U);
+        check_equal(sim_tick(cluster, 2U, 1U), TURBO_OK);
+        check_equal(sim_status(cluster, 2U, &second), TURBO_OK);
+        check_equal(sim_status(cluster, 3U, &third), TURBO_OK);
+        check_equal(second.commit_index, 1U);
+        check_equal(third.commit_index, 1U);
 
         sim_partition(cluster, 1U, 2U, true);
         sim_partition(cluster, 1U, 3U, true);
-        check_int_eq(sim_tick(cluster, 2U, 1U), TURBO_OK);
-        check_int_eq(sim_tick(cluster, 2U, 1U), TURBO_OK);
-        check_int_eq(sim_status(cluster, 1U, &first), TURBO_OK);
-        check_long_eq(first.leader_id, 2U);
-        check_long_eq(first.last_log_index, 1U);
-        check_long_eq(first.commit_index, 1U);
-        check_long_eq(first.term, second.term);
+        check_equal(sim_tick(cluster, 2U, 1U), TURBO_OK);
+        check_equal(sim_tick(cluster, 2U, 1U), TURBO_OK);
+        check_equal(sim_status(cluster, 1U, &first), TURBO_OK);
+        check_equal(first.leader_id, 2U);
+        check_equal(first.last_log_index, 1U);
+        check_equal(first.commit_index, 1U);
+        check_equal(first.term, second.term);
         sim_cluster_destroy(cluster);
         free(cluster);
     }
@@ -564,27 +564,27 @@ spec("raft deterministic cluster simulation")
         tr_raft_status_t restarted;
         size_t attempt;
 
-        check_int_eq(sim_cluster_create(cluster), TURBO_OK);
-        check_int_eq(sim_tick(cluster, 1U, 3U), TURBO_OK);
-        check_int_eq(sim_propose(cluster, 1U, 51U, "before-crash"),
+        check_equal(sim_cluster_create(cluster), TURBO_OK);
+        check_equal(sim_tick(cluster, 1U, 3U), TURBO_OK);
+        check_equal(sim_propose(cluster, 1U, 51U, "before-crash"),
                      TURBO_OK);
-        check_int_eq(sim_tick(cluster, 1U, 1U), TURBO_OK);
-        check_int_eq(sim_crash(cluster, 3U), TURBO_OK);
-        check_int_eq(sim_propose(cluster, 1U, 52U, "during-crash"),
+        check_equal(sim_tick(cluster, 1U, 1U), TURBO_OK);
+        check_equal(sim_crash(cluster, 3U), TURBO_OK);
+        check_equal(sim_propose(cluster, 1U, 52U, "during-crash"),
                      TURBO_OK);
-        check_int_eq(sim_tick(cluster, 1U, 1U), TURBO_OK);
-        check_int_eq(sim_status(cluster, 1U, &leader), TURBO_OK);
-        check_long_eq(leader.commit_index, 2U);
+        check_equal(sim_tick(cluster, 1U, 1U), TURBO_OK);
+        check_equal(sim_status(cluster, 1U, &leader), TURBO_OK);
+        check_equal(leader.commit_index, 2U);
 
-        check_int_eq(sim_restart(cluster, 3U), TURBO_OK);
+        check_equal(sim_restart(cluster, 3U), TURBO_OK);
         for (attempt = 0U; attempt < 4U; ++attempt) {
-            check_int_eq(sim_tick(cluster, 1U, 1U), TURBO_OK);
+            check_equal(sim_tick(cluster, 1U, 1U), TURBO_OK);
         }
-        check_int_eq(sim_status(cluster, 3U, &restarted), TURBO_OK);
-        check_long_eq(restarted.leader_id, 1U);
-        check_long_eq(restarted.last_log_index, 2U);
-        check_long_eq(restarted.commit_index, 2U);
-        check_long_eq(restarted.applied_index, 2U);
+        check_equal(sim_status(cluster, 3U, &restarted), TURBO_OK);
+        check_equal(restarted.leader_id, 1U);
+        check_equal(restarted.last_log_index, 2U);
+        check_equal(restarted.commit_index, 2U);
+        check_equal(restarted.applied_index, 2U);
         sim_cluster_destroy(cluster);
         free(cluster);
     }
@@ -597,10 +597,10 @@ spec("raft deterministic cluster simulation")
             sim_cluster_t *cluster = sim_cluster_allocate();
             size_t step;
 
-            check_int_eq(sim_cluster_create(cluster), TURBO_OK);
+            check_equal(sim_cluster_create(cluster), TURBO_OK);
             cluster->random_state = seed;
-            check_int_eq(sim_tick(cluster, 1U, 4U), TURBO_OK);
-            check_int_eq(sim_propose(cluster, 1U, seed, "baseline"),
+            check_equal(sim_tick(cluster, 1U, 4U), TURBO_OK);
+            check_equal(sim_propose(cluster, 1U, seed, "baseline"),
                          TURBO_OK);
 
             for (step = 0U; step < SIM_CHAOS_STEPS; ++step) {
@@ -644,14 +644,14 @@ spec("raft deterministic cluster simulation")
                            !cluster->nodes[node_id - 1U].active) {
                     result = sim_restart(cluster, node_id);
                 }
-                check_int_eq(result, TURBO_OK);
-                check_int_eq(sim_chaos_deliver_one(cluster), TURBO_OK);
-                check_int_eq(sim_check_invariants(cluster), TURBO_OK);
+                check_equal(result, TURBO_OK);
+                check_equal(sim_chaos_deliver_one(cluster), TURBO_OK);
+                check_equal(sim_check_invariants(cluster), TURBO_OK);
             }
 
             for (step = 0U; step < SIM_NODE_COUNT; ++step) {
                 if (!cluster->nodes[step].active) {
-                    check_int_eq(sim_restart(
+                    check_equal(sim_restart(
                                      cluster,
                                      (tr_raft_node_id_t)(step + 1U)),
                                  TURBO_OK);
@@ -666,15 +666,15 @@ spec("raft deterministic cluster simulation")
                                   (tr_raft_node_id_t)(peer + 1U), true);
                 }
             }
-            check_int_eq(sim_pump(cluster), TURBO_OK);
+            check_equal(sim_pump(cluster), TURBO_OK);
             for (step = 0U; step < SIM_CHAOS_RECOVERY_ROUNDS; ++step) {
                 tr_raft_node_id_t node_id =
                     (tr_raft_node_id_t)(step % SIM_NODE_COUNT + 1U);
 
-                check_int_eq(sim_tick(cluster, node_id, 1U), TURBO_OK);
+                check_equal(sim_tick(cluster, node_id, 1U), TURBO_OK);
             }
-            check_int_ne(sim_find_highest_term_leader(cluster), 0U);
-            check_int_eq(sim_check_invariants(cluster), TURBO_OK);
+            check_not_equal(sim_find_highest_term_leader(cluster), 0U);
+            check_equal(sim_check_invariants(cluster), TURBO_OK);
             sim_cluster_destroy(cluster);
             free(cluster);
         }

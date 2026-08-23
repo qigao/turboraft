@@ -92,9 +92,9 @@ spec("raft service WAL reload")
         storage_config.max_log_entries = 16U;
         storage_config.create_if_missing = true;
         storage_config.max_snapshot_bytes = 1024U;
-        check_int_eq(tr_raft_wal_storage_open(
+        check_equal(tr_raft_wal_storage_open(
                          &storage_config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_bind(storage, &storage_adapter),
+        check_equal(tr_raft_wal_storage_bind(storage, &storage_adapter),
                      TURBO_OK);
 
         service_config.core.self_id = 1U;
@@ -109,7 +109,7 @@ spec("raft service WAL reload")
         service_config.storage = storage_adapter;
         service_config.state_machine.context = &application;
         service_config.state_machine.apply_batch = reload_apply;
-        check_int_eq(tr_raft_service_create(&service_config, &service),
+        check_equal(tr_raft_service_create(&service_config, &service),
                      TURBO_OK);
 
         reload_config.service = service;
@@ -123,7 +123,7 @@ spec("raft service WAL reload")
         reload_config.initial_election_timeout_ticks = 3U;
         reload_config.max_log_entries = 16U;
         reload_config.max_inflight_append_requests = 4U;
-        check_int_eq(tr_raft_service_wal_reload_create(
+        check_equal(tr_raft_service_wal_reload_create(
                          &reload_config, &reload), TURBO_OK);
 
         installer_config.storage = storage;
@@ -132,44 +132,44 @@ spec("raft service WAL reload")
         installer_config.reload_runtime =
             tr_raft_service_wal_reload_runtime;
         installer_config.runtime_context = reload;
-        check_int_eq(tr_raft_snapshot_installer_create(
+        check_equal(tr_raft_snapshot_installer_create(
                          &installer_config, &installer), TURBO_OK);
-        check_int_eq(tr_raft_snapshot_installer_install(
+        check_equal(tr_raft_snapshot_installer_install(
                          installer, 7U, 9U, 6U, &snapshot_configuration,
                          snapshot, sizeof(snapshot)), TURBO_OK);
 
-        check_size_eq(application.restore_count, 1U);
-        check_size_eq(application.size, sizeof(snapshot));
-        check_mem_eq(application.data, snapshot, sizeof(snapshot));
-        check_int_eq(tr_raft_service_status(service, &service_status),
+        check_equal(application.restore_count, 1U);
+        check_equal(application.size, sizeof(snapshot));
+        check_equal(application.data, snapshot, sizeof(snapshot));
+        check_equal(tr_raft_service_status(service, &service_status),
                      TURBO_OK);
         check(!service_status.faulted);
-        check_long_eq(service_status.core.term, 7U);
-        check_long_eq(service_status.core.last_log_index, 9U);
-        check_long_eq(service_status.core.commit_index, 9U);
-        check_long_eq(service_status.core.applied_index, 9U);
-        check_size_eq(service_status.core.voter_count, 2U);
-        check_long_eq(service_status.core.membership_transition_id, 44U);
-        check_int_eq(tr_raft_service_progress(service, &progress), TURBO_OK);
-        check_size_eq(progress.peer_count, 2U);
-        check_size_eq(progress.peers[0].max_inflight_append_requests, 4U);
-        check_size_eq(progress.peers[1].max_inflight_append_requests, 4U);
-        check_int_eq(tr_raft_snapshot_installer_get_status(
+        check_equal(service_status.core.term, 7U);
+        check_equal(service_status.core.last_log_index, 9U);
+        check_equal(service_status.core.commit_index, 9U);
+        check_equal(service_status.core.applied_index, 9U);
+        check_equal(service_status.core.voter_count, 2U);
+        check_equal(service_status.core.membership_transition_id, 44U);
+        check_equal(tr_raft_service_progress(service, &progress), TURBO_OK);
+        check_equal(progress.peer_count, 2U);
+        check_equal(progress.peers[0].max_inflight_append_requests, 4U);
+        check_equal(progress.peers[1].max_inflight_append_requests, 4U);
+        check_equal(tr_raft_snapshot_installer_get_status(
                          installer, &installer_status), TURBO_OK);
-        check_int_eq(installer_status.stage,
+        check_equal(installer_status.stage,
                      TR_RAFT_SNAPSHOT_INSTALL_COMPLETE);
 
         tr_raft_snapshot_installer_destroy(installer);
         tr_raft_service_wal_reload_destroy(reload);
         tr_raft_service_destroy(service);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         snprintf(path, sizeof(path), "%s.snapshot.9.6", path_prefix);
-        check_int_eq(tt_remove_file(path), 0);
+        check_equal(tt_remove_file(path), 0);
         snprintf(path, sizeof(path), "%s.00000001.wal", path_prefix);
-        check_int_eq(tt_remove_file(path), 0);
+        check_equal(tt_remove_file(path), 0);
         snprintf(path, sizeof(path), "%s.lock", path_prefix);
-        check_int_eq(tt_remove_file(path), 0);
-        check_int_eq(tt_remove_file(path_prefix), 0);
+        check_equal(tt_remove_file(path), 0);
+        check_equal(tt_remove_file(path_prefix), 0);
         free(path_prefix);
     }
 }

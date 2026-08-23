@@ -34,7 +34,7 @@ static tr_raft_core_t *learner_core(tr_raft_node_id_t self_id)
     config.election_max_ticks = 10U;
     config.initial_election_timeout_ticks = 5U;
     config.max_log_entries = 16U;
-    check_int_eq(tr_raft_core_create(&config, &core), TURBO_OK);
+    check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
     return core;
 }
 
@@ -46,10 +46,10 @@ static tr_raft_term_t learner_elect(tr_raft_core_t *core)
     tr_raft_message_t response;
     tr_raft_term_t term;
 
-    check_int_eq(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
-    check_size_eq(ready.message_count, 2U);
+    check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+    check_equal(ready.message_count, 2U);
     term = ready.messages[0].campaign_term;
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
     memset(&response, 0, sizeof(response));
     response.type = TR_RAFT_MSG_PRE_VOTE_RESPONSE;
     response.from = 2U;
@@ -57,18 +57,18 @@ static tr_raft_term_t learner_elect(tr_raft_core_t *core)
     response.campaign_term = term;
     response.granted = true;
     ready = learner_ready(messages);
-    check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
-    check_size_eq(ready.message_count, 2U);
+    check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+    check_equal(ready.message_count, 2U);
     term = ready.term;
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
     response.type = TR_RAFT_MSG_VOTE_RESPONSE;
     response.term = term;
     ready = learner_ready(messages);
-    check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
-    check_int_eq(ready.role, TR_RAFT_LEADER);
-    check_size_eq(ready.message_count, 3U);
-    check_long_eq(ready.messages[2].to, 4U);
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+    check_equal(ready.role, TR_RAFT_LEADER);
+    check_equal(ready.message_count, 3U);
+    check_equal(ready.messages[2].to, 4U);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
     return term;
 }
 
@@ -85,10 +85,10 @@ spec("raft learners")
         tr_raft_term_t term = learner_elect(core);
 
         ready = learner_ready(messages);
-        check_int_eq(tr_raft_core_propose(core, &proposal, &ready), TURBO_OK);
-        check_size_eq(ready.message_count, 3U);
-        check_long_eq(ready.messages[2].to, 4U);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), TURBO_OK);
+        check_equal(ready.message_count, 3U);
+        check_equal(ready.messages[2].to, 4U);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
 
         memset(&response, 0, sizeof(response));
         response.type = TR_RAFT_MSG_APPEND_RESPONSE;
@@ -98,18 +98,18 @@ spec("raft learners")
         response.granted = true;
         response.match_index = 1U;
         ready = learner_ready(messages);
-        check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
         check(!ready.commit_changed);
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
-        check_long_eq(status.commit_index, 0U);
-        check_size_eq(status.voter_count, 3U);
-        check_size_eq(status.learner_count, 1U);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(status.commit_index, 0U);
+        check_equal(status.voter_count, 3U);
+        check_equal(status.learner_count, 1U);
 
         response.from = 2U;
         ready = learner_ready(messages);
-        check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
         check(ready.commit_changed);
-        check_long_eq(ready.commit_index, 1U);
+        check_equal(ready.commit_index, 1U);
         tr_raft_core_destroy(core);
     }
 
@@ -122,10 +122,10 @@ spec("raft learners")
         tr_raft_message_t request;
         tr_raft_status_t status;
 
-        check_int_eq(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
-        check_size_eq(ready.message_count, 0U);
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
-        check_int_eq(status.role, TR_RAFT_FOLLOWER);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(ready.message_count, 0U);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(status.role, TR_RAFT_FOLLOWER);
         check(!status.self_is_voter);
 
         memset(&request, 0, sizeof(request));
@@ -134,17 +134,17 @@ spec("raft learners")
         request.to = 4U;
         request.campaign_term = 1U;
         ready = learner_ready(messages);
-        check_int_eq(tr_raft_core_step(core, &request, &ready), TURBO_OK);
-        check_size_eq(ready.message_count, 1U);
+        check_equal(tr_raft_core_step(core, &request, &ready), TURBO_OK);
+        check_equal(ready.message_count, 1U);
         check(!ready.messages[0].granted);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
 
         request.type = TR_RAFT_MSG_VOTE_REQUEST;
         request.term = 1U;
         ready = learner_ready(messages);
-        check_int_eq(tr_raft_core_step(core, &request, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &request, &ready), TURBO_OK);
         check(!ready.messages[0].granted);
-        check_long_eq(ready.voted_for, 0U);
+        check_equal(ready.voted_for, 0U);
         tr_raft_core_destroy(core);
     }
 
@@ -164,7 +164,7 @@ spec("raft learners")
         config.election_min_ticks = 5U;
         config.election_max_ticks = 10U;
         config.initial_election_timeout_ticks = 5U;
-        check_int_eq(tr_raft_core_create(&config, &core), TURBO_EINVAL);
+        check_equal(tr_raft_core_create(&config, &core), TURBO_EINVAL);
         check(core == NULL);
     }
 }

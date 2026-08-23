@@ -18,21 +18,21 @@ spec("raft peer set")
         tr_raft_membership_t joint;
         tr_raft_peer_set_t peers;
 
-        check_int_eq(tr_raft_membership_stable(
+        check_equal(tr_raft_membership_stable(
                          voters, 2U, learners, 1U, &stable),
                      TURBO_OK);
-        check_int_eq(tr_raft_membership_joint(
+        check_equal(tr_raft_membership_joint(
                          &stable, target_voters, 2U, NULL, 0U, 91U, &joint),
                      TURBO_OK);
         sources[0] = &stable;
         sources[1] = &joint;
-        check_int_eq(tr_raft_peer_set_build(sources, 2U, &peers), TURBO_OK);
-        check_size_eq(peers.count, 4U);
-        check_long_eq(peers.node_ids[0], 1U);
-        check_long_eq(peers.node_ids[1], 2U);
-        check_long_eq(peers.node_ids[2], 3U);
-        check_long_eq(peers.node_ids[3], 4U);
-        check_int_eq(tr_raft_peer_set_index(&peers, 3U), 2);
+        check_equal(tr_raft_peer_set_build(sources, 2U, &peers), TURBO_OK);
+        check_equal(peers.count, 4U);
+        check_equal(peers.node_ids[0], 1U);
+        check_equal(peers.node_ids[1], 2U);
+        check_equal(peers.node_ids[2], 3U);
+        check_equal(peers.node_ids[3], 4U);
+        check_equal(tr_raft_peer_set_index(&peers, 3U), 2);
     }
 
     it("rejects a union beyond the bounded progress capacity")
@@ -49,18 +49,18 @@ spec("raft peer set")
             first_voters[index] = index + 1U;
             second_voters[index] = index + TR_RAFT_MAX_MEMBERS + 1U;
         }
-        check_int_eq(tr_raft_membership_stable(
+        check_equal(tr_raft_membership_stable(
                          first_voters, TR_RAFT_MAX_MEMBERS, NULL, 0U, &first),
                      TURBO_OK);
-        check_int_eq(tr_raft_membership_stable(
+        check_equal(tr_raft_membership_stable(
                          second_voters, TR_RAFT_MAX_MEMBERS, NULL, 0U,
                          &second),
                      TURBO_OK);
         sources[0] = &first;
         sources[1] = &second;
-        check_int_eq(tr_raft_peer_set_build(sources, 2U, &peers),
+        check_equal(tr_raft_peer_set_build(sources, 2U, &peers),
                      TURBO_ENOSPC);
-        check_size_eq(peers.count, 0U);
+        check_equal(peers.count, 0U);
     }
 
     it("rejects an incoming joint transition whose peer union overflows")
@@ -74,7 +74,7 @@ spec("raft peer set")
         for (index = 0U; index < TR_RAFT_MAX_MEMBERS - 1U; ++index) {
             learners[index] = index + 2U;
         }
-        check_int_eq(tr_raft_membership_transition_init(
+        check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 1U, learners,
                          TR_RAFT_MAX_MEMBERS - 1U),
                      TURBO_OK);
@@ -90,7 +90,7 @@ spec("raft peer set")
                 TR_RAFT_MAX_MEMBERS + index;
             joint.members[index].roles = TR_RAFT_CONF_NEW_VOTER;
         }
-        check_int_eq(tr_raft_membership_transition_stage(
+        check_equal(tr_raft_membership_transition_stage(
                          &transition, &joint, 5U),
                      TURBO_EPROTO);
     }

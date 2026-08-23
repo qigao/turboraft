@@ -315,7 +315,7 @@ static void three_node_create_service(three_node_peer_t *node)
         tr_raft_coronet_peer_manager_admit_owned_socket;
     config.connect_outbound =
         tr_raft_coronet_peer_manager_connect_outbound;
-    check_int_eq(tr_raft_coronet_peer_service_create(&config, &node->service),
+    check_equal(tr_raft_coronet_peer_service_create(&config, &node->service),
                  TURBO_OK);
 }
 
@@ -333,7 +333,7 @@ static void three_node_configure_inbound(three_node_peer_t *node)
     config.admission.message_context = node;
     config.on_result = three_node_collect_inbound;
     config.result_context = node;
-    check_int_eq(tr_raft_coronet_peer_service_configure_inbound(
+    check_equal(tr_raft_coronet_peer_service_configure_inbound(
                      node->service, &config),
                  TURBO_OK);
 }
@@ -343,7 +343,7 @@ static void three_node_start_listener(three_node_peer_t *node)
     turbo_tls_server_config_t config;
 
     memset(&config, 0, sizeof(config));
-    check_int_eq(tr_test_reserve_loopback_port(&node->port), TURBO_OK);
+    check_equal(tr_test_reserve_loopback_port(&node->port), TURBO_OK);
     node->listener = coro_socket_create(node->cluster->context,
                                         CORO_SOCKET_TLS);
     check_not_null(node->listener);
@@ -355,9 +355,9 @@ static void three_node_start_listener(three_node_peer_t *node)
             ? THREE_NODE_FIXTURE("three-node-client-ca.pem")
             : THREE_NODE_FIXTURE("ca.pem");
     config.client_auth = TURBO_TLS_CLIENT_AUTH_REQUIRED;
-    check_int_eq(coro_socket_set_tls_server_config(node->listener, &config),
+    check_equal(coro_socket_set_tls_server_config(node->listener, &config),
                  TURBO_OK);
-    check_int_eq(coro_socket_listen_on(
+    check_equal(coro_socket_listen_on(
                      node->listener, "127.0.0.1", node->port,
                      tr_raft_coronet_peer_service_handle_inbound,
                      node->service),
@@ -400,7 +400,7 @@ static void three_node_add_outbound(three_node_peer_t *node,
     config.initial_retry_delay_ms = 1U;
     config.max_retry_delay_ms = 1U;
     config.max_attempts = 1U;
-    check_int_eq(tr_raft_coronet_peer_service_add_outbound(
+    check_equal(tr_raft_coronet_peer_service_add_outbound(
                      node->service, &config),
                  TURBO_OK);
 }
@@ -434,43 +434,43 @@ spec("raft CoroNet three-node mTLS mesh")
         three_node_add_outbound(&cluster.nodes[0], 3U);
         three_node_add_outbound(&cluster.nodes[1], 3U);
         cluster.nodes[2].step_call_result = TURBO_OK;
-        check_int_eq(coro_context_spawn(cluster.context,
+        check_equal(coro_context_spawn(cluster.context,
                                         three_node_step_service,
                                         &cluster.nodes[0]),
                      TURBO_OK);
-        check_int_eq(coro_context_spawn(cluster.context,
+        check_equal(coro_context_spawn(cluster.context,
                                         three_node_step_service,
                                         &cluster.nodes[1]),
                      TURBO_OK);
         three_node_run_until(&cluster, three_node_connections_complete);
 
-        check_int_eq(cluster.nodes[0].step_call_result, TURBO_OK);
-        check_int_eq(cluster.nodes[1].step_call_result, TURBO_OK);
-        check_int_eq(cluster.nodes[0].step_result.newly_connected_count, 2);
-        check_int_eq(cluster.nodes[1].step_result.newly_connected_count, 1);
-        check_size_eq(cluster.nodes[0].inbound_count, 0U);
-        check_size_eq(cluster.nodes[1].inbound_count, 1U);
-        check_size_eq(cluster.nodes[2].inbound_count, 2U);
+        check_equal(cluster.nodes[0].step_call_result, TURBO_OK);
+        check_equal(cluster.nodes[1].step_call_result, TURBO_OK);
+        check_equal(cluster.nodes[0].step_result.newly_connected_count, 2);
+        check_equal(cluster.nodes[1].step_result.newly_connected_count, 1);
+        check_equal(cluster.nodes[0].inbound_count, 0U);
+        check_equal(cluster.nodes[1].inbound_count, 1U);
+        check_equal(cluster.nodes[2].inbound_count, 2U);
         for (local_index = 0U; local_index < THREE_NODE_COUNT;
              ++local_index) {
-            check_int_eq(cluster.nodes[local_index].inbound_error, TURBO_OK);
+            check_equal(cluster.nodes[local_index].inbound_error, TURBO_OK);
         }
 
-        check_int_eq(coro_context_spawn(cluster.context,
+        check_equal(coro_context_spawn(cluster.context,
                                         three_node_send_all,
                                         &cluster),
                      TURBO_OK);
         three_node_run_until(&cluster, three_node_messages_complete);
 
-        check_int_eq(cluster.send_result, TURBO_OK);
-        check_int_eq(cluster.nodes[0].sender_mask, 6);
-        check_int_eq(cluster.nodes[1].sender_mask, 5);
-        check_int_eq(cluster.nodes[2].sender_mask, 3);
+        check_equal(cluster.send_result, TURBO_OK);
+        check_equal(cluster.nodes[0].sender_mask, 6);
+        check_equal(cluster.nodes[1].sender_mask, 5);
+        check_equal(cluster.nodes[2].sender_mask, 3);
         for (local_index = 0U; local_index < THREE_NODE_COUNT;
              ++local_index) {
-            check_int_eq(cluster.nodes[local_index].message_error, TURBO_OK);
+            check_equal(cluster.nodes[local_index].message_error, TURBO_OK);
             coro_socket_destroy(cluster.nodes[local_index].listener);
-            check_int_eq(tr_raft_coronet_peer_service_stop(
+            check_equal(tr_raft_coronet_peer_service_stop(
                              cluster.nodes[local_index].service),
                          TURBO_OK);
         }
@@ -480,7 +480,7 @@ spec("raft CoroNet three-node mTLS mesh")
             for (local_index = 0U; local_index < THREE_NODE_COUNT;
                  ++local_index) {
                 tr_raft_coronet_peer_service_status_t status;
-                check_int_eq(tr_raft_coronet_peer_service_get_status(
+                check_equal(tr_raft_coronet_peer_service_get_status(
                                  cluster.nodes[local_index].service,
                                  &status),
                              TURBO_OK);
@@ -495,7 +495,7 @@ spec("raft CoroNet three-node mTLS mesh")
         }
         for (local_index = 0U; local_index < THREE_NODE_COUNT;
              ++local_index) {
-            check_int_eq(tr_raft_coronet_peer_service_destroy(
+            check_equal(tr_raft_coronet_peer_service_destroy(
                              cluster.nodes[local_index].service),
                          TURBO_OK);
         }

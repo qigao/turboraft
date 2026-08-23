@@ -55,7 +55,7 @@ static tr_raft_coronet_session_t *make_session(
     config.first_outbound_message_id = 1U;
     config.handshake = handshake;
     config.on_message = discard_message;
-    check_int_eq(tr_raft_coronet_session_create(&config, &session), TURBO_OK);
+    check_equal(tr_raft_coronet_session_create(&config, &session), TURBO_OK);
     return session;
 }
 
@@ -92,33 +92,33 @@ spec("raft rolling wire upgrades")
         uint16_t version = 0U;
         uint32_t chunk_size = 0U;
 
-        check_int_eq(tr_raft_handshake_select_raft_wire_version(
+        check_equal(tr_raft_handshake_select_raft_wire_version(
                          &legacy, 1U, &version),
                      TURBO_OK);
-        check_int_eq(version, TR_RAFT_WIRE_MIN_VERSION);
-        check_int_eq(tr_raft_handshake_select_raft_wire_version(
+        check_equal(version, TR_RAFT_WIRE_MIN_VERSION);
+        check_equal(tr_raft_handshake_select_raft_wire_version(
                          &legacy, 2U, &version),
                      TURBO_EPROTONOSUPPORT);
-        check_int_eq(tr_raft_handshake_require_snapshot_v4(&legacy),
+        check_equal(tr_raft_handshake_require_snapshot_v4(&legacy),
                      TURBO_EPROTONOSUPPORT);
-        check_int_eq(tr_raft_handshake_select_raft_wire_version(
+        check_equal(tr_raft_handshake_select_raft_wire_version(
                          &current, TR_RAFT_MAX_APPEND_ENTRIES, &version),
                      TURBO_OK);
-        check_int_eq(version, TR_RAFT_WIRE_VERSION);
-        check_int_eq(tr_raft_handshake_require_snapshot_v4(&current),
+        check_equal(version, TR_RAFT_WIRE_VERSION);
+        check_equal(tr_raft_handshake_require_snapshot_v4(&current),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_select_snapshot_wire_version(
+        check_equal(tr_raft_handshake_select_snapshot_wire_version(
                          &current, &version, &chunk_size), TURBO_OK);
-        check_int_eq(version, TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION);
-        check_long_eq(chunk_size,
+        check_equal(version, TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION);
+        check_equal(chunk_size,
                       TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES);
         current.max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
         current.max_snapshot_chunk_size =
             TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
-        check_int_eq(tr_raft_handshake_select_snapshot_wire_version(
+        check_equal(tr_raft_handshake_select_snapshot_wire_version(
                          &current, &version, &chunk_size), TURBO_OK);
-        check_int_eq(version, TR_RAFT_WIRE_SNAPSHOT_VERSION);
-        check_long_eq(chunk_size, TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
+        check_equal(version, TR_RAFT_WIRE_SNAPSHOT_VERSION);
+        check_equal(chunk_size, TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
     }
 
     it("enforces negotiated versions at the transport boundary")
@@ -136,19 +136,19 @@ spec("raft rolling wire upgrades")
         memset(&payload, 0, sizeof(payload));
         payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
         payload.data.raft = make_append(1U);
-        check_int_eq(tr_raft_coronet_encode_payload_packet(
+        check_equal(tr_raft_coronet_encode_payload_packet(
                          legacy_session, &payload, packet, sizeof(packet),
                          &packet_size),
                      TURBO_OK);
-        check_int_eq(packet[9], TR_RAFT_WIRE_MIN_VERSION);
-        check_int_eq(tr_raft_coronet_encode_payload_packet(
+        check_equal(packet[9], TR_RAFT_WIRE_MIN_VERSION);
+        check_equal(tr_raft_coronet_encode_payload_packet(
                          current_session, &payload, packet, sizeof(packet),
                          &packet_size),
                      TURBO_OK);
-        check_int_eq(packet[9], TR_RAFT_WIRE_VERSION);
+        check_equal(packet[9], TR_RAFT_WIRE_VERSION);
 
         payload.data.raft = make_append(2U);
-        check_int_eq(tr_raft_coronet_encode_payload_packet(
+        check_equal(tr_raft_coronet_encode_payload_packet(
                          legacy_session, &payload, packet, sizeof(packet),
                          &packet_size),
                      TURBO_EPROTONOSUPPORT);
@@ -156,7 +156,7 @@ spec("raft rolling wire upgrades")
         payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
         payload.data.snapshot_ack.from = 1U;
         payload.data.snapshot_ack.to = 2U;
-        check_int_eq(tr_raft_coronet_encode_payload_packet(
+        check_equal(tr_raft_coronet_encode_payload_packet(
                          legacy_session, &payload, packet, sizeof(packet),
                          &packet_size),
                      TURBO_EPROTONOSUPPORT);
@@ -170,20 +170,20 @@ spec("raft rolling wire upgrades")
         tr_raft_message_t batch = make_append(3U);
         tr_raft_message_t part;
 
-        check_int_eq(tr_raft_coronet_v2_append_part(&batch, 0U, &part),
+        check_equal(tr_raft_coronet_v2_append_part(&batch, 0U, &part),
                      TURBO_OK);
-        check_long_eq(part.previous_log_index, 7U);
-        check_long_eq(part.previous_log_term, 3U);
-        check_long_eq(part.entries[0].index, 8U);
-        check_int_eq(tr_raft_coronet_v2_append_part(&batch, 1U, &part),
+        check_equal(part.previous_log_index, 7U);
+        check_equal(part.previous_log_term, 3U);
+        check_equal(part.entries[0].index, 8U);
+        check_equal(tr_raft_coronet_v2_append_part(&batch, 1U, &part),
                      TURBO_OK);
-        check_long_eq(part.previous_log_index, 8U);
-        check_long_eq(part.previous_log_term, 4U);
-        check_long_eq(part.entries[0].index, 9U);
-        check_int_eq(tr_raft_coronet_v2_append_part(&batch, 2U, &part),
+        check_equal(part.previous_log_index, 8U);
+        check_equal(part.previous_log_term, 4U);
+        check_equal(part.entries[0].index, 9U);
+        check_equal(tr_raft_coronet_v2_append_part(&batch, 2U, &part),
                      TURBO_OK);
-        check_long_eq(part.previous_log_index, 9U);
-        check_long_eq(part.entries[0].index, 10U);
+        check_equal(part.previous_log_index, 9U);
+        check_equal(part.entries[0].index, 10U);
     }
 
     it("rejects wire downgrades and keeps both snapshot frames on v4")
@@ -202,13 +202,13 @@ spec("raft rolling wire upgrades")
         memset(&metadata, 0, sizeof(metadata));
         fill_cluster(&metadata.cluster_id, 10U);
         metadata.message_id = 1U;
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode_version(
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode_version(
                          codec, TR_RAFT_WIRE_VERSION, &metadata, &message,
                          frame, sizeof(frame), &frame_size),
                      TURBO_OK);
         frame[5] = TR_RAFT_WIRE_MIN_VERSION;
-        check_int_eq(tr_raft_wire_decode(codec, frame, frame_size,
+        check_equal(tr_raft_wire_decode(codec, frame, frame_size,
                                          &decoded_metadata, &decoded),
                      TURBO_EPROTO);
 
@@ -221,15 +221,15 @@ spec("raft rolling wire upgrades")
         ack.next_offset = 3U;
         ack.accepted = true;
         memset(ack.snapshot_digest, 1, sizeof(ack.snapshot_digest));
-        check_int_eq(tr_raft_wire_encode_snapshot_ack(
+        check_equal(tr_raft_wire_encode_snapshot_ack(
                          codec, &metadata, &ack, frame, sizeof(frame),
                          &frame_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_wire_peek_version(frame, frame_size, &version),
+        check_equal(tr_raft_wire_peek_version(frame, frame_size, &version),
                      TURBO_OK);
-        check_int_eq(version, TR_RAFT_WIRE_SNAPSHOT_VERSION);
+        check_equal(version, TR_RAFT_WIRE_SNAPSHOT_VERSION);
         frame[5] = TR_RAFT_WIRE_VERSION;
-        check_int_eq(tr_raft_wire_decode_snapshot_ack(
+        check_equal(tr_raft_wire_decode_snapshot_ack(
                          codec, frame, frame_size, &decoded_metadata,
                          &decoded_ack),
                      TURBO_EPROTO);

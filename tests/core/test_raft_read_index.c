@@ -31,7 +31,7 @@ static tr_raft_core_t *read_core(tr_raft_node_id_t self_id)
     config.election_max_ticks = 10U;
     config.initial_election_timeout_ticks = 5U;
     config.max_log_entries = 16U;
-    check_int_eq(tr_raft_core_create(&config, &core), TURBO_OK);
+    check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
     return core;
 }
 
@@ -43,9 +43,9 @@ static tr_raft_term_t read_elect(tr_raft_core_t *core)
     tr_raft_message_t response;
     tr_raft_term_t term;
 
-    check_int_eq(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+    check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
     term = ready.messages[0].campaign_term;
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
     memset(&response, 0, sizeof(response));
     response.type = TR_RAFT_MSG_PRE_VOTE_RESPONSE;
     response.from = 2U;
@@ -53,14 +53,14 @@ static tr_raft_term_t read_elect(tr_raft_core_t *core)
     response.campaign_term = term;
     response.granted = true;
     ready = read_ready(messages);
-    check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+    check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
     term = ready.term;
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
     response.type = TR_RAFT_MSG_VOTE_RESPONSE;
     response.term = term;
     ready = read_ready(messages);
-    check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
     return term;
 }
 
@@ -72,8 +72,8 @@ static void read_commit_current_term(tr_raft_core_t *core,
     tr_raft_proposal_t proposal = {1U, "x", 1U};
     tr_raft_message_t response;
 
-    check_int_eq(tr_raft_core_propose(core, &proposal, &ready), TURBO_OK);
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_propose(core, &proposal, &ready), TURBO_OK);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
     memset(&response, 0, sizeof(response));
     response.type = TR_RAFT_MSG_APPEND_RESPONSE;
     response.from = 2U;
@@ -82,9 +82,9 @@ static void read_commit_current_term(tr_raft_core_t *core,
     response.granted = true;
     response.match_index = 1U;
     ready = read_ready(messages);
-    check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+    check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
     check(ready.commit_changed);
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
 }
 
 spec("raft read index")
@@ -99,17 +99,17 @@ spec("raft read index")
         tr_raft_term_t term = read_elect(core);
 
         ready = read_ready(messages);
-        check_int_eq(tr_raft_core_read_index(core, 40U, &ready), TURBO_EBUSY);
+        check_equal(tr_raft_core_read_index(core, 40U, &ready), TURBO_EBUSY);
         read_commit_current_term(core, term);
         ready = read_ready(messages);
-        check_int_eq(tr_raft_core_read_index(core, 41U, &ready), TURBO_OK);
-        check_size_eq(ready.message_count, 2U);
-        check_int_eq(ready.messages[0].type,
+        check_equal(tr_raft_core_read_index(core, 41U, &ready), TURBO_OK);
+        check_equal(ready.message_count, 2U);
+        check_equal(ready.messages[0].type,
                      TR_RAFT_MSG_READ_INDEX_REQUEST);
-        check_long_eq(ready.messages[0].context_id, 41U);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(ready.messages[0].context_id, 41U);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
         ready = read_ready(messages);
-        check_int_eq(tr_raft_core_read_index(core, 42U, &ready), TURBO_EBUSY);
+        check_equal(tr_raft_core_read_index(core, 42U, &ready), TURBO_EBUSY);
 
         memset(&response, 0, sizeof(response));
         response.type = TR_RAFT_MSG_READ_INDEX_RESPONSE;
@@ -118,17 +118,17 @@ spec("raft read index")
         response.term = term;
         response.context_id = 99U;
         ready = read_ready(messages);
-        check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
         check(!ready.read_state_ready);
         response.context_id = 41U;
         ready = read_ready(messages);
-        check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
         check(ready.read_state_ready);
-        check_long_eq(ready.read_state.context_id, 41U);
-        check_long_eq(ready.read_state.index, 1U);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
-        check_long_eq(status.pending_read_context_id, 0U);
+        check_equal(ready.read_state.context_id, 41U);
+        check_equal(ready.read_state.index, 1U);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(status.pending_read_context_id, 0U);
         tr_raft_core_destroy(core);
     }
 
@@ -144,16 +144,16 @@ spec("raft read index")
         request.from = 1U;
         request.to = 2U;
         request.term = 3U;
-        check_int_eq(tr_raft_core_step(core, &request, &ready), TURBO_OK);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &request, &ready), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
         request.type = TR_RAFT_MSG_READ_INDEX_REQUEST;
         request.context_id = 55U;
         ready = read_ready(messages);
-        check_int_eq(tr_raft_core_step(core, &request, &ready), TURBO_OK);
-        check_size_eq(ready.message_count, 1U);
-        check_int_eq(ready.messages[0].type,
+        check_equal(tr_raft_core_step(core, &request, &ready), TURBO_OK);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].type,
                      TR_RAFT_MSG_READ_INDEX_RESPONSE);
-        check_long_eq(ready.messages[0].context_id, 55U);
+        check_equal(ready.messages[0].context_id, 55U);
         tr_raft_core_destroy(core);
     }
 }

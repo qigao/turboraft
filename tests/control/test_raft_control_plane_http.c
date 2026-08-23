@@ -739,7 +739,7 @@ spec("raft control plane HTTP integration")
         iris_app_reset_default();
         reset_router();
         iris_error_recovery_init();
-        check_int_eq(control_http_create_service(&state), TURBO_OK);
+        check_equal(control_http_create_service(&state), TURBO_OK);
         memset(&pool_config, 0, sizeof(pool_config));
         pool_config.initial_capacity = 8U;
         state.context = coro_context_create_ex(NULL, &pool_config);
@@ -752,14 +752,14 @@ spec("raft control plane HTTP integration")
         owner_config.max_pending_commands = 8U;
         owner_config.max_command_bytes = 1024U;
         owner_config.next_election_timeout = control_http_timeout;
-        check_int_eq(tr_raft_service_owner_create(&owner_config, &state.owner),
+        check_equal(tr_raft_service_owner_create(&owner_config, &state.owner),
                      TURBO_OK);
-        check_int_eq(tr_raft_service_owner_start(state.owner), TURBO_OK);
+        check_equal(tr_raft_service_owner_start(state.owner), TURBO_OK);
         state.audit_valid = 1;
         audit_config.sink = control_http_audit_sink;
         audit_config.context = &state;
         audit_config.required = 1U;
-        check_int_eq(tr_raft_control_audit_create(&audit_config, &state.audit),
+        check_equal(tr_raft_control_audit_create(&audit_config, &state.audit),
                      TURBO_OK);
         memset(&config, 0, sizeof(config));
         config.service = state.service;
@@ -769,10 +769,10 @@ spec("raft control plane HTTP integration")
         state.app = iris_app_create();
         check_not_null(state.app);
         config.app = state.app;
-        check_int_eq(tr_raft_control_plane_create(&config, &state.plane),
+        check_equal(tr_raft_control_plane_create(&config, &state.plane),
                      TURBO_OK);
         init_router();
-        check_int_eq(coro_context_spawn(state.context, control_http_coro,
+        check_equal(coro_context_spawn(state.context, control_http_coro,
                                         &state), TURBO_OK);
         coro_context_run(state.context, TURBO_RUN_DEFAULT);
 
@@ -803,11 +803,11 @@ spec("raft control plane HTTP integration")
         check(state.membership_ok);
         check(state.read_index_ok);
         check(state.take_read_state_ok);
-        check_size_eq(state.apply_count, 2U);
+        check_equal(state.apply_count, 2U);
         check(state.audit_valid);
-        check_size_eq(state.audit_authorization_count, 5U);
-        check_size_eq(state.audit_completion_count, 5U);
-        check_size_eq(state.audit_receipt_count, 3U);
+        check_equal(state.audit_authorization_count, 5U);
+        check_equal(state.audit_completion_count, 5U);
+        check_equal(state.audit_receipt_count, 3U);
 
         if (!state.server_stopped && state.server != NULL) {
             coro_socket_destroy(state.server);
@@ -815,7 +815,7 @@ spec("raft control plane HTTP integration")
         tr_raft_control_plane_destroy(state.plane);
         iris_app_destroy(state.app);
         tr_raft_control_audit_destroy(state.audit);
-        check_int_eq(tr_raft_service_owner_close(state.owner), TURBO_OK);
+        check_equal(tr_raft_service_owner_close(state.owner), TURBO_OK);
         tr_raft_service_destroy(state.service);
         control_http_drain(state.context);
         coro_context_destroy(state.context);
@@ -834,10 +834,10 @@ spec("raft control plane HTTP integration")
         iris_app_reset_default();
         reset_router();
         iris_error_recovery_init();
-        check_int_eq(control_http_create_service(&state), TURBO_OK);
+        check_equal(control_http_create_service(&state), TURBO_OK);
         memset(&config, 0, sizeof(config));
         config.service = state.service;
-        check_int_eq(tr_raft_control_plane_create(&config, &state.plane),
+        check_equal(tr_raft_control_plane_create(&config, &state.plane),
                      TURBO_OK);
         token = iris_jwt_encode(secret, "{\"sub\":\"raft-admin\"}");
         check_not_null(token);
@@ -856,7 +856,7 @@ spec("raft control plane HTTP integration")
         state.context = coro_context_create(NULL);
         check_not_null(state.context);
         init_router();
-        check_int_eq(coro_context_spawn(state.context,
+        check_equal(coro_context_spawn(state.context,
                                         control_http_auth_coro, &state),
                      TURBO_OK);
         coro_context_run(state.context, TURBO_RUN_DEFAULT);
@@ -864,9 +864,9 @@ spec("raft control plane HTTP integration")
         check(state.server_stopped);
         check(state.auth_rejected);
         check(state.leader_hint_ok);
-        check_int_eq(state.token_redaction_ok, CONTROL_HTTP_RESPONSE_MATCH);
-        check_int_eq(state.command_redaction_ok, CONTROL_HTTP_RESPONSE_MATCH);
-        check_int_eq(state.certificate_redaction_ok,
+        check_equal(state.token_redaction_ok, CONTROL_HTTP_RESPONSE_MATCH);
+        check_equal(state.command_redaction_ok, CONTROL_HTTP_RESPONSE_MATCH);
+        check_equal(state.certificate_redaction_ok,
                      CONTROL_HTTP_RESPONSE_MATCH);
         check(state.auth_allowed);
 
@@ -892,24 +892,24 @@ spec("raft control plane HTTP integration")
         iris_app_reset_default();
         reset_router();
         iris_error_recovery_init();
-        check_int_eq(control_http_create_service(&state), TURBO_OK);
+        check_equal(control_http_create_service(&state), TURBO_OK);
         state.audit_valid = 1;
         state.audit_sink_result = TURBO_EINVAL;
         audit_config.sink = control_http_audit_sink;
         audit_config.context = &state;
         audit_config.required = 1U;
-        check_int_eq(tr_raft_control_audit_create(&audit_config, &state.audit),
+        check_equal(tr_raft_control_audit_create(&audit_config, &state.audit),
                      TURBO_OK);
         memset(&config, 0, sizeof(config));
         config.service = state.service;
         config.audit = state.audit;
         config.allow_unauthenticated_mutations = true;
-        check_int_eq(tr_raft_control_plane_create(&config, &state.plane),
+        check_equal(tr_raft_control_plane_create(&config, &state.plane),
                      TURBO_OK);
         state.context = coro_context_create(NULL);
         check_not_null(state.context);
         init_router();
-        check_int_eq(coro_context_spawn(state.context,
+        check_equal(coro_context_spawn(state.context,
                                         control_http_audit_failure_coro,
                                         &state), TURBO_OK);
         coro_context_run(state.context, TURBO_RUN_DEFAULT);
@@ -919,12 +919,12 @@ spec("raft control plane HTTP integration")
         check(state.audit_failure_sticky);
         check(state.audit_status_ok);
         check(state.audit_valid);
-        check_size_eq(state.audit_authorization_count, 1U);
-        check_size_eq(state.audit_completion_count, 0U);
-        check_size_eq(state.apply_count, 0U);
-        check_int_eq(tr_raft_service_status(state.service, &status), TURBO_OK);
-        check_int_eq(status.core.role, TR_RAFT_FOLLOWER);
-        check_long_eq(status.core.term, 0U);
+        check_equal(state.audit_authorization_count, 1U);
+        check_equal(state.audit_completion_count, 0U);
+        check_equal(state.apply_count, 0U);
+        check_equal(tr_raft_service_status(state.service, &status), TURBO_OK);
+        check_equal(status.core.role, TR_RAFT_FOLLOWER);
+        check_equal(status.core.term, 0U);
 
         tr_raft_control_plane_destroy(state.plane);
         tr_raft_control_audit_destroy(state.audit);

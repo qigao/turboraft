@@ -34,7 +34,7 @@ static const tr_text_protocol_message_name_t
         {"read_index_response", sizeof("read_index_response") - 1u,
          TR_RAFT_MSG_READ_INDEX_RESPONSE}};
 
-static bool tr_text_protocol_text_equals(tstr_v value, const char *literal)
+static bool tr_text_protocol_text_equals(vstr value, const char *literal)
 {
   size_t literal_length;
 
@@ -61,7 +61,7 @@ static int tr_text_protocol_hex_value(char value)
 }
 
 static int tr_text_protocol_decode_hex(
-    tstr_v input,
+    vstr input,
     uint8_t *output,
     size_t output_capacity,
     size_t *output_length)
@@ -97,7 +97,7 @@ static int tr_text_protocol_decode_hex(
 }
 
 static bool tr_text_protocol_find_message(
-    tstr_v name,
+    vstr name,
     tr_raft_message_type_t *out_type)
 {
   size_t index;
@@ -121,7 +121,7 @@ static bool tr_text_protocol_find_message(
 }
 
 static int tr_text_protocol_expected_kind(
-    tstr_v name,
+    vstr name,
     tr_raft_wire_payload_kind_t *out_kind)
 {
   if (tr_text_protocol_text_equals(name, "raft")) {

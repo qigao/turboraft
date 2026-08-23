@@ -48,33 +48,33 @@ spec("raft peer handshake")
         uint8_t packet[TR_RAFT_HANDSHAKE_PACKET_SIZE];
         size_t packet_size = 0U;
 
-        check_int_eq(tr_raft_handshake_make_hello(&first_config, &first_hello),
+        check_equal(tr_raft_handshake_make_hello(&first_config, &first_hello),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_make_hello(&second_config,
+        check_equal(tr_raft_handshake_make_hello(&second_config,
                                                    &second_hello),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_encode(&second_hello, packet,
+        check_equal(tr_raft_handshake_encode(&second_hello, packet,
                                                sizeof(packet), &packet_size),
                      TURBO_OK);
-        check_size_eq(packet_size, TR_RAFT_HANDSHAKE_PACKET_SIZE);
-        check_int_eq(tr_raft_handshake_decode(packet, packet_size,
+        check_equal(packet_size, TR_RAFT_HANDSHAKE_PACKET_SIZE);
+        check_equal(tr_raft_handshake_decode(packet, packet_size,
                                                &decoded_second_hello),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_negotiate(
+        check_equal(tr_raft_handshake_negotiate(
                          &first_config, 2U, &decoded_second_hello, &first_ack,
                          &first_result),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_negotiate(
+        check_equal(tr_raft_handshake_negotiate(
                          &second_config, 1U, &first_hello, &second_ack,
                          &second_result),
                      TURBO_OK);
-        check_long_eq(first_result.feature_bits, 1U);
-        check_long_eq(first_result.max_snapshot_chunk_size, 512U * 1024U);
-        check_int_eq(tr_raft_handshake_validate_ack(&first_result, &second_ack),
+        check_equal(first_result.feature_bits, 1U);
+        check_equal(first_result.max_snapshot_chunk_size, 512U * 1024U);
+        check_equal(tr_raft_handshake_validate_ack(&first_result, &second_ack),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_validate_ack(&second_result, &first_ack),
+        check_equal(tr_raft_handshake_validate_ack(&second_result, &first_ack),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_result_validate(
+        check_equal(tr_raft_handshake_result_validate(
                          &first_result, &first_config.cluster_id, 1U, 2U),
                      TURBO_OK);
     }
@@ -93,9 +93,9 @@ spec("raft peer handshake")
         tr_raft_handshake_message_t local_ack;
         tr_raft_handshake_result_t result;
 
-        check_int_eq(tr_raft_handshake_make_hello(&remote, &remote_hello),
+        check_equal(tr_raft_handshake_make_hello(&remote, &remote_hello),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_negotiate(
+        check_equal(tr_raft_handshake_negotiate(
                          &local, 3U, &remote_hello, &local_ack, &result),
                      TURBO_EPROTO);
     }
@@ -111,15 +111,15 @@ spec("raft peer handshake")
         uint8_t packet[TR_RAFT_HANDSHAKE_PACKET_SIZE];
         size_t packet_size = 0U;
 
-        check_int_eq(tr_raft_handshake_make_hello(&config, &hello), TURBO_OK);
-        check_int_eq(tr_raft_handshake_encode(&hello, packet, sizeof(packet),
+        check_equal(tr_raft_handshake_make_hello(&config, &hello), TURBO_OK);
+        check_equal(tr_raft_handshake_encode(&hello, packet, sizeof(packet),
                                                &packet_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_decode(packet, packet_size - 1U,
+        check_equal(tr_raft_handshake_decode(packet, packet_size - 1U,
                                                &decoded),
                      TURBO_EPROTO);
         packet[TR_RAFT_HANDSHAKE_PACKET_SIZE - 1U] = 1U;
-        check_int_eq(tr_raft_handshake_decode(packet, packet_size, &decoded),
+        check_equal(tr_raft_handshake_decode(packet, packet_size, &decoded),
                      TURBO_EPROTO);
     }
 
@@ -129,7 +129,7 @@ spec("raft peer handshake")
             make_config(110U, 2U, 0U, 1024U * 1024U);
         tr_raft_handshake_message_t hello;
 
-        check_int_eq(tr_raft_handshake_make_hello(&legacy, &hello),
+        check_equal(tr_raft_handshake_make_hello(&legacy, &hello),
                      TURBO_EPROTO);
     }
 
@@ -154,57 +154,57 @@ spec("raft peer handshake")
         size_t second_ack_size = 0U;
         size_t consumed = 0U;
 
-        check_int_eq(tr_raft_handshake_exchange_create(&first_config, 2U,
+        check_equal(tr_raft_handshake_exchange_create(&first_config, 2U,
                                                         &first),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_exchange_create(&second_config, 1U,
+        check_equal(tr_raft_handshake_exchange_create(&second_config, 1U,
                                                         &second),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_exchange_start(
+        check_equal(tr_raft_handshake_exchange_start(
                          first, first_hello, sizeof(first_hello),
                          &first_hello_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_handshake_exchange_start(
+        check_equal(tr_raft_handshake_exchange_start(
                          second, second_hello, sizeof(second_hello),
                          &second_hello_size),
                      TURBO_OK);
 
-        check_int_eq(tr_raft_handshake_exchange_feed(
+        check_equal(tr_raft_handshake_exchange_feed(
                          first, second_hello, 3U, &consumed, first_ack,
                          sizeof(first_ack), &first_ack_size),
                      TURBO_OK);
-        check_size_eq(consumed, 3U);
-        check_size_eq(first_ack_size, 0U);
-        check_int_eq(tr_raft_handshake_exchange_feed(
+        check_equal(consumed, 3U);
+        check_equal(first_ack_size, 0U);
+        check_equal(tr_raft_handshake_exchange_feed(
                          first, second_hello + 3U, second_hello_size - 3U,
                          &consumed, first_ack, sizeof(first_ack),
                          &first_ack_size),
                      TURBO_OK);
-        check_size_eq(first_ack_size, TR_RAFT_HANDSHAKE_PACKET_SIZE);
+        check_equal(first_ack_size, TR_RAFT_HANDSHAKE_PACKET_SIZE);
 
         memcpy(combined, first_hello, first_hello_size);
         memcpy(combined + first_hello_size, first_ack, first_ack_size);
-        check_int_eq(tr_raft_handshake_exchange_feed(
+        check_equal(tr_raft_handshake_exchange_feed(
                          second, combined, first_hello_size + first_ack_size,
                          &consumed, second_ack, sizeof(second_ack),
                          &second_ack_size),
                      TURBO_OK);
-        check_size_eq(consumed, first_hello_size + first_ack_size);
-        check_size_eq(second_ack_size, TR_RAFT_HANDSHAKE_PACKET_SIZE);
-        check_int_eq(tr_raft_handshake_exchange_get_state(second, &state),
+        check_equal(consumed, first_hello_size + first_ack_size);
+        check_equal(second_ack_size, TR_RAFT_HANDSHAKE_PACKET_SIZE);
+        check_equal(tr_raft_handshake_exchange_get_state(second, &state),
                      TURBO_OK);
-        check_int_eq(state, TR_RAFT_HANDSHAKE_EXCHANGE_COMPLETE);
+        check_equal(state, TR_RAFT_HANDSHAKE_EXCHANGE_COMPLETE);
 
         memcpy(combined, second_ack, second_ack_size);
         memset(combined + second_ack_size, 0xA5, 5U);
-        check_int_eq(tr_raft_handshake_exchange_feed(
+        check_equal(tr_raft_handshake_exchange_feed(
                          first, combined, second_ack_size + 5U, &consumed,
                          first_ack, sizeof(first_ack), &first_ack_size),
                      TURBO_OK);
-        check_size_eq(consumed, second_ack_size);
-        check_int_eq(tr_raft_handshake_exchange_get_result(first, &result),
+        check_equal(consumed, second_ack_size);
+        check_equal(tr_raft_handshake_exchange_get_result(first, &result),
                      TURBO_OK);
-        check_int_eq(result.complete, 1);
+        check_equal(result.complete, 1);
 
         tr_raft_handshake_exchange_destroy(second);
         tr_raft_handshake_exchange_destroy(first);

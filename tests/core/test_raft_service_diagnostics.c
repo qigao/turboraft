@@ -141,32 +141,32 @@ spec("raft service diagnostics and manual snapshots")
 
         memset(&state, 0, sizeof(state));
         diagnostic_configure(&config, &state);
-        check_int_eq(tr_raft_service_create(&config, &service), TURBO_OK);
-        check_int_eq(tr_raft_service_configuration(service, &configuration),
+        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
+        check_equal(tr_raft_service_configuration(service, &configuration),
                      TURBO_OK);
-        check_size_eq(configuration.member_count, 1U);
-        check_long_eq(configuration.members[0].node_id, 1U);
-        check_int_eq(configuration.members[0].roles,
+        check_equal(configuration.member_count, 1U);
+        check_equal(configuration.members[0].node_id, 1U);
+        check_equal(configuration.members[0].roles,
                      TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER);
-        check_int_eq(tr_raft_service_progress(service, &progress), TURBO_OK);
-        check_size_eq(progress.peer_count, 1U);
-        check_long_eq(progress.peers[0].node_id, 1U);
+        check_equal(tr_raft_service_progress(service, &progress), TURBO_OK);
+        check_equal(progress.peer_count, 1U);
+        check_equal(progress.peers[0].node_id, 1U);
         check(progress.peers[0].recent_active);
-        check_int_eq(tr_raft_service_trigger_snapshot(service),
+        check_equal(tr_raft_service_trigger_snapshot(service),
                      TURBO_ENOENT);
 
-        check_int_eq(tr_raft_service_tick(service, &tick), TURBO_OK);
+        check_equal(tr_raft_service_tick(service, &tick), TURBO_OK);
         proposal.command_id = 11U;
         proposal.data = command;
         proposal.data_length = sizeof(command);
-        check_int_eq(tr_raft_service_propose(service, &proposal), TURBO_OK);
-        check_int_eq(tr_raft_service_trigger_snapshot(service), TURBO_OK);
-        check_size_eq(state.snapshot_create_count, 1U);
-        check_size_eq(state.snapshot_store_count, 1U);
-        check_long_eq(state.stored_index, 1U);
-        check_int_eq(tr_raft_service_status(service, &status), TURBO_OK);
-        check_long_eq(status.core.log_base_index, 1U);
-        check_int_eq(tr_raft_service_trigger_snapshot(service),
+        check_equal(tr_raft_service_propose(service, &proposal), TURBO_OK);
+        check_equal(tr_raft_service_trigger_snapshot(service), TURBO_OK);
+        check_equal(state.snapshot_create_count, 1U);
+        check_equal(state.snapshot_store_count, 1U);
+        check_equal(state.stored_index, 1U);
+        check_equal(tr_raft_service_status(service, &status), TURBO_OK);
+        check_equal(status.core.log_base_index, 1U);
+        check_equal(tr_raft_service_trigger_snapshot(service),
                      TURBO_ENOENT);
 
         tr_raft_service_destroy(service);
@@ -181,8 +181,8 @@ spec("raft service diagnostics and manual snapshots")
         memset(&state, 0, sizeof(state));
         diagnostic_configure(&config, &state);
         memset(&config.snapshot_policy, 0, sizeof(config.snapshot_policy));
-        check_int_eq(tr_raft_service_create(&config, &service), TURBO_OK);
-        check_int_eq(tr_raft_service_trigger_snapshot(service),
+        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
+        check_equal(tr_raft_service_trigger_snapshot(service),
                      TURBO_EPROTONOSUPPORT);
         tr_raft_service_destroy(service);
     }

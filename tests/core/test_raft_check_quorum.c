@@ -33,10 +33,10 @@ static tr_raft_term_t check_quorum_elect(
     tr_raft_term_t campaign_term;
 
     check_quorum_ready(ready, messages, 4U);
-    check_int_eq(tr_raft_core_tick(core, &tick, ready), TURBO_OK);
-    check_size_eq(ready->message_count, 2U);
+    check_equal(tr_raft_core_tick(core, &tick, ready), TURBO_OK);
+    check_equal(ready->message_count, 2U);
     campaign_term = ready->messages[0].campaign_term;
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
 
     memset(&response, 0, sizeof(response));
     response.type = TR_RAFT_MSG_PRE_VOTE_RESPONSE;
@@ -45,10 +45,10 @@ static tr_raft_term_t check_quorum_elect(
     response.campaign_term = campaign_term;
     response.granted = true;
     check_quorum_ready(ready, messages, 4U);
-    check_int_eq(tr_raft_core_step(core, &response, ready), TURBO_OK);
+    check_equal(tr_raft_core_step(core, &response, ready), TURBO_OK);
     term = ready->term;
-    check_size_eq(ready->message_count, 2U);
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(ready->message_count, 2U);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
 
     memset(&response, 0, sizeof(response));
     response.type = TR_RAFT_MSG_VOTE_RESPONSE;
@@ -57,9 +57,9 @@ static tr_raft_term_t check_quorum_elect(
     response.term = term;
     response.granted = true;
     check_quorum_ready(ready, messages, 4U);
-    check_int_eq(tr_raft_core_step(core, &response, ready), TURBO_OK);
-    check_size_eq(ready->message_count, 2U);
-    check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_step(core, &response, ready), TURBO_OK);
+    check_equal(ready->message_count, 2U);
+    check_equal(tr_raft_core_advance(core), TURBO_OK);
     return term;
 }
 
@@ -78,7 +78,7 @@ static tr_raft_core_t *check_quorum_core(void)
     config.election_max_ticks = 5U;
     config.initial_election_timeout_ticks = 3U;
     config.max_log_entries = 16U;
-    check_int_eq(tr_raft_core_create(&config, &core), TURBO_OK);
+    check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
     return core;
 }
 
@@ -93,16 +93,16 @@ spec("raft check quorum")
         tr_raft_tick_t tick = {4U, 4U};
         tr_raft_term_t term = check_quorum_elect(core, &ready, messages);
 
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
-        check_int_eq(status.role, TR_RAFT_LEADER);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(status.role, TR_RAFT_LEADER);
         check_quorum_ready(&ready, messages, 4U);
-        check_int_eq(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
         check(ready.role_changed);
-        check_int_eq(ready.role, TR_RAFT_FOLLOWER);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
-        check_int_eq(status.role, TR_RAFT_FOLLOWER);
-        check_long_eq(status.term, term);
+        check_equal(ready.role, TR_RAFT_FOLLOWER);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(status.role, TR_RAFT_FOLLOWER);
+        check_equal(status.term, term);
 
         tr_raft_core_destroy(core);
     }
@@ -124,21 +124,21 @@ spec("raft check quorum")
         response.term = term;
         response.granted = true;
         check_quorum_ready(&ready, messages, 4U);
-        check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
         check(!check_quorum_has_effects(&ready));
 
         check_quorum_ready(&ready, messages, 4U);
-        check_int_eq(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
-        check_size_eq(ready.message_count, 2U);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
-        check_int_eq(status.role, TR_RAFT_LEADER);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(ready.message_count, 2U);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(status.role, TR_RAFT_LEADER);
 
         check_quorum_ready(&ready, messages, 4U);
-        check_int_eq(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
         check(ready.role_changed);
-        check_int_eq(ready.role, TR_RAFT_FOLLOWER);
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(ready.role, TR_RAFT_FOLLOWER);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
 
         tr_raft_core_destroy(core);
     }

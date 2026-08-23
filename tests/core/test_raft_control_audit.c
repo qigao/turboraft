@@ -37,7 +37,7 @@ spec("raft control audit boundary")
         config.sink = capture_event;
         config.context = &capture;
         config.required = true;
-        check_int_eq(tr_raft_control_audit_create(&config, &audit), TURBO_OK);
+        check_equal(tr_raft_control_audit_create(&config, &audit), TURBO_OK);
 
         memset(&event, 0, sizeof(event));
         event.method = TR_RAFT_CONTROL_AUDIT_ADD_LEARNER;
@@ -47,16 +47,16 @@ spec("raft control audit boundary")
         event.term = 7U;
         event.index = 19U;
         event.principal_fingerprint[0] = 0xA5U;
-        check_int_eq(tr_raft_control_audit_emit(audit, &event), TURBO_OK);
+        check_equal(tr_raft_control_audit_emit(audit, &event), TURBO_OK);
 
-        check_size_eq(capture.calls, 1U);
-        check_uint_eq(capture.event.version,
+        check_equal(capture.calls, 1U);
+        check_equal(capture.event.version,
                       TR_RAFT_CONTROL_AUDIT_VERSION);
-        check_uint_eq(capture.event.size, sizeof(capture.event));
-        check_long_eq(capture.event.sequence, 1U);
-        check_long_eq(capture.event.target_node_id, 4U);
-        check_uint_eq(capture.event.principal_fingerprint[0], 0xA5U);
-        check_long_eq(tr_raft_control_audit_dropped(audit), 0U);
+        check_equal(capture.event.size, sizeof(capture.event));
+        check_equal(capture.event.sequence, 1U);
+        check_equal(capture.event.target_node_id, 4U);
+        check_equal(capture.event.principal_fingerprint[0], 0xA5U);
+        check_equal(tr_raft_control_audit_dropped(audit), 0U);
         tr_raft_control_audit_destroy(audit);
     }
 
@@ -71,13 +71,13 @@ spec("raft control audit boundary")
         config.version = TR_RAFT_CONTROL_AUDIT_VERSION;
         config.size = sizeof(config);
         config.required = true;
-        check_int_eq(tr_raft_control_audit_create(&config, &audit),
+        check_equal(tr_raft_control_audit_create(&config, &audit),
                      TURBO_EINVAL);
         check_null(audit);
 
         config.required = false;
         config.reserved[0] = 1U;
-        check_int_eq(tr_raft_control_audit_create(&config, &audit),
+        check_equal(tr_raft_control_audit_create(&config, &audit),
                      TURBO_EINVAL);
         check_null(audit);
         config.reserved[0] = 0U;
@@ -87,20 +87,20 @@ spec("raft control audit boundary")
         config.sink = capture_event;
         config.context = &capture;
         config.required = false;
-        check_int_eq(tr_raft_control_audit_create(&config, &audit), TURBO_OK);
+        check_equal(tr_raft_control_audit_create(&config, &audit), TURBO_OK);
         memset(&event, 0, sizeof(event));
         event.method = TR_RAFT_CONTROL_AUDIT_PROPOSE;
         event.phase = TR_RAFT_CONTROL_AUDIT_ACCEPTANCE;
-        check_int_eq(tr_raft_control_audit_emit(audit, &event), TURBO_OK);
-        check_long_eq(tr_raft_control_audit_dropped(audit), 1U);
+        check_equal(tr_raft_control_audit_emit(audit, &event), TURBO_OK);
+        check_equal(tr_raft_control_audit_dropped(audit), 1U);
         tr_raft_control_audit_destroy(audit);
         audit = NULL;
 
         config.required = true;
-        check_int_eq(tr_raft_control_audit_create(&config, &audit), TURBO_OK);
-        check_int_eq(tr_raft_control_audit_emit(audit, &event),
+        check_equal(tr_raft_control_audit_create(&config, &audit), TURBO_OK);
+        check_equal(tr_raft_control_audit_emit(audit, &event),
                      TURBO_EINVAL);
-        check_long_eq(tr_raft_control_audit_dropped(audit), 0U);
+        check_equal(tr_raft_control_audit_dropped(audit), 0U);
         tr_raft_control_audit_destroy(audit);
     }
 
@@ -113,15 +113,15 @@ spec("raft control audit boundary")
         memset(&config, 0, sizeof(config));
         config.version = TR_RAFT_CONTROL_AUDIT_VERSION;
         config.size = sizeof(config);
-        check_int_eq(tr_raft_control_audit_create(&config, &audit), TURBO_OK);
+        check_equal(tr_raft_control_audit_create(&config, &audit), TURBO_OK);
         memset(&event, 0, sizeof(event));
         event.method = 0U;
         event.phase = TR_RAFT_CONTROL_AUDIT_AUTHORIZATION;
-        check_int_eq(tr_raft_control_audit_emit(audit, &event),
+        check_equal(tr_raft_control_audit_emit(audit, &event),
                      TURBO_EINVAL);
         event.method = TR_RAFT_CONTROL_AUDIT_TICK;
         event.phase = 0U;
-        check_int_eq(tr_raft_control_audit_emit(audit, &event),
+        check_equal(tr_raft_control_audit_emit(audit, &event),
                      TURBO_EINVAL);
         tr_raft_control_audit_destroy(audit);
     }

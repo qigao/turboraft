@@ -2,17 +2,15 @@
 
 #include "raft_coronet_transport_internal.h"
 #include "raft_coronet_payload_storage.h"
+#include "../turboraft_stl_status.h"
 
 #include <CoroNet/turbo_coro_context.h>
-#include <turbo_deque.h>
+#include <turbostl/deque.h>
 #include <turbo_error.h>
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-TURBO_DEQUE_DEFINE(tr_raft_coronet_payload_queue_t,
-                   tr_raft_owned_coronet_payload_t)
 
 typedef struct tr_raft_coronet_reader_slot {
     tr_raft_coronet_peer_service_t *service;
@@ -30,7 +28,7 @@ struct tr_raft_coronet_peer_service {
     tr_raft_coronet_dial_scheduler_t *schedulers[TR_RAFT_MAX_VOTERS - 1U];
     tr_raft_node_id_t scheduler_peer_ids[TR_RAFT_MAX_VOTERS - 1U];
     tr_raft_node_id_t peer_node_ids[TR_RAFT_MAX_VOTERS - 1U];
-    tr_raft_coronet_payload_queue_t outbound_queues[
+    deque_t outbound_queues[
         TR_RAFT_MAX_VOTERS - 1U];
     size_t outbound_snapshot_bytes[TR_RAFT_MAX_VOTERS - 1U];
     tr_raft_coronet_reader_slot_t readers[TR_RAFT_MAX_VOTERS - 1U];
@@ -175,7 +173,7 @@ static size_t tr_raft_coronet_peer_service_queued_count(
     size_t count = 0U;
 
     for (index = 0U; index < service->peer_count; ++index) {
-        count += tr_raft_coronet_payload_queue_t_size(
+        count += deque_size(
             &service->outbound_queues[index]);
     }
     return count;
@@ -194,7 +192,7 @@ static void tr_raft_coronet_peer_service_writer(coro_t *coroutine,
         made_progress = 0;
         for (index = 0U; index < service->peer_count; ++index) {
             tr_raft_owned_coronet_payload_t *front =
-                tr_raft_coronet_payload_queue_t_front(
+                (tr_raft_owned_coronet_payload_t *)deque_front(
                     &service->outbound_queues[index]);
             tr_raft_owned_coronet_payload_t discarded;
             int result;
@@ -205,8 +203,8 @@ static void tr_raft_coronet_peer_service_writer(coro_t *coroutine,
             result = tr_raft_coronet_peer_manager_enqueue_payload(
                 service->manager, &front->payload);
             if (result == TURBO_OK) {
-                if (!tr_raft_coronet_payload_queue_t_pop_front(
-                        &service->outbound_queues[index], &discarded)) {
+                if (deque_pop_front(&service->outbound_queues[index],
+                                    &discarded) != STL_OK) {
                     service->last_pump_error = TURBO_EPROTO;
                     service->stopping = 1;
                     break;
@@ -423,12 +421,11 @@ static void tr_raft_coronet_peer_service_destroy_queues(
     for (index = 0U; index < queue_count; ++index) {
         tr_raft_owned_coronet_payload_t owned;
 
-        while (tr_raft_coronet_payload_queue_t_pop_front(
-            &service->outbound_queues[index], &owned)) {
+        while (deque_pop_front(&service->outbound_queues[index], &owned) ==
+               STL_OK) {
             tr_raft_owned_coronet_payload_release(&owned);
         }
-        tr_raft_coronet_payload_queue_t_destroy(
-            &service->outbound_queues[index]);
+        deque_destroy(&service->outbound_queues[index]);
     }
 }
 
@@ -474,14 +471,17 @@ int tr_raft_coronet_peer_service_create(
     service->snapshot_ack_context = config->snapshot_ack_context;
 
     for (queue_count = 0U; queue_count < service->peer_count; ++queue_count) {
-        result = tr_raft_coronet_payload_queue_t_init(
-            &service->outbound_queues[queue_count]);
+        result = tr_raft_stl_status_to_error(deque_init_bytes(
+            &service->outbound_queues[queue_count],
+            sizeof(tr_raft_owned_coronet_payload_t),
+            _Alignof(tr_raft_owned_coronet_payload_t),
+            service->outbound_queue_capacity));
         if (result != TURBO_OK) {
             break;
         }
-        result = tr_raft_coronet_payload_queue_t_reserve(
+        result = tr_raft_stl_status_to_error(deque_reserve(
             &service->outbound_queues[queue_count],
-            service->outbound_queue_capacity);
+            service->outbound_queue_capacity));
         if (result != TURBO_OK) {
             ++queue_count;
             break;
@@ -929,7 +929,7 @@ int tr_raft_coronet_peer_service_enqueue_payload(
                                                 &index) != TURBO_OK) {
         return TURBO_EPROTO;
     }
-    if (tr_raft_coronet_payload_queue_t_size(
+    if (deque_size(
             &service->outbound_queues[index]) >=
         service->outbound_queue_capacity) {
         return TURBO_ENOSPC;
@@ -950,16 +950,15 @@ int tr_raft_coronet_peer_service_enqueue_payload(
         service->outbound_snapshot_bytes[index] +=
             payload->data.snapshot_chunk.data_length;
     }
-    result = tr_raft_coronet_payload_queue_t_push_back(
-        &service->outbound_queues[index], owned);
+    result = tr_raft_stl_status_to_error(deque_push_back(
+        &service->outbound_queues[index], &owned));
     if (result != TURBO_OK) {
         tr_raft_owned_coronet_payload_release(&owned);
         return result;
     }
     result = tr_raft_coronet_peer_service_start_writer(service);
     if (result != TURBO_OK) {
-        tr_raft_coronet_payload_queue_t_pop_back(
-            &service->outbound_queues[index], &discarded);
+        (void)deque_pop_back(&service->outbound_queues[index], &discarded);
         if (discarded.payload.kind ==
             TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
             service->outbound_snapshot_bytes[index] -=

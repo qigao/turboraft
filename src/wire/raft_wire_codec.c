@@ -1,13 +1,14 @@
 #include <turboraft/raft_wire_codec.h>
 
 #include "raft_configuration.h"
+#include "../turboraft_stl_status.h"
 
 #include "turboraft_wire_tbe.h"
 #undef SCHEMA_GENERATED_H
 #include "turboraft_wire_v3_tbe.h"
 
 #include <turbo_error.h>
-#include <turbo_vec.h>
+#include <turbostl/vec.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -287,8 +288,8 @@ static int tr_wire_v3_from_message(RaftWireMessageV3_t *wire,
         *entry_indices[index] = message->entries[index].index;
         *entry_terms[index] = message->entries[index].term;
         *entry_commands[index] = message->entries[index].command_id;
-        result = turbo_vec_resize(&entry_data[index]->raw,
-                                  message->entries[index].data_length);
+        result = tr_raft_stl_status_to_error(vec_resize(
+            &entry_data[index]->raw, message->entries[index].data_length));
         if (result != TURBO_OK) {
             return result;
         }
@@ -443,8 +444,8 @@ int tr_raft_wire_encode_version(tr_raft_wire_codec_t *codec,
     RaftWireMessage_init(&wire);
     tr_wire_from_message(&wire, message);
     if (message->entry_count != 0U && message->entry.data_length != 0U) {
-        resize_result = turbo_vec_resize(&wire.entry_data.raw,
-                                         message->entry.data_length);
+        resize_result = tr_raft_stl_status_to_error(
+            vec_resize(&wire.entry_data.raw, message->entry.data_length));
         if (resize_result != TURBO_OK) {
             RaftWireMessage_clear(&wire);
             return resize_result;
@@ -998,8 +999,8 @@ int tr_raft_wire_encode_snapshot_ack_version(
     wire.snapshot_size = ack->snapshot_size;
     wire.next_offset = ack->next_offset;
     wire.accepted = ack->accepted ? 1U : 0U;
-    result = turbo_vec_resize(&wire.snapshot_digest.raw,
-                              TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE);
+    result = tr_raft_stl_status_to_error(vec_resize(
+        &wire.snapshot_digest.raw, TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE));
     if (result == TURBO_OK) {
         memcpy(tbe_bytes_t_data(&wire.snapshot_digest), ack->snapshot_digest,
                TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE);

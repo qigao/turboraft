@@ -103,48 +103,48 @@ spec("raft snapshot coordinator")
         receiver_config.install = snapshot_capture_install;
         receiver_config.install_context = &installed;
 
-        check_int_eq(tr_raft_snapshot_coordinator_create(
+        check_equal(tr_raft_snapshot_coordinator_create(
                          &coordinator_config, &coordinator), TURBO_OK);
-        check_int_eq(tr_raft_snapshot_receiver_create(
+        check_equal(tr_raft_snapshot_receiver_create(
                          &receiver_config, &receiver), TURBO_OK);
-        check_int_eq(tr_raft_snapshot_coordinator_begin(
+        check_equal(tr_raft_snapshot_coordinator_begin(
                          coordinator, 7U, 9U, 6U,
                          &coordinator_configuration,
                          snapshot, sizeof(snapshot)), TURBO_OK);
-        check_size_eq(emitted.count, 1U);
-        check_long_eq(emitted.chunks[0].snapshot_offset, 0U);
-        check_size_eq(emitted.chunks[0].data_length, 512U);
+        check_equal(emitted.count, 1U);
+        check_equal(emitted.chunks[0].snapshot_offset, 0U);
+        check_equal(emitted.chunks[0].data_length, 512U);
 
-        check_int_eq(tr_raft_snapshot_receiver_handle(
+        check_equal(tr_raft_snapshot_receiver_handle(
                          receiver, &emitted.chunks[0], &receive_result),
                      TURBO_OK);
         check(!receive_result.installed);
         emitted.fail_next = true;
-        check_int_eq(tr_raft_snapshot_coordinator_handle_ack(
+        check_equal(tr_raft_snapshot_coordinator_handle_ack(
                          coordinator, &receive_result.ack), TURBO_EPIPE);
-        check_size_eq(emitted.count, 1U);
-        check_int_eq(tr_raft_snapshot_coordinator_resume(coordinator),
+        check_equal(emitted.count, 1U);
+        check_equal(tr_raft_snapshot_coordinator_resume(coordinator),
                      TURBO_OK);
-        check_size_eq(emitted.count, 2U);
-        check_long_eq(emitted.chunks[1].snapshot_offset, 512U);
-        check_size_eq(emitted.chunks[1].data_length, 88U);
+        check_equal(emitted.count, 2U);
+        check_equal(emitted.chunks[1].snapshot_offset, 512U);
+        check_equal(emitted.chunks[1].data_length, 88U);
         check(emitted.chunks[1].done);
 
-        check_int_eq(tr_raft_snapshot_receiver_handle(
+        check_equal(tr_raft_snapshot_receiver_handle(
                          receiver, &emitted.chunks[1], &receive_result),
                      TURBO_OK);
         check(receive_result.installed);
-        check_int_eq(tr_raft_snapshot_coordinator_handle_ack(
+        check_equal(tr_raft_snapshot_coordinator_handle_ack(
                          coordinator, &receive_result.ack), TURBO_OK);
-        check_int_eq(tr_raft_snapshot_coordinator_handle_ack(
+        check_equal(tr_raft_snapshot_coordinator_handle_ack(
                          coordinator, &receive_result.ack), TURBO_OK);
-        check_int_eq(tr_raft_snapshot_coordinator_get_status(
+        check_equal(tr_raft_snapshot_coordinator_get_status(
                          coordinator, &status), TURBO_OK);
         check(status.complete);
-        check_long_eq(status.acknowledged_offset, sizeof(snapshot));
-        check_size_eq(installed.count, 1U);
-        check_size_eq(installed.size, sizeof(snapshot));
-        check_mem_eq(installed.data, snapshot, sizeof(snapshot));
+        check_equal(status.acknowledged_offset, sizeof(snapshot));
+        check_equal(installed.count, 1U);
+        check_equal(installed.size, sizeof(snapshot));
+        check_equal(installed.data, snapshot, sizeof(snapshot));
 
         tr_raft_snapshot_receiver_destroy(receiver);
         tr_raft_snapshot_coordinator_destroy(coordinator);
@@ -173,13 +173,13 @@ spec("raft snapshot coordinator")
         config.max_inflight_chunks = TR_RAFT_SNAPSHOT_DEFAULT_INFLIGHT_CHUNKS;
         config.emit = snapshot_capture_emit;
         config.emit_context = &emitted;
-        check_int_eq(tr_raft_snapshot_coordinator_create(&config, &coordinator),
+        check_equal(tr_raft_snapshot_coordinator_create(&config, &coordinator),
                      TURBO_OK);
-        check_int_eq(tr_raft_snapshot_coordinator_begin(
+        check_equal(tr_raft_snapshot_coordinator_begin(
                          coordinator, 7U, 9U, 6U,
                          &coordinator_configuration, snapshot,
                          SNAPSHOT_BYTES), TURBO_OK);
-        check_size_eq(emitted.count, 4U);
+        check_equal(emitted.count, 4U);
 
         memset(&ack, 0, sizeof(ack));
         ack.from = 2U;
@@ -191,10 +191,10 @@ spec("raft snapshot coordinator")
         ack.accepted = true;
         memcpy(ack.snapshot_digest, emitted.chunks[0].snapshot_digest,
                sizeof(ack.snapshot_digest));
-        check_int_eq(tr_raft_snapshot_coordinator_handle_ack(coordinator, &ack),
+        check_equal(tr_raft_snapshot_coordinator_handle_ack(coordinator, &ack),
                      TURBO_OK);
-        check_size_eq(emitted.count, 5U);
-        check_long_eq(emitted.chunks[4].snapshot_offset,
+        check_equal(emitted.count, 5U);
+        check_equal(emitted.chunks[4].snapshot_offset,
                       4U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
         check(emitted.chunks[4].done);
         tr_raft_snapshot_coordinator_destroy(coordinator);

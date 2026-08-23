@@ -7,7 +7,7 @@
 
 typedef struct {
   int type;
-  tstr_v text;
+  vstr text;
   uint64_t number;
   size_t offset;
   size_t line;

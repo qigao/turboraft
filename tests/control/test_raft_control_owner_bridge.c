@@ -142,7 +142,7 @@ static void bridge_caller_thread(void *context)
 static void bridge_cleanup(bridge_test_state_t *state)
 {
     if (state->owner != NULL) {
-        check_int_eq(tr_raft_service_owner_close(state->owner), TURBO_OK);
+        check_equal(tr_raft_service_owner_close(state->owner), TURBO_OK);
         state->owner = NULL;
     }
     coro_context_destroy(state->caller_context);
@@ -158,18 +158,18 @@ spec("control_owner_bridge") {
         state.caller_context = coro_context_create(NULL);
         check_not_null(state.owner_context);
         check_not_null(state.caller_context);
-        check_int_eq(bridge_create_service(&state), TURBO_OK);
-        check_int_eq(bridge_create_owner(&state), TURBO_OK);
-        check_int_eq(tr_raft_service_owner_start(state.owner), TURBO_OK);
-        check_int_eq(turbo_thread_create(&state.owner_thread,
+        check_equal(bridge_create_service(&state), TURBO_OK);
+        check_equal(bridge_create_owner(&state), TURBO_OK);
+        check_equal(tr_raft_service_owner_start(state.owner), TURBO_OK);
+        check_equal(turbo_thread_create(&state.owner_thread,
                                          bridge_owner_thread, &state), 0);
-        check_int_eq(coro_context_spawn(state.caller_context,
+        check_equal(coro_context_spawn(state.caller_context,
                                         bridge_caller, &state), TURBO_OK);
         (void)coro_context_run(state.caller_context, TURBO_RUN_DEFAULT);
-        check_int_eq(turbo_thread_join(&state.owner_thread), 0);
+        check_equal(turbo_thread_join(&state.owner_thread), 0);
         turbo_thread_destroy(&state.owner_thread);
-        check_int_eq(state.result, TURBO_OK);
-        check_int_eq(state.value, 42);
+        check_equal(state.result, TURBO_OK);
+        check_equal(state.value, 42);
         check_true(state.executed_on_owner);
         bridge_cleanup(&state);
     }
@@ -181,19 +181,19 @@ spec("control_owner_bridge") {
         state.caller_context = coro_context_create(NULL);
         check_not_null(state.owner_context);
         check_not_null(state.caller_context);
-        check_int_eq(bridge_create_service(&state), TURBO_OK);
-        check_int_eq(bridge_create_owner(&state), TURBO_OK);
-        check_int_eq(tr_raft_service_owner_start(state.owner), TURBO_OK);
-        check_int_eq(coro_context_spawn(state.caller_context,
+        check_equal(bridge_create_service(&state), TURBO_OK);
+        check_equal(bridge_create_owner(&state), TURBO_OK);
+        check_equal(tr_raft_service_owner_start(state.owner), TURBO_OK);
+        check_equal(coro_context_spawn(state.caller_context,
                                         bridge_timeout_caller, &state),
                      TURBO_OK);
         (void)coro_context_run(state.caller_context, TURBO_RUN_DEFAULT);
-        check_int_eq(state.result, TURBO_ETIMEDOUT);
-        check_int_eq(turbo_thread_create(&state.owner_thread,
+        check_equal(state.result, TURBO_ETIMEDOUT);
+        check_equal(turbo_thread_create(&state.owner_thread,
                                          bridge_owner_thread, &state), 0);
-        check_int_eq(turbo_thread_join(&state.owner_thread), 0);
+        check_equal(turbo_thread_join(&state.owner_thread), 0);
         turbo_thread_destroy(&state.owner_thread);
-        check_int_eq(state.value, 0);
+        check_equal(state.value, 0);
         check_false(state.executed_on_owner);
         bridge_cleanup(&state);
     }
@@ -210,16 +210,16 @@ spec("control_owner_bridge") {
         state.caller_context = coro_context_create(NULL);
         check_not_null(state.owner_context);
         check_not_null(state.caller_context);
-        check_int_eq(bridge_create_service(&state), TURBO_OK);
-        check_int_eq(bridge_create_owner(&state), TURBO_OK);
-        check_int_eq(tr_raft_service_owner_start(state.owner), TURBO_OK);
-        check_int_eq(coro_context_spawn(state.caller_context,
+        check_equal(bridge_create_service(&state), TURBO_OK);
+        check_equal(bridge_create_owner(&state), TURBO_OK);
+        check_equal(tr_raft_service_owner_start(state.owner), TURBO_OK);
+        check_equal(coro_context_spawn(state.caller_context,
                                         bridge_shutdown_caller, &state),
                      TURBO_OK);
-        check_int_eq(turbo_thread_create(&state.owner_thread,
+        check_equal(turbo_thread_create(&state.owner_thread,
                                          bridge_caller_thread, &state), 0);
         for (spin = 0U; spin < BRIDGE_PENDING_WAIT_SPINS; ++spin) {
-            check_int_eq(tr_raft_service_owner_status(state.owner, &status),
+            check_equal(tr_raft_service_owner_status(state.owner, &status),
                          TURBO_OK);
             if (status.pending_commands == 1U) {
                 break;
@@ -227,24 +227,24 @@ spec("control_owner_bridge") {
             turbo_thread_yield();
         }
         check(spin < BRIDGE_PENDING_WAIT_SPINS);
-        check_int_eq(tr_raft_service_owner_stop(state.owner), TURBO_OK);
-        check_int_eq(tr_raft_service_owner_submit(
+        check_equal(tr_raft_service_owner_stop(state.owner), TURBO_OK);
+        check_equal(tr_raft_service_owner_submit(
                          state.owner, bridge_command, &rejected_payload,
                          sizeof(rejected_payload), NULL, NULL),
                      TURBO_ECANCELED);
-        check_int_eq(turbo_thread_create(&drain_thread, bridge_owner_thread,
+        check_equal(turbo_thread_create(&drain_thread, bridge_owner_thread,
                                          &state), 0);
-        check_int_eq(turbo_thread_join(&drain_thread), 0);
+        check_equal(turbo_thread_join(&drain_thread), 0);
         turbo_thread_destroy(&drain_thread);
-        check_int_eq(turbo_thread_join(&state.owner_thread), 0);
+        check_equal(turbo_thread_join(&state.owner_thread), 0);
         turbo_thread_destroy(&state.owner_thread);
-        check_int_eq(state.result, TURBO_OK);
-        check_int_eq(state.value, 77);
+        check_equal(state.result, TURBO_OK);
+        check_equal(state.value, 77);
         check_true(state.executed_on_owner);
-        check_int_eq(tr_raft_service_owner_status(state.owner, &status),
+        check_equal(tr_raft_service_owner_status(state.owner, &status),
                      TURBO_OK);
         check_false(status.running);
-        check_size_eq(status.pending_commands, 0U);
+        check_equal(status.pending_commands, 0U);
         bridge_cleanup(&state);
     }
 
@@ -262,15 +262,15 @@ spec("control_owner_bridge") {
         check_not_null(state.owner_context);
         check_not_null(state.caller_context);
         check_not_null(overflow_context);
-        check_int_eq(bridge_create_service(&state), TURBO_OK);
-        check_int_eq(bridge_create_owner(&state), TURBO_OK);
-        check_int_eq(tr_raft_service_owner_start(state.owner), TURBO_OK);
-        check_int_eq(coro_context_spawn(state.caller_context,
+        check_equal(bridge_create_service(&state), TURBO_OK);
+        check_equal(bridge_create_owner(&state), TURBO_OK);
+        check_equal(tr_raft_service_owner_start(state.owner), TURBO_OK);
+        check_equal(coro_context_spawn(state.caller_context,
                                         bridge_caller, &state), TURBO_OK);
-        check_int_eq(turbo_thread_create(&state.owner_thread,
+        check_equal(turbo_thread_create(&state.owner_thread,
                                          bridge_caller_thread, &state), 0);
         for (spin = 0U; spin < BRIDGE_PENDING_WAIT_SPINS; ++spin) {
-            check_int_eq(tr_raft_service_owner_status(state.owner, &status),
+            check_equal(tr_raft_service_owner_status(state.owner, &status),
                          TURBO_OK);
             if (status.pending_commands == 1U) {
                 break;
@@ -278,22 +278,22 @@ spec("control_owner_bridge") {
             turbo_thread_yield();
         }
         check(spin < BRIDGE_PENDING_WAIT_SPINS);
-        check_int_eq(coro_context_spawn(overflow_context,
+        check_equal(coro_context_spawn(overflow_context,
                                         bridge_overflow_caller, &state),
                      TURBO_OK);
         (void)coro_context_run(overflow_context, TURBO_RUN_DEFAULT);
-        check_int_eq(state.overflow_result, TURBO_EBUSY);
-        check_int_eq(turbo_thread_create(&drain_thread, bridge_owner_thread,
+        check_equal(state.overflow_result, TURBO_EBUSY);
+        check_equal(turbo_thread_create(&drain_thread, bridge_owner_thread,
                                          &state), 0);
-        check_int_eq(turbo_thread_join(&state.owner_thread), 0);
+        check_equal(turbo_thread_join(&state.owner_thread), 0);
         turbo_thread_destroy(&state.owner_thread);
-        check_int_eq(turbo_thread_join(&drain_thread), 0);
+        check_equal(turbo_thread_join(&drain_thread), 0);
         turbo_thread_destroy(&drain_thread);
-        check_int_eq(state.result, TURBO_OK);
-        check_int_eq(state.value, 42);
-        check_int_eq(tr_raft_service_owner_status(state.owner, &status),
+        check_equal(state.result, TURBO_OK);
+        check_equal(state.value, 42);
+        check_equal(tr_raft_service_owner_status(state.owner, &status),
                      TURBO_OK);
-        check_size_eq(status.pending_commands, 0U);
+        check_equal(status.pending_commands, 0U);
         coro_context_destroy(overflow_context);
         bridge_cleanup(&state);
     }

@@ -93,44 +93,44 @@ spec("raft snapshot peer")
         receiver_config.install = snapshot_peer_install;
         receiver_config.install_context = &installed;
 
-        check_int_eq(tr_raft_snapshot_peer_create(&peer_config, &peer),
+        check_equal(tr_raft_snapshot_peer_create(&peer_config, &peer),
                      TURBO_OK);
-        check_int_eq(tr_raft_snapshot_receiver_create(
+        check_equal(tr_raft_snapshot_receiver_create(
                          &receiver_config, &receiver), TURBO_OK);
-        check_int_eq(tr_raft_snapshot_peer_begin(
+        check_equal(tr_raft_snapshot_peer_begin(
                          peer, 7U, 9U, 6U, &snapshot_peer_configuration,
                          snapshot, sizeof(snapshot)),
                      TURBO_OK);
-        check_size_eq(payloads.count, 1U);
-        check_int_eq(payloads.payloads[0].kind,
+        check_equal(payloads.count, 1U);
+        check_equal(payloads.payloads[0].kind,
                      TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK);
-        check_long_eq(payloads.payloads[0].data.snapshot_chunk.snapshot_offset,
+        check_equal(payloads.payloads[0].data.snapshot_chunk.snapshot_offset,
                       0U);
 
-        check_int_eq(tr_raft_snapshot_receiver_handle(
+        check_equal(tr_raft_snapshot_receiver_handle(
                          receiver,
                          &payloads.payloads[0].data.snapshot_chunk,
                          &receive_result), TURBO_OK);
         memset(&ack_payload, 0, sizeof(ack_payload));
         ack_payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
         ack_payload.data.snapshot_ack = receive_result.ack;
-        check_int_eq(tr_raft_snapshot_peer_handle_payload(peer, &ack_payload),
+        check_equal(tr_raft_snapshot_peer_handle_payload(peer, &ack_payload),
                      TURBO_OK);
-        check_size_eq(payloads.count, 2U);
-        check_long_eq(payloads.payloads[1].data.snapshot_chunk.snapshot_offset,
+        check_equal(payloads.count, 2U);
+        check_equal(payloads.payloads[1].data.snapshot_chunk.snapshot_offset,
                       512U);
 
-        check_int_eq(tr_raft_snapshot_receiver_handle(
+        check_equal(tr_raft_snapshot_receiver_handle(
                          receiver,
                          &payloads.payloads[1].data.snapshot_chunk,
                          &receive_result), TURBO_OK);
         ack_payload.data.snapshot_ack = receive_result.ack;
-        check_int_eq(tr_raft_snapshot_peer_handle_payload(peer, &ack_payload),
+        check_equal(tr_raft_snapshot_peer_handle_payload(peer, &ack_payload),
                      TURBO_OK);
-        check_int_eq(tr_raft_snapshot_peer_get_status(peer, &status), TURBO_OK);
+        check_equal(tr_raft_snapshot_peer_get_status(peer, &status), TURBO_OK);
         check(status.complete);
-        check_size_eq(installed.count, 1U);
-        check_mem_eq(installed.data, snapshot, sizeof(snapshot));
+        check_equal(installed.count, 1U);
+        check_equal(installed.data, snapshot, sizeof(snapshot));
 
         tr_raft_snapshot_receiver_destroy(receiver);
         tr_raft_snapshot_peer_destroy(peer);

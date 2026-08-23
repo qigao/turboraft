@@ -16,27 +16,27 @@ spec("raft configuration log")
         tr_raft_log_t log;
         const tr_raft_log_entry_t *entry = NULL;
 
-        check_int_eq(tr_raft_membership_transition_init(
+        check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 3U, NULL, 0U),
                      TURBO_OK);
-        check_int_eq(tr_raft_membership_transition_propose(
+        check_equal(tr_raft_membership_transition_propose(
                          &transition, target_voters, 3U, NULL, 0U, 81U,
                          &joint),
                      TURBO_OK);
-        check_int_eq(tr_raft_log_init(&log, 4U, 0U, 0U), TURBO_OK);
-        check_int_eq(tr_raft_log_append_configuration(
+        check_equal(tr_raft_log_init(&log, 4U, 0U, 0U), TURBO_OK);
+        check_equal(tr_raft_log_append_configuration(
                          &log, 5U, &joint, &entry),
                      TURBO_OK);
         check_not_null(entry);
-        check_long_eq(entry->index, 1U);
-        check_long_eq(entry->term, 5U);
-        check_long_eq(entry->command_id, 0U);
-        check_int_eq(tr_raft_conf_entry_decode(entry, &decoded), TURBO_OK);
-        check_long_eq(decoded.transition_id, 81U);
-        check_int_eq(tr_raft_membership_transition_stage_entry(
+        check_equal(entry->index, 1U);
+        check_equal(entry->term, 5U);
+        check_equal(entry->command_id, 0U);
+        check_equal(tr_raft_conf_entry_decode(entry, &decoded), TURBO_OK);
+        check_equal(decoded.transition_id, 81U);
+        check_equal(tr_raft_membership_transition_stage_entry(
                          &transition, entry),
                      TURBO_OK);
-        check_size_eq(transition.pending_count, 1U);
+        check_equal(transition.pending_count, 1U);
         tr_raft_log_destroy(&log);
     }
 
@@ -44,11 +44,11 @@ spec("raft configuration log")
     {
         tr_raft_log_t log;
 
-        check_int_eq(tr_raft_log_init(&log, 2U, 0U, 0U), TURBO_OK);
-        check_int_eq(tr_raft_log_append_local(
+        check_equal(tr_raft_log_init(&log, 2U, 0U, 0U), TURBO_OK);
+        check_equal(tr_raft_log_append_local(
                          &log, 1U, 0U, "x", 1U, NULL),
                      TURBO_EINVAL);
-        check_size_eq(tr_raft_log_count(&log), 0U);
+        check_equal(tr_raft_log_count(&log), 0U);
         tr_raft_log_destroy(&log);
     }
 
@@ -60,21 +60,21 @@ spec("raft configuration log")
         tr_raft_membership_t joint;
         tr_raft_log_t log;
 
-        check_int_eq(tr_raft_membership_transition_init(
+        check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 1U, NULL, 0U),
                      TURBO_OK);
-        check_int_eq(tr_raft_membership_transition_propose(
+        check_equal(tr_raft_membership_transition_propose(
                          &transition, target_voters, 2U, NULL, 0U, 82U,
                          &joint),
                      TURBO_OK);
-        check_int_eq(tr_raft_log_init(&log, 1U, 0U, 0U), TURBO_OK);
-        check_int_eq(tr_raft_log_append_local(
+        check_equal(tr_raft_log_init(&log, 1U, 0U, 0U), TURBO_OK);
+        check_equal(tr_raft_log_append_local(
                          &log, 1U, 1U, NULL, 0U, NULL),
                      TURBO_OK);
-        check_int_eq(tr_raft_log_append_configuration(
+        check_equal(tr_raft_log_append_configuration(
                          &log, 1U, &joint, NULL),
                      TURBO_ENOSPC);
-        check_size_eq(tr_raft_log_count(&log), 1U);
+        check_equal(tr_raft_log_count(&log), 1U);
         tr_raft_log_destroy(&log);
     }
 }

@@ -745,11 +745,11 @@ spec("raft multi-process deterministic chaos")
         check_not_null(program);
         check_not_null(directory);
         for (seed = 1U; seed <= TR_CHAOS_SEED_COUNT; ++seed) {
-            check_int_eq(tr_chaos_run_seed(program, directory, seed),
+            check_equal(tr_chaos_run_seed(program, directory, seed),
                          TURBO_OK);
             fprintf(stderr, "chaos seed=%u completed\n", seed);
         }
-        check_int_eq(tt_remove_tree(directory), 0);
+        check_equal(tt_remove_tree(directory), 0);
         free(directory);
     }
 }

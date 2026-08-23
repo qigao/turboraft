@@ -698,7 +698,7 @@ void tr_text_replay_append_duplicate_next(
 }
 
 static int tr_text_validate_hex_payload(tr_text_parse_context_base_t *base,
-                                        tstr_v payload,
+                                        vstr payload,
                                         size_t max_decoded_bytes,
                                         const char *empty_message,
                                         const char *odd_length_message,

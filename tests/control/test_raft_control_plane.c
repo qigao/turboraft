@@ -83,7 +83,7 @@ static tr_raft_service_t *control_create_service(void)
     config.storage.rollback = control_ok;
     config.transport.enqueue = control_enqueue;
     config.state_machine.apply_batch = control_apply;
-    check_int_eq(tr_raft_service_create(&config, &service), TURBO_OK);
+    check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
     return service;
 }
 
@@ -105,14 +105,14 @@ spec("raft TurboHTTP control plane")
         memset(&config, 0, sizeof(config));
         config.service = service;
         config.app = app;
-        check_int_eq(tr_raft_control_plane_create(&config, &plane), TURBO_OK);
+        check_equal(tr_raft_control_plane_create(&config, &plane), TURBO_OK);
         check_not_null(plane);
         check(tr_raft_control_plane_app(plane) == app);
         rpc = (rpc_context_t *) iris_app_lookup_rpc_context(
             app, TR_RAFT_CONTROL_RPC_ENDPOINT);
         check_not_null(rpc);
-        check_size_eq(rpc->method_count, 19U);
-        check_size_eq(rpc->config.max_response_size, 64U * 1024U);
+        check_equal(rpc->method_count, 19U);
+        check_equal(rpc->config.max_response_size, 64U * 1024U);
         check(!rpc->methods[0].requires_auth);
         check(!rpc->methods[1].requires_auth);
         check(!rpc->methods[2].requires_auth);
@@ -125,7 +125,7 @@ spec("raft TurboHTTP control plane")
             }
         }
 
-        check_int_eq(tr_raft_control_plane_render_status_json(
+        check_equal(tr_raft_control_plane_render_status_json(
                          plane, output, sizeof(output), &size), TURBO_OK);
         check(size > 0U);
         check_not_null(strstr(output, "\"node_id\":7"));
@@ -134,7 +134,7 @@ spec("raft TurboHTTP control plane")
         check_not_null(strstr(output,
                               "\"snapshot_required_peer_count\":0"));
         check_not_null(strstr(output, "\"owner\":{\"configured\":false"));
-        check_int_eq(tr_raft_control_plane_render_status_html(
+        check_equal(tr_raft_control_plane_render_status_html(
                          plane, output, sizeof(output), &size), TURBO_OK);
         check(size > 0U);
         check_not_null(strstr(output, "7"));

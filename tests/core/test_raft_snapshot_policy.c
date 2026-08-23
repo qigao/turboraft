@@ -162,18 +162,18 @@ spec("automatic snapshot policy")
 
         memset(&capture, 0, sizeof(capture));
         snapshot_policy_config(&config, &capture, entries);
-        check_int_eq(tr_raft_service_create(&config, &service), TURBO_OK);
-        check_int_eq(tr_raft_service_poll(service), TURBO_OK);
-        check_int_eq(tr_raft_service_status(service, &status), TURBO_OK);
-        check_size_eq(capture.applied_count, 2U);
-        check_size_eq(capture.create_count, 1U);
-        check_size_eq(capture.store_count, 1U);
-        check_long_eq(capture.stored.index, 2U);
-        check_long_eq(capture.stored.term, 1U);
-        check_size_eq(capture.stored.configuration.member_count, 1U);
-        check_size_eq(capture.stored_size, 4U);
-        check_long_eq(status.core.log_base_index, 2U);
-        check_size_eq(status.core.log_entry_count, 0U);
+        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
+        check_equal(tr_raft_service_poll(service), TURBO_OK);
+        check_equal(tr_raft_service_status(service, &status), TURBO_OK);
+        check_equal(capture.applied_count, 2U);
+        check_equal(capture.create_count, 1U);
+        check_equal(capture.store_count, 1U);
+        check_equal(capture.stored.index, 2U);
+        check_equal(capture.stored.term, 1U);
+        check_equal(capture.stored.configuration.member_count, 1U);
+        check_equal(capture.stored_size, 4U);
+        check_equal(status.core.log_base_index, 2U);
+        check_equal(status.core.log_entry_count, 0U);
         check_false(status.faulted);
         tr_raft_service_destroy(service);
     }
@@ -189,13 +189,13 @@ spec("automatic snapshot policy")
         memset(&capture, 0, sizeof(capture));
         capture.store_result = TURBO_EIO;
         snapshot_policy_config(&config, &capture, entries);
-        check_int_eq(tr_raft_service_create(&config, &service), TURBO_OK);
-        check_int_eq(tr_raft_service_poll(service), TURBO_EIO);
-        check_int_eq(tr_raft_service_status(service, &status), TURBO_OK);
+        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
+        check_equal(tr_raft_service_poll(service), TURBO_EIO);
+        check_equal(tr_raft_service_status(service, &status), TURBO_OK);
         check(status.faulted);
-        check_int_eq(status.cause, TURBO_EIO);
-        check_long_eq(status.core.log_base_index, 0U);
-        check_size_eq(status.core.log_entry_count, 2U);
+        check_equal(status.cause, TURBO_EIO);
+        check_equal(status.core.log_base_index, 0U);
+        check_equal(status.core.log_entry_count, 2U);
         tr_raft_service_destroy(service);
     }
 }

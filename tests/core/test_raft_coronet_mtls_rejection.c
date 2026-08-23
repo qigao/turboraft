@@ -106,10 +106,10 @@ static void mtls_run_rejection_case(const char *request_host,
     manager_config.peer_node_ids = peer_node_ids;
     manager_config.peer_count = 1U;
 
-    check_int_eq(tr_test_reserve_loopback_port(&port), TURBO_OK);
+    check_equal(tr_test_reserve_loopback_port(&port), TURBO_OK);
     state.context = coro_context_create(NULL);
     check_not_null(state.context);
-    check_int_eq(tr_raft_coronet_peer_manager_create(&manager_config,
+    check_equal(tr_raft_coronet_peer_manager_create(&manager_config,
                                                       &state.manager),
                  TURBO_OK);
     server = coro_socket_create(state.context, CORO_SOCKET_TLS);
@@ -119,9 +119,9 @@ static void mtls_run_rejection_case(const char *request_host,
     server_tls.key_file = MTLS_FIXTURE("node2-key.pem");
     server_tls.ca_file = MTLS_FIXTURE("ca.pem");
     server_tls.client_auth = TURBO_TLS_CLIENT_AUTH_REQUIRED;
-    check_int_eq(coro_socket_set_tls_server_config(server, &server_tls),
+    check_equal(coro_socket_set_tls_server_config(server, &server_tls),
                  TURBO_OK);
-    check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port,
+    check_equal(coro_socket_listen_on(server, "127.0.0.1", port,
                                        mtls_rejection_server_handler, &state),
                  TURBO_OK);
 
@@ -146,7 +146,7 @@ static void mtls_run_rejection_case(const char *request_host,
     state.outbound.admission.peer_idle_timeout_ms = MTLS_SOCKET_TIMEOUT_MS;
     state.outbound.admission.on_message = mtls_rejection_ignore_message;
 
-    check_int_eq(coro_context_spawn(state.context, mtls_rejection_connect,
+    check_equal(coro_context_spawn(state.context, mtls_rejection_connect,
                                     &state),
                  TURBO_OK);
     deadline = turbo_monotonic_ms() + MTLS_REJECTION_TIMEOUT_MS;
@@ -157,10 +157,10 @@ static void mtls_run_rejection_case(const char *request_host,
 
     check(state.connect_result != TURBO_EBUSY);
     check(state.connect_result != TURBO_OK);
-    check_int_eq(state.identity_resolver_calls, 0);
+    check_equal(state.identity_resolver_calls, 0);
 
     coro_socket_destroy(server);
-    check_int_eq(tr_raft_coronet_peer_manager_destroy(state.manager),
+    check_equal(tr_raft_coronet_peer_manager_destroy(state.manager),
                  TURBO_OK);
     deadline = turbo_monotonic_ms() + MTLS_SOCKET_TIMEOUT_MS;
     while (coro_context_alive(state.context) &&

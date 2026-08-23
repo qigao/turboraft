@@ -15,18 +15,18 @@ static void wire_fuzz_exercise_frame(const uint8_t *frame,
     uint8_t mutation[TR_RAFT_WIRE_MAX_FRAME_SIZE + 1U];
     size_t index;
 
-    check_int_eq(tr_raft_wire_fuzz_one_input(NULL, 0U), 0);
+    check_equal(tr_raft_wire_fuzz_one_input(NULL, 0U), 0);
     for (index = 0U; index <= frame_length; ++index) {
-        check_int_eq(tr_raft_wire_fuzz_one_input(frame, index), 0);
+        check_equal(tr_raft_wire_fuzz_one_input(frame, index), 0);
     }
     for (index = 0U; index < frame_length; ++index) {
         memcpy(mutation, frame, frame_length);
         mutation[index] ^= (uint8_t)(UINT8_C(0xa5) + index);
-        check_int_eq(tr_raft_wire_fuzz_one_input(mutation, frame_length), 0);
+        check_equal(tr_raft_wire_fuzz_one_input(mutation, frame_length), 0);
     }
     memcpy(mutation, frame, frame_length);
     mutation[frame_length] = UINT8_C(0x5a);
-    check_int_eq(tr_raft_wire_fuzz_one_input(mutation, frame_length + 1U), 0);
+    check_equal(tr_raft_wire_fuzz_one_input(mutation, frame_length + 1U), 0);
 }
 
 static uint32_t wire_fuzz_random(uint32_t *state)
@@ -57,7 +57,7 @@ spec("raft wire fuzz corpus")
 
         memset(&metadata, 0, sizeof(metadata));
         metadata.message_id = 1U;
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
 
         memset(&message, 0, sizeof(message));
         message.type = TR_RAFT_MSG_APPEND_REQUEST;
@@ -72,7 +72,7 @@ spec("raft wire fuzz corpus")
         message.entries[0].command_id = 7U;
         message.entries[0].data_length = 4U;
         memcpy(message.entries[0].data, "seed", 4U);
-        check_int_eq(tr_raft_wire_encode(codec, &metadata, &message, frame,
+        check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
                      TURBO_OK);
         wire_fuzz_exercise_frame(frame, frame_length);
@@ -99,7 +99,7 @@ spec("raft wire fuzz corpus")
                 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a};
             chunk.data = chunk_data;
         }
-        check_int_eq(tr_raft_wire_encode_snapshot_chunk(
+        check_equal(tr_raft_wire_encode_snapshot_chunk(
                          codec, &metadata, &chunk, frame, sizeof(frame),
                          &frame_length),
                      TURBO_OK);
@@ -115,7 +115,7 @@ spec("raft wire fuzz corpus")
         ack.accepted = true;
         memcpy(ack.snapshot_digest, chunk.snapshot_digest,
                sizeof(ack.snapshot_digest));
-        check_int_eq(tr_raft_wire_encode_snapshot_ack(
+        check_equal(tr_raft_wire_encode_snapshot_ack(
                          codec, &metadata, &ack, frame, sizeof(frame),
                          &frame_length),
                      TURBO_OK);
@@ -128,7 +128,7 @@ spec("raft wire fuzz corpus")
             for (byte_index = 0U; byte_index < length; ++byte_index) {
                 noise[byte_index] = (uint8_t)wire_fuzz_random(&random_state);
             }
-            check_int_eq(tr_raft_wire_fuzz_one_input(noise, length), 0);
+            check_equal(tr_raft_wire_fuzz_one_input(noise, length), 0);
         }
 
         tr_raft_wire_codec_destroy(codec);

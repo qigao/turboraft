@@ -141,14 +141,14 @@ spec("text replay core driver") {
     tr_raft_status_t status;
     tr_raft_node_id_t index;
 
-    check_int_eq(tr_replay_driver_test_create(&driver, &state), TURBO_OK);
-    check_int_eq(tr_replay_driver_test_node_action(driver, 1u), TURBO_OK);
-    check_int_eq(tr_replay_driver_test_node_action(driver, 2u), TURBO_OK);
-    check_int_eq(tr_replay_driver_test_node_action(driver, 3u), TURBO_OK);
-    check_int_eq(tr_replay_driver_test_node_action(driver, 9u),
+    check_equal(tr_replay_driver_test_create(&driver, &state), TURBO_OK);
+    check_equal(tr_replay_driver_test_node_action(driver, 1u), TURBO_OK);
+    check_equal(tr_replay_driver_test_node_action(driver, 2u), TURBO_OK);
+    check_equal(tr_replay_driver_test_node_action(driver, 3u), TURBO_OK);
+    check_equal(tr_replay_driver_test_node_action(driver, 9u),
                  TURBO_ENOENT);
 
-    check_int_eq(tr_replay_driver_test_tick(driver, 30u), TURBO_OK);
+    check_equal(tr_replay_driver_test_tick(driver, 30u), TURBO_OK);
     leader = tr_replay_driver_test_leader(driver);
     check_true(leader != 0u);
 
@@ -160,22 +160,22 @@ spec("text replay core driver") {
     action.sequence = 1u;
     action.payload_hex.data = "0x0102a0ff";
     action.payload_hex.len = 10u;
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_OK);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_OK);
 
     action = tr_replay_driver_test_action();
     action.kind = TR_TEXT_REPLAY_POLL;
     action.request_id = 7u;
     action.poll_target = TR_TEXT_REPLAY_POLL_APPLIED;
     action.timeout_ticks = 40u;
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_OK);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_OK);
 
     /* Let the lagging follower catch up before asserting every commit. */
-    check_int_eq(tr_replay_driver_test_tick(driver, 5u), TURBO_OK);
+    check_equal(tr_replay_driver_test_tick(driver, 5u), TURBO_OK);
     for (index = 1u; index <= TEST_NODE_COUNT; ++index) {
-        check_int_eq(tr_replay_driver_test_expect_commit(driver, index, 1u),
+        check_equal(tr_replay_driver_test_expect_commit(driver, index, 1u),
                      TURBO_OK);
     }
-    check_int_eq(tr_replay_driver_status(driver, leader, &status),
+    check_equal(tr_replay_driver_status(driver, leader, &status),
                  TURBO_OK);
     check_true(status.applied_index >= 1u);
     check_true(state.applied_entries >= 1u);
@@ -189,8 +189,8 @@ spec("text replay core driver") {
     tr_text_replay_action_t action;
     tr_raft_node_id_t leader;
 
-    check_int_eq(tr_replay_driver_test_create(&driver, &state), TURBO_OK);
-    check_int_eq(tr_replay_driver_test_tick(driver, 30u), TURBO_OK);
+    check_equal(tr_replay_driver_test_create(&driver, &state), TURBO_OK);
+    check_equal(tr_replay_driver_test_tick(driver, 30u), TURBO_OK);
     leader = tr_replay_driver_test_leader(driver);
     check_true(leader != 0u);
 
@@ -198,16 +198,16 @@ spec("text replay core driver") {
     action.kind = TR_TEXT_REPLAY_PARTITION;
     action.node_id = leader;
     action.peer_id = leader == 1u ? 2u : 1u;
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_OK);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_OK);
     action.node_id = leader;
     action.peer_id = leader == 3u ? 2u : 3u;
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_OK);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_OK);
 
-    check_int_eq(tr_replay_driver_test_tick(driver, 12u), TURBO_OK);
+    check_equal(tr_replay_driver_test_tick(driver, 12u), TURBO_OK);
     {
         tr_raft_status_t status;
 
-        check_int_eq(tr_replay_driver_status(driver, leader, &status),
+        check_equal(tr_replay_driver_status(driver, leader, &status),
                      TURBO_OK);
         check_true(status.role != TR_RAFT_LEADER);
     }
@@ -216,12 +216,12 @@ spec("text replay core driver") {
     action.kind = TR_TEXT_REPLAY_HEAL;
     action.node_id = leader;
     action.peer_id = leader == 1u ? 2u : 1u;
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_OK);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_OK);
     action.node_id = leader;
     action.peer_id = leader == 3u ? 2u : 3u;
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_OK);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_OK);
 
-    check_int_eq(tr_replay_driver_test_tick(driver, 30u), TURBO_OK);
+    check_equal(tr_replay_driver_test_tick(driver, 30u), TURBO_OK);
     check_true(tr_replay_driver_test_leader(driver) != 0u);
     tr_replay_driver_destroy(driver);
   }
@@ -231,35 +231,35 @@ spec("text replay core driver") {
     tr_replay_driver_test_state_t state = {0};
     tr_text_replay_action_t action;
 
-    check_int_eq(tr_replay_driver_test_create(&driver, &state), TURBO_OK);
+    check_equal(tr_replay_driver_test_create(&driver, &state), TURBO_OK);
 
     action = tr_replay_driver_test_action();
     action.kind = TR_TEXT_REPLAY_DROP_NEXT;
     action.name.data = "not_a_message";
     action.name.len = strlen("not_a_message");
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_EINVAL);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_EINVAL);
 
     action = tr_replay_driver_test_action();
     action.kind = TR_TEXT_REPLAY_DELAY_NEXT;
     action.name.data = "append_request";
     action.name.len = strlen("append_request");
     action.value = 3u;
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_OK);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_OK);
 
     action = tr_replay_driver_test_action();
     action.kind = TR_TEXT_REPLAY_DUPLICATE_NEXT;
     action.name.data = "vote_request";
     action.name.len = strlen("vote_request");
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_OK);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_OK);
 
     action = tr_replay_driver_test_action();
     action.kind = TR_TEXT_REPLAY_POLL;
     action.request_id = 99u;
     action.poll_target = TR_TEXT_REPLAY_POLL_ACCEPTED;
     action.timeout_ticks = 1u;
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_ENOENT);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_ENOENT);
 
-    check_int_eq(tr_replay_driver_test_tick(driver, 30u), TURBO_OK);
+    check_equal(tr_replay_driver_test_tick(driver, 30u), TURBO_OK);
     {
         tr_raft_node_id_t leader = tr_replay_driver_test_leader(driver);
 
@@ -272,8 +272,8 @@ spec("text replay core driver") {
         action.sequence = 1u;
         action.payload_hex.data = "0x01";
         action.payload_hex.len = 4u;
-        check_int_eq(tr_replay_driver_step(driver, &action), TURBO_OK);
-        check_int_eq(tr_replay_driver_step(driver, &action), TURBO_EALREADY);
+        check_equal(tr_replay_driver_step(driver, &action), TURBO_OK);
+        check_equal(tr_replay_driver_step(driver, &action), TURBO_EALREADY);
     }
     tr_replay_driver_destroy(driver);
   }
@@ -283,10 +283,10 @@ spec("text replay core driver") {
     tr_replay_driver_test_state_t state = {0};
     tr_text_replay_action_t action;
 
-    check_int_eq(tr_replay_driver_test_create(&driver, &state), TURBO_OK);
-    check_int_eq(tr_replay_driver_test_tick(driver, 30u), TURBO_OK);
+    check_equal(tr_replay_driver_test_create(&driver, &state), TURBO_OK);
+    check_equal(tr_replay_driver_test_tick(driver, 30u), TURBO_OK);
 
-    check_int_eq(tr_replay_driver_test_expect_role(driver, 1u, "leader") ==
+    check_equal(tr_replay_driver_test_expect_role(driver, 1u, "leader") ==
                      TURBO_OK ||
                  tr_replay_driver_test_expect_role(driver, 2u, "leader") ==
                      TURBO_OK ||
@@ -300,14 +300,14 @@ spec("text replay core driver") {
     action.comparison = TR_TEXT_REPLAY_COMPARE_EQ;
     action.name.data = "bogus_role";
     action.name.len = strlen("bogus_role");
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_EINVAL);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_EINVAL);
 
     action = tr_replay_driver_test_action();
     action.kind = TR_TEXT_REPLAY_EXPECT_COMMIT_INDEX;
     action.node_id = 1u;
     action.comparison = TR_TEXT_REPLAY_COMPARE_GE;
     action.value = UINT64_MAX;
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_EPROTO);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_EPROTO);
 
     action = tr_replay_driver_test_action();
     action.kind = TR_TEXT_REPLAY_EXPECT_ROLE;
@@ -315,12 +315,12 @@ spec("text replay core driver") {
     action.comparison = TR_TEXT_REPLAY_COMPARE_EQ;
     action.name.data = "follower";
     action.name.len = strlen("follower");
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_ENOENT);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_ENOENT);
 
     action = tr_replay_driver_test_action();
     action.kind = TR_TEXT_REPLAY_TICK;
     action.value = 0u;
-    check_int_eq(tr_replay_driver_step(driver, &action), TURBO_ERANGE);
+    check_equal(tr_replay_driver_step(driver, &action), TURBO_ERANGE);
 
     tr_replay_driver_destroy(driver);
   }
@@ -339,12 +339,12 @@ spec("text replay core driver") {
     tr_text_diagnostic_t diagnostic;
     tr_raft_status_t status;
 
-    check_int_eq(tr_replay_driver_test_create(&driver, &state), TURBO_OK);
-    check_int_eq(tr_text_replay_parse(plan_text, strlen(plan_text), NULL,
+    check_equal(tr_replay_driver_test_create(&driver, &state), TURBO_OK);
+    check_equal(tr_text_replay_parse(plan_text, strlen(plan_text), NULL,
                                       &plan, &diagnostic),
                  TURBO_OK);
-    check_int_eq(tr_replay_driver_run(driver, &plan), TURBO_OK);
-    check_int_eq(tr_replay_driver_status(driver, 2u, &status), TURBO_OK);
+    check_equal(tr_replay_driver_run(driver, &plan), TURBO_OK);
+    check_equal(tr_replay_driver_status(driver, 2u, &status), TURBO_OK);
     check_true(status.leader_id != 0u);
     tr_replay_driver_destroy(driver);
   }

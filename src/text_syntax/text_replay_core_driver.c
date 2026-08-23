@@ -95,7 +95,7 @@ static const tr_replay_message_name_t tr_replay_message_names[] = {
      TR_RAFT_MSG_READ_INDEX_RESPONSE},
 };
 
-static bool tr_replay_name_equals(tstr_v value, const char *literal)
+static bool tr_replay_name_equals(vstr value, const char *literal)
 {
     size_t literal_length;
 
@@ -107,7 +107,7 @@ static bool tr_replay_name_equals(tstr_v value, const char *literal)
            memcmp(value.data, literal, literal_length) == 0;
 }
 
-static int tr_replay_message_type(tstr_v name,
+static int tr_replay_message_type(vstr name,
                                   tr_raft_message_type_t *out_type)
 {
     size_t index;
@@ -127,7 +127,7 @@ static int tr_replay_message_type(tstr_v name,
     return TURBO_EINVAL;
 }
 
-static int tr_replay_role(tstr_v name, tr_raft_role_t *out_role)
+static int tr_replay_role(vstr name, tr_raft_role_t *out_role)
 {
     if (tr_replay_name_equals(name, "follower")) {
         *out_role = TR_RAFT_FOLLOWER;
@@ -163,7 +163,7 @@ static int tr_replay_hex_value(char value)
     return -1;
 }
 
-static int tr_replay_decode_hex(tstr_v input,
+static int tr_replay_decode_hex(vstr input,
                                 uint8_t *output,
                                 size_t output_capacity,
                                 size_t *output_length)
@@ -661,7 +661,7 @@ static int tr_replay_expect_commit(tr_replay_driver_t *driver,
 }
 
 static int tr_replay_set_filter(tr_replay_driver_t *driver,
-                                tstr_v name,
+                                vstr name,
                                 tr_replay_filter_action_t action,
                                 uint32_t delay_ticks)
 {

@@ -11,8 +11,9 @@ TurboRaft is a new C11 implementation built on TurboUtils. The pinned
 - an independent oracle for later differential traces;
 - a source of regression scenarios that are rewritten against TurboRaft APIs.
 
-The production target is `TurboRaft::Core`; it links `TurboUtils::Core` and does
-not link `TurboRaft::WillemtCore`.
+The production target is `TurboRaft::Core`; it links `TurboUtils::Core`, uses
+`TurboUtils::STL` privately for its internal containers, and does not link
+`TurboRaft::WillemtCore`.
 
 ## First-slice scope
 
@@ -54,10 +55,10 @@ node must be faulted rather than processing another input.
 ## Native log foundation
 
 `src/core/raft_log.c` is an internal, bounded log fact source implemented with
-TurboUtils `turbo_vec_t`. Creation reserves the configured maximum entry count,
-so reconciliation never grows memory beyond that bound. It supports contiguous
-local append, previous-index/term matching, conflict-term hints, idempotent
-replay, and atomic conflicting-suffix replacement.
+TurboSTL `vec_t` and its natural `vec_*` API. Creation reserves the configured
+maximum entry count, so reconciliation never grows memory beyond that bound. It
+supports contiguous local append, previous-index/term matching, conflict-term
+hints, idempotent replay, and atomic conflicting-suffix replacement.
 
 Entries currently carry a bounded 512-byte command payload. Larger mesh data is
 represented by an application-level content reference rather than copied into

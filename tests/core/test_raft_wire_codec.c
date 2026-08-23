@@ -38,23 +38,23 @@ spec("raft wire codec")
         message.entry.data_length = 3U;
         memcpy(message.entry.data, "run", 3U);
 
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode(codec, &metadata, &message, frame,
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
                      TURBO_OK);
-        check_int_eq(tr_raft_wire_decode(codec, frame, frame_length,
+        check_equal(tr_raft_wire_decode(codec, frame, frame_length,
                                          &decoded_metadata, &decoded),
                      TURBO_OK);
-        check_mem_eq(decoded_metadata.cluster_id.bytes,
+        check_equal(decoded_metadata.cluster_id.bytes,
                      metadata.cluster_id.bytes,
                      sizeof(metadata.cluster_id.bytes));
-        check_long_eq(decoded_metadata.message_id, 99U);
-        check_int_eq(decoded.type, TR_RAFT_MSG_APPEND_REQUEST);
-        check_long_eq(decoded.from, 1U);
-        check_long_eq(decoded.to, 2U);
-        check_long_eq(decoded.entry.index, 8U);
-        check_size_eq(decoded.entry.data_length, 3U);
-        check_mem_eq(decoded.entry.data, "run", 3U);
+        check_equal(decoded_metadata.message_id, 99U);
+        check_equal(decoded.type, TR_RAFT_MSG_APPEND_REQUEST);
+        check_equal(decoded.from, 1U);
+        check_equal(decoded.to, 2U);
+        check_equal(decoded.entry.index, 8U);
+        check_equal(decoded.entry.data_length, 3U);
+        check_equal(decoded.entry.data, "run", 3U);
         tr_raft_wire_codec_destroy(codec);
     }
 
@@ -71,12 +71,12 @@ spec("raft wire codec")
         message.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
         message.from = 1U;
         message.to = 2U;
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode(codec, &metadata, &message, frame,
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
                      TURBO_OK);
         frame[5] = 4U;
-        check_int_eq(tr_raft_wire_decode(codec, frame, frame_length, &metadata,
+        check_equal(tr_raft_wire_decode(codec, frame, frame_length, &metadata,
                                          &message),
                      TURBO_EPROTO);
         tr_raft_wire_codec_destroy(codec);
@@ -99,17 +99,17 @@ spec("raft wire codec")
         message.from = 1U;
         message.to = 2U;
         message.term = 9U;
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode(codec, &metadata, &message, frame,
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
                      TURBO_OK);
-        check_int_eq(tr_raft_wire_decode(codec, frame, frame_length,
+        check_equal(tr_raft_wire_decode(codec, frame, frame_length,
                                          &decoded_metadata, &decoded),
                      TURBO_OK);
-        check_int_eq(decoded.type, TR_RAFT_MSG_TIMEOUT_NOW);
-        check_long_eq(decoded.from, 1U);
-        check_long_eq(decoded.to, 2U);
-        check_long_eq(decoded.term, 9U);
+        check_equal(decoded.type, TR_RAFT_MSG_TIMEOUT_NOW);
+        check_equal(decoded.from, 1U);
+        check_equal(decoded.to, 2U);
+        check_equal(decoded.term, 9U);
         tr_raft_wire_codec_destroy(codec);
     }
 
@@ -131,16 +131,16 @@ spec("raft wire codec")
         message.to = 2U;
         message.term = 9U;
         message.context_id = 88U;
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode(codec, &metadata, &message, frame,
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
                      TURBO_OK);
-        check_int_eq(tr_raft_wire_decode(codec, frame, frame_length,
+        check_equal(tr_raft_wire_decode(codec, frame, frame_length,
                                          &decoded_metadata, &decoded),
                      TURBO_OK);
-        check_int_eq(decoded.type, TR_RAFT_MSG_READ_INDEX_REQUEST);
-        check_long_eq(decoded.context_id, 88U);
-        check_long_eq(decoded.term, 9U);
+        check_equal(decoded.type, TR_RAFT_MSG_READ_INDEX_REQUEST);
+        check_equal(decoded.context_id, 88U);
+        check_equal(decoded.term, 9U);
         tr_raft_wire_codec_destroy(codec);
     }
 
@@ -173,18 +173,18 @@ spec("raft wire codec")
             memset(message.entries[index].data, (int) ('a' + index),
                    index + 1U);
         }
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode(codec, &metadata, &message, frame,
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
                      TURBO_OK);
-        check_int_eq(frame[5], TR_RAFT_WIRE_VERSION);
-        check_int_eq(tr_raft_wire_decode(codec, frame, frame_length,
+        check_equal(frame[5], TR_RAFT_WIRE_VERSION);
+        check_equal(tr_raft_wire_decode(codec, frame, frame_length,
                                          &decoded_metadata, &decoded),
                      TURBO_OK);
-        check_size_eq(decoded.entry_count, 3U);
-        check_long_eq(decoded.entries[2].index, 10U);
-        check_size_eq(decoded.entries[2].data_length, 3U);
-        check_mem_eq(decoded.entries[2].data, "ccc", 3U);
+        check_equal(decoded.entry_count, 3U);
+        check_equal(decoded.entries[2].index, 10U);
+        check_equal(decoded.entries[2].data_length, 3U);
+        check_equal(decoded.entries[2].data, "ccc", 3U);
         tr_raft_wire_codec_destroy(codec);
     }
 
@@ -202,8 +202,8 @@ spec("raft wire codec")
         message.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
         message.from = 1U;
         message.to = 2U;
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode(codec, &metadata, &message, frame,
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
                      TURBO_OK);
 
@@ -213,7 +213,7 @@ spec("raft wire codec")
         frame[9] = (uint8_t) (payload_length >> 16U);
         frame[10] = (uint8_t) (payload_length >> 8U);
         frame[11] = (uint8_t) payload_length;
-        check_int_eq(tr_raft_wire_decode(codec, frame, frame_length, &metadata,
+        check_equal(tr_raft_wire_decode(codec, frame, frame_length, &metadata,
                                          &message),
                      TURBO_EPROTO);
         tr_raft_wire_codec_destroy(codec);
@@ -242,17 +242,17 @@ spec("raft wire codec")
         message.entries[0].command_id = 60U;
         message.entries[0].data_length = 2U;
         memcpy(message.entries[0].data, "v2", 2U);
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode_version(
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode_version(
                          codec, 2U, &metadata, &message, frame, sizeof(frame),
                          &frame_length),
                      TURBO_OK);
-        check_int_eq(frame[5], 2U);
-        check_int_eq(tr_raft_wire_decode(codec, frame, frame_length,
+        check_equal(frame[5], 2U);
+        check_equal(tr_raft_wire_decode(codec, frame, frame_length,
                                          &decoded_metadata, &decoded),
                      TURBO_OK);
-        check_size_eq(decoded.entry_count, 1U);
-        check_mem_eq(decoded.entries[0].data, "v2", 2U);
+        check_equal(decoded.entry_count, 1U);
+        check_equal(decoded.entries[0].data, "v2", 2U);
         tr_raft_wire_codec_destroy(codec);
     }
 
@@ -294,25 +294,25 @@ spec("raft wire codec")
         memset(chunk_data, 0x5a, sizeof(chunk_data));
         chunk.data = chunk_data;
 
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode_snapshot_chunk(
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode_snapshot_chunk(
                          codec, &metadata, &chunk, frame, sizeof(frame),
                          &frame_length),
                      TURBO_OK);
-        check_int_eq(tr_raft_wire_decode_snapshot_chunk(
+        check_equal(tr_raft_wire_decode_snapshot_chunk(
                          codec, frame, frame_length, &decoded_metadata,
                          &decoded_chunk),
                      TURBO_OK);
-        check_long_eq(decoded_metadata.message_id, 101U);
-        check_long_eq(decoded_chunk.snapshot_index, 50U);
-        check_long_eq(decoded_chunk.snapshot_offset, 0U);
+        check_equal(decoded_metadata.message_id, 101U);
+        check_equal(decoded_chunk.snapshot_index, 50U);
+        check_equal(decoded_chunk.snapshot_offset, 0U);
         check(decoded_chunk.has_configuration);
-        check_size_eq(decoded_chunk.configuration.member_count, 1U);
-        check_size_eq(decoded_chunk.data_length, 88U);
+        check_equal(decoded_chunk.configuration.member_count, 1U);
+        check_equal(decoded_chunk.data_length, 88U);
         check(decoded_chunk.done);
-        check_mem_eq(decoded_chunk.snapshot_digest, chunk.snapshot_digest,
+        check_equal(decoded_chunk.snapshot_digest, chunk.snapshot_digest,
                      sizeof(chunk.snapshot_digest));
-        check_mem_eq(decoded_chunk.data, chunk.data, chunk.data_length);
+        check_equal(decoded_chunk.data, chunk.data, chunk.data_length);
 
         memset(&ack, 0, sizeof(ack));
         ack.from = 2U;
@@ -324,17 +324,17 @@ spec("raft wire codec")
         ack.accepted = true;
         memcpy(ack.snapshot_digest, chunk.snapshot_digest,
                sizeof(ack.snapshot_digest));
-        check_int_eq(tr_raft_wire_encode_snapshot_ack(
+        check_equal(tr_raft_wire_encode_snapshot_ack(
                          codec, &metadata, &ack, frame, sizeof(frame),
                          &frame_length),
                      TURBO_OK);
-        check_int_eq(tr_raft_wire_decode_snapshot_ack(
+        check_equal(tr_raft_wire_decode_snapshot_ack(
                          codec, frame, frame_length, &decoded_metadata,
                          &decoded_ack),
                      TURBO_OK);
         check(decoded_ack.accepted);
-        check_long_eq(decoded_ack.next_offset, 600U);
-        check_mem_eq(decoded_ack.snapshot_digest, ack.snapshot_digest,
+        check_equal(decoded_ack.next_offset, 600U);
+        check_equal(decoded_ack.snapshot_digest, ack.snapshot_digest,
                      sizeof(ack.snapshot_digest));
         tr_raft_wire_codec_destroy(codec);
     }
@@ -365,19 +365,19 @@ spec("raft wire codec")
             TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
         chunk.data_length = 513U;
         chunk.data = chunk_data;
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode_snapshot_chunk(
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode_snapshot_chunk(
                          codec, &metadata, &chunk, frame, sizeof(frame),
                          &frame_length),
                      TURBO_EINVAL);
 
         chunk.data_length = 512U;
-        check_int_eq(tr_raft_wire_encode_snapshot_chunk(
+        check_equal(tr_raft_wire_encode_snapshot_chunk(
                          codec, &metadata, &chunk, frame, sizeof(frame),
                          &frame_length),
                      TURBO_OK);
         frame[15] = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
-        check_int_eq(tr_raft_wire_decode_snapshot_chunk(
+        check_equal(tr_raft_wire_decode_snapshot_chunk(
                          codec, frame, frame_length, &metadata, &decoded),
                      TURBO_EPROTO);
         tr_raft_wire_codec_destroy(codec);
@@ -417,19 +417,19 @@ spec("raft wire codec")
         chunk.done = true;
         memset(chunk.snapshot_digest, 0x3c, sizeof(chunk.snapshot_digest));
 
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode_snapshot_chunk(
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode_snapshot_chunk(
                          codec, &metadata, &chunk, frame, sizeof(frame),
                          &frame_length), TURBO_OK);
-        check_int_eq(tr_raft_wire_peek_version(frame, frame_length, &version),
+        check_equal(tr_raft_wire_peek_version(frame, frame_length, &version),
                      TURBO_OK);
-        check_int_eq(version, TR_RAFT_WIRE_SNAPSHOT_VERSION);
-        check_int_eq(tr_raft_wire_decode_snapshot_chunk(
+        check_equal(version, TR_RAFT_WIRE_SNAPSHOT_VERSION);
+        check_equal(tr_raft_wire_decode_snapshot_chunk(
                          codec, frame, frame_length, &decoded_metadata,
                          &decoded), TURBO_OK);
-        check_size_eq(decoded.data_length, sizeof(data));
-        check_mem_eq(decoded.data, data, sizeof(data));
-        check_int_eq(tr_raft_wire_encode_snapshot_chunk_version(
+        check_equal(decoded.data_length, sizeof(data));
+        check_equal(decoded.data, data, sizeof(data));
+        check_equal(tr_raft_wire_encode_snapshot_chunk_version(
                          codec, TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION,
                          &metadata, &chunk, frame, sizeof(frame),
                          &frame_length), TURBO_EPROTO);
@@ -461,17 +461,17 @@ spec("raft wire codec")
         chunk.done = true;
         memset(chunk.stream_digest, 0xa7, sizeof(chunk.stream_digest));
 
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode_data_chunk(
+        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_encode_data_chunk(
                          codec, &metadata, &chunk, frame, sizeof(frame),
                          &frame_length), TURBO_OK);
-        check_int_eq(tr_raft_wire_decode_data_chunk(
+        check_equal(tr_raft_wire_decode_data_chunk(
                          codec, frame, frame_length, &decoded_metadata,
                          &decoded_chunk), TURBO_OK);
-        check_long_eq(decoded_chunk.stream_id, chunk.stream_id);
-        check_size_eq(decoded_chunk.data_length, sizeof(data));
-        check_mem_eq(decoded_chunk.data, data, sizeof(data));
-        check_mem_eq(decoded_chunk.stream_digest, chunk.stream_digest,
+        check_equal(decoded_chunk.stream_id, chunk.stream_id);
+        check_equal(decoded_chunk.data_length, sizeof(data));
+        check_equal(decoded_chunk.data, data, sizeof(data));
+        check_equal(decoded_chunk.stream_digest, chunk.stream_digest,
                      sizeof(chunk.stream_digest));
         check_true(decoded_chunk.done);
 
@@ -486,15 +486,15 @@ spec("raft wire codec")
         ack.durable = true;
         memcpy(ack.stream_digest, chunk.stream_digest,
                sizeof(ack.stream_digest));
-        check_int_eq(tr_raft_wire_encode_data_ack(
+        check_equal(tr_raft_wire_encode_data_ack(
                          codec, &metadata, &ack, frame, sizeof(frame),
                          &frame_length), TURBO_OK);
-        check_int_eq(tr_raft_wire_decode_data_ack(
+        check_equal(tr_raft_wire_decode_data_ack(
                          codec, frame, frame_length, &decoded_metadata,
                          &decoded_ack), TURBO_OK);
         check_true(decoded_ack.accepted);
         check_true(decoded_ack.durable);
-        check_long_eq(decoded_ack.next_offset, sizeof(data));
+        check_equal(decoded_ack.next_offset, sizeof(data));
         tr_raft_wire_codec_destroy(codec);
     }
 }

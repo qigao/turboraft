@@ -248,7 +248,7 @@ bytes are also bounded at parse time: `submit` payloads by
 `TR_RAFT_MAX_ENTRY_BYTES` and protocol frame payloads by
 `TR_RAFT_WIRE_MAX_FRAME_SIZE`, each reported as `TURBO_ENOSPC`.
 
-String fields use borrowed `tstr_v` views into the input buffer. Keep the input
+String fields use borrowed `vstr` views into the input buffer. Keep the input
 buffer alive and unchanged until the plan is no longer used.
 
 On failure, the output plan is cleared and the diagnostic, when provided,

@@ -58,12 +58,12 @@ static void wal_test_cleanup(char *prefix)
     for (index = 1U; index <= WAL_TEST_MAX_SEGMENTS; ++index) {
         snprintf(path, sizeof(path), "%s.%08zu.wal", prefix, index);
         if (turbo_fs_access(path, TURBO_FS_ACCESS_EXISTS) == TURBO_OK)
-            check_int_eq(tt_remove_file(path), 0);
+            check_equal(tt_remove_file(path), 0);
     }
     wal_test_path(path, sizeof(path), prefix, ".lock");
     if (turbo_fs_access(path, TURBO_FS_ACCESS_EXISTS) == TURBO_OK)
-        check_int_eq(tt_remove_file(path), 0);
-    check_int_eq(tt_remove_file(prefix), 0);
+        check_equal(tt_remove_file(path), 0);
+    check_equal(tt_remove_file(prefix), 0);
     free(prefix);
 }
 
@@ -86,33 +86,33 @@ spec("raft segmented WAL storage")
         entries[0] = wal_test_entry(1U, 1U, 1U, "one");
         entries[1] = wal_test_entry(2U, 2U, 2U, "two");
         entries[2] = wal_test_entry(3U, 2U, 3U, "three");
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
-        check_int_eq(adapter.begin(adapter.context), TURBO_OK);
-        check_int_eq(adapter.write_hard_state(adapter.context, 2U, 1U),
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
+        check_equal(adapter.begin(adapter.context), TURBO_OK);
+        check_equal(adapter.write_hard_state(adapter.context, 2U, 1U),
                      TURBO_OK);
-        check_int_eq(adapter.append_log(adapter.context, entries, 3U),
+        check_equal(adapter.append_log(adapter.context, entries, 3U),
                      TURBO_OK);
-        check_int_eq(adapter.write_commit_index(adapter.context, 3U),
+        check_equal(adapter.write_commit_index(adapter.context, 3U),
                      TURBO_OK);
-        check_int_eq(adapter.commit(adapter.context), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_store_snapshot(
+        check_equal(adapter.commit(adapter.context), TURBO_OK);
+        check_equal(tr_raft_wal_storage_store_snapshot(
                          storage, 2U, 2U, &configuration,
                          snapshot, sizeof(snapshot)), TURBO_OK);
         memset(&recovery, 0, sizeof(recovery));
-        check_int_eq(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
-        check_long_eq(recovery.snapshot_index, 2U);
-        check_long_eq(recovery.snapshot_term, 2U);
-        check_long_eq(recovery.commit_index, 3U);
-        check_size_eq(recovery.entry_count, 1U);
-        check_long_eq(recovery.entries[0].index, 3U);
-        check_mem_eq(recovery.snapshot_data, snapshot, sizeof(snapshot));
-        check_long_eq(recovery.snapshot_configuration.transition_id, 7U);
+        check_equal(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
+        check_equal(recovery.snapshot_index, 2U);
+        check_equal(recovery.snapshot_term, 2U);
+        check_equal(recovery.commit_index, 3U);
+        check_equal(recovery.entry_count, 1U);
+        check_equal(recovery.entries[0].index, 3U);
+        check_equal(recovery.snapshot_data, snapshot, sizeof(snapshot));
+        check_equal(recovery.snapshot_configuration.transition_id, 7U);
         tr_raft_wal_recovery_destroy(&recovery);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         snprintf(snapshot_path, sizeof(snapshot_path), "%s.snapshot.2.2",
                  prefix);
-        check_int_eq(tt_remove_file(snapshot_path), 0);
+        check_equal(tt_remove_file(snapshot_path), 0);
         wal_test_cleanup(prefix);
     }
 
@@ -128,27 +128,27 @@ spec("raft segmented WAL storage")
         tr_raft_wal_recovery_t recovery;
         char snapshot_path[TURBO_FS_MAX_PATH];
 
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_install_snapshot(
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_install_snapshot(
                          storage, 7U, 9U, 6U, &configuration,
                          snapshot, sizeof(snapshot)), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         config.create_if_missing = false;
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
         memset(&recovery, 0, sizeof(recovery));
-        check_int_eq(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
-        check_long_eq(recovery.term, 7U);
-        check_long_eq(recovery.voted_for, 0U);
-        check_long_eq(recovery.snapshot_index, 9U);
-        check_long_eq(recovery.snapshot_term, 6U);
-        check_long_eq(recovery.commit_index, 9U);
-        check_size_eq(recovery.entry_count, 0U);
-        check_mem_eq(recovery.snapshot_data, snapshot, sizeof(snapshot));
+        check_equal(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
+        check_equal(recovery.term, 7U);
+        check_equal(recovery.voted_for, 0U);
+        check_equal(recovery.snapshot_index, 9U);
+        check_equal(recovery.snapshot_term, 6U);
+        check_equal(recovery.commit_index, 9U);
+        check_equal(recovery.entry_count, 0U);
+        check_equal(recovery.snapshot_data, snapshot, sizeof(snapshot));
         tr_raft_wal_recovery_destroy(&recovery);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         snprintf(snapshot_path, sizeof(snapshot_path), "%s.snapshot.9.6",
                  prefix);
-        check_int_eq(tt_remove_file(snapshot_path), 0);
+        check_equal(tt_remove_file(snapshot_path), 0);
         wal_test_cleanup(prefix);
     }
 
@@ -168,38 +168,38 @@ spec("raft segmented WAL storage")
         char second_segment[TURBO_FS_MAX_PATH];
         char snapshot_path[TURBO_FS_MAX_PATH];
 
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
-        check_int_eq(adapter.begin(adapter.context), TURBO_OK);
-        check_int_eq(adapter.write_hard_state(adapter.context, 1U, 1U),
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
+        check_equal(adapter.begin(adapter.context), TURBO_OK);
+        check_equal(adapter.write_hard_state(adapter.context, 1U, 1U),
                      TURBO_OK);
-        check_int_eq(adapter.append_log(adapter.context, &entry, 1U), TURBO_OK);
-        check_int_eq(adapter.write_commit_index(adapter.context, 1U), TURBO_OK);
-        check_int_eq(adapter.commit(adapter.context), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_store_snapshot(
+        check_equal(adapter.append_log(adapter.context, &entry, 1U), TURBO_OK);
+        check_equal(adapter.write_commit_index(adapter.context, 1U), TURBO_OK);
+        check_equal(adapter.commit(adapter.context), TURBO_OK);
+        check_equal(tr_raft_wal_storage_store_snapshot(
                          storage, 1U, 1U, &configuration,
                          snapshot, sizeof(snapshot)), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         snprintf(first_segment, sizeof(first_segment), "%s.00000001.wal",
                  prefix);
         snprintf(second_segment, sizeof(second_segment), "%s.00000002.wal",
                  prefix);
-        check_int_ne(turbo_fs_access(first_segment, TURBO_FS_ACCESS_EXISTS),
+        check_not_equal(turbo_fs_access(first_segment, TURBO_FS_ACCESS_EXISTS),
                      TURBO_OK);
-        check_int_eq(turbo_fs_access(second_segment, TURBO_FS_ACCESS_EXISTS),
+        check_equal(turbo_fs_access(second_segment, TURBO_FS_ACCESS_EXISTS),
                      TURBO_OK);
         config.create_if_missing = false;
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
         memset(&recovery, 0, sizeof(recovery));
-        check_int_eq(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
-        check_long_eq(recovery.snapshot_index, 1U);
-        check_long_eq(recovery.commit_index, 1U);
-        check_size_eq(recovery.entry_count, 0U);
+        check_equal(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
+        check_equal(recovery.snapshot_index, 1U);
+        check_equal(recovery.commit_index, 1U);
+        check_equal(recovery.entry_count, 0U);
         tr_raft_wal_recovery_destroy(&recovery);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         snprintf(snapshot_path, sizeof(snapshot_path), "%s.snapshot.1.1",
                  prefix);
-        check_int_eq(tt_remove_file(snapshot_path), 0);
+        check_equal(tt_remove_file(snapshot_path), 0);
         wal_test_cleanup(prefix);
     }
 
@@ -216,30 +216,30 @@ spec("raft segmented WAL storage")
         entries[0] = wal_test_entry(1U, 1U, 11U, "one");
         entries[1] = wal_test_entry(2U, 2U, 12U, "two");
         entries[2] = wal_test_entry(3U, 2U, 13U, "three");
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
-        check_int_eq(adapter.begin(adapter.context), TURBO_OK);
-        check_int_eq(adapter.write_hard_state(adapter.context, 2U, 1U),
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
+        check_equal(adapter.begin(adapter.context), TURBO_OK);
+        check_equal(adapter.write_hard_state(adapter.context, 2U, 1U),
                      TURBO_OK);
-        check_int_eq(adapter.append_log(adapter.context, entries, 3U),
+        check_equal(adapter.append_log(adapter.context, entries, 3U),
                      TURBO_OK);
-        check_int_eq(adapter.write_commit_index(adapter.context, 3U),
+        check_equal(adapter.write_commit_index(adapter.context, 3U),
                      TURBO_OK);
-        check_int_eq(adapter.commit(adapter.context), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(adapter.commit(adapter.context), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
 
         config.create_if_missing = false;
         storage = NULL;
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
         memset(&recovery, 0, sizeof(recovery));
-        check_int_eq(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
-        check_long_eq(recovery.term, 2U);
-        check_long_eq(recovery.voted_for, 1U);
-        check_long_eq(recovery.commit_index, 3U);
-        check_size_eq(recovery.entry_count, 3U);
-        check_str_eq((const char *)recovery.entries[2].data, "three");
+        check_equal(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
+        check_equal(recovery.term, 2U);
+        check_equal(recovery.voted_for, 1U);
+        check_equal(recovery.commit_index, 3U);
+        check_equal(recovery.entry_count, 3U);
+        check_equal((const char *)recovery.entries[2].data, "three");
         tr_raft_wal_recovery_destroy(&recovery);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         wal_test_cleanup(prefix);
     }
 
@@ -255,33 +255,33 @@ spec("raft segmented WAL storage")
         turbo_file_t file;
         static const uint8_t torn[] = {0x54U, 0x52U, 0x57U};
 
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
-        check_int_eq(adapter.begin(adapter.context), TURBO_OK);
-        check_int_eq(adapter.append_log(adapter.context, &entry, 1U), TURBO_OK);
-        check_int_eq(adapter.commit(adapter.context), TURBO_OK);
-        check_int_eq(adapter.begin(adapter.context), TURBO_OK);
-        check_int_eq(adapter.write_hard_state(adapter.context, 9U, 1U),
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
+        check_equal(adapter.begin(adapter.context), TURBO_OK);
+        check_equal(adapter.append_log(adapter.context, &entry, 1U), TURBO_OK);
+        check_equal(adapter.commit(adapter.context), TURBO_OK);
+        check_equal(adapter.begin(adapter.context), TURBO_OK);
+        check_equal(adapter.write_hard_state(adapter.context, 9U, 1U),
                      TURBO_OK);
-        check_int_eq(adapter.rollback(adapter.context), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(adapter.rollback(adapter.context), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
 
         wal_test_path(path, sizeof(path), prefix, ".00000001.wal");
         file = turbo_fs_open(path, TURBO_FS_O_WRONLY | TURBO_FS_O_APPEND, 0);
-        check_int_ne(file, TURBO_INVALID_FILE);
-        check_int_eq(turbo_fs_write(file, (const char *)torn, sizeof(torn)),
+        check_not_equal(file, TURBO_INVALID_FILE);
+        check_equal(turbo_fs_write(file, (const char *)torn, sizeof(torn)),
                      (int)sizeof(torn));
-        check_int_eq(turbo_fs_close(file), TURBO_OK);
+        check_equal(turbo_fs_close(file), TURBO_OK);
 
         config.create_if_missing = false;
         storage = NULL;
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
         memset(&recovery, 0, sizeof(recovery));
-        check_int_eq(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
-        check_long_eq(recovery.term, 0U);
-        check_size_eq(recovery.entry_count, 1U);
+        check_equal(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
+        check_equal(recovery.term, 0U);
+        check_equal(recovery.entry_count, 1U);
         tr_raft_wal_recovery_destroy(&recovery);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         wal_test_cleanup(prefix);
     }
 
@@ -296,22 +296,22 @@ spec("raft segmented WAL storage")
         turbo_file_t file;
         uint8_t byte = 0xffU;
 
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
-        check_int_eq(adapter.begin(adapter.context), TURBO_OK);
-        check_int_eq(adapter.append_log(adapter.context, &entry, 1U), TURBO_OK);
-        check_int_eq(adapter.commit(adapter.context), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
+        check_equal(adapter.begin(adapter.context), TURBO_OK);
+        check_equal(adapter.append_log(adapter.context, &entry, 1U), TURBO_OK);
+        check_equal(adapter.commit(adapter.context), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
 
         wal_test_path(path, sizeof(path), prefix, ".00000001.wal");
         file = turbo_fs_open(path, TURBO_FS_O_RDWR, 0);
-        check_int_ne(file, TURBO_INVALID_FILE);
-        check_int_eq(turbo_fs_pwrite(file, (const char *)&byte, 1U, 96), 1);
-        check_int_eq(turbo_fs_fsync(file), TURBO_OK);
-        check_int_eq(turbo_fs_close(file), TURBO_OK);
+        check_not_equal(file, TURBO_INVALID_FILE);
+        check_equal(turbo_fs_pwrite(file, (const char *)&byte, 1U, 96), 1);
+        check_equal(turbo_fs_fsync(file), TURBO_OK);
+        check_equal(turbo_fs_close(file), TURBO_OK);
         storage = NULL;
         config.create_if_missing = false;
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage),
+        check_equal(tr_raft_wal_storage_open(&config, &storage),
                      TURBO_EPROTO);
         check_null(storage);
         wal_test_cleanup(prefix);
@@ -332,28 +332,28 @@ spec("raft segmented WAL storage")
         entries[2] = wal_test_entry(3U, 1U, 43U, "old-three");
         replacements[0] = wal_test_entry(2U, 2U, 44U, "new-two");
         replacements[1] = wal_test_entry(3U, 2U, 45U, "new-three");
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
-        check_int_eq(adapter.begin(adapter.context), TURBO_OK);
-        check_int_eq(adapter.append_log(adapter.context, entries, 3U),
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
+        check_equal(adapter.begin(adapter.context), TURBO_OK);
+        check_equal(adapter.append_log(adapter.context, entries, 3U),
                      TURBO_OK);
-        check_int_eq(adapter.write_commit_index(adapter.context, 1U),
+        check_equal(adapter.write_commit_index(adapter.context, 1U),
                      TURBO_OK);
-        check_int_eq(adapter.commit(adapter.context), TURBO_OK);
-        check_int_eq(adapter.begin(adapter.context), TURBO_OK);
-        check_int_eq(adapter.truncate_log(adapter.context, 2U), TURBO_OK);
-        check_int_eq(adapter.append_log(adapter.context, replacements, 2U),
+        check_equal(adapter.commit(adapter.context), TURBO_OK);
+        check_equal(adapter.begin(adapter.context), TURBO_OK);
+        check_equal(adapter.truncate_log(adapter.context, 2U), TURBO_OK);
+        check_equal(adapter.append_log(adapter.context, replacements, 2U),
                      TURBO_OK);
-        check_int_eq(adapter.write_commit_index(adapter.context, 3U),
+        check_equal(adapter.write_commit_index(adapter.context, 3U),
                      TURBO_OK);
-        check_int_eq(adapter.commit(adapter.context), TURBO_OK);
+        check_equal(adapter.commit(adapter.context), TURBO_OK);
         memset(&recovery, 0, sizeof(recovery));
-        check_int_eq(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
-        check_size_eq(recovery.entry_count, 3U);
-        check_long_eq(recovery.entries[1].term, 2U);
-        check_str_eq((const char *)recovery.entries[2].data, "new-three");
+        check_equal(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
+        check_equal(recovery.entry_count, 3U);
+        check_equal(recovery.entries[1].term, 2U);
+        check_equal((const char *)recovery.entries[2].data, "new-three");
         tr_raft_wal_recovery_destroy(&recovery);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         wal_test_cleanup(prefix);
     }
 
@@ -367,8 +367,8 @@ spec("raft segmented WAL storage")
         char second_segment[TURBO_FS_MAX_PATH];
         size_t transaction_index;
 
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
         for (transaction_index = 0U; transaction_index < 16U;
              ++transaction_index) {
             tr_raft_entry_t entries[8];
@@ -382,30 +382,30 @@ spec("raft segmented WAL storage")
                 memset(entries[entry_index].data, (int)index,
                        sizeof(entries[entry_index].data));
             }
-            check_int_eq(adapter.begin(adapter.context), TURBO_OK);
-            check_int_eq(adapter.append_log(adapter.context, entries, 8U),
+            check_equal(adapter.begin(adapter.context), TURBO_OK);
+            check_equal(adapter.append_log(adapter.context, entries, 8U),
                          TURBO_OK);
-            check_int_eq(adapter.write_commit_index(
+            check_equal(adapter.write_commit_index(
                              adapter.context,
                              (transaction_index + 1U) * 8U), TURBO_OK);
-            check_int_eq(adapter.commit(adapter.context), TURBO_OK);
+            check_equal(adapter.commit(adapter.context), TURBO_OK);
         }
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         wal_test_path(second_segment, sizeof(second_segment), prefix,
                       ".00000002.wal");
-        check_int_eq(turbo_fs_access(second_segment,
+        check_equal(turbo_fs_access(second_segment,
                                      TURBO_FS_ACCESS_EXISTS), TURBO_OK);
         config.create_if_missing = false;
         storage = NULL;
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
         memset(&recovery, 0, sizeof(recovery));
-        check_int_eq(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
-        check_size_eq(recovery.entry_count, WAL_TEST_MAX_ENTRIES);
-        check_long_eq(recovery.commit_index, WAL_TEST_MAX_ENTRIES);
-        check_long_eq(recovery.entries[WAL_TEST_MAX_ENTRIES - 1U].index,
+        check_equal(tr_raft_wal_storage_load(storage, &recovery), TURBO_OK);
+        check_equal(recovery.entry_count, WAL_TEST_MAX_ENTRIES);
+        check_equal(recovery.commit_index, WAL_TEST_MAX_ENTRIES);
+        check_equal(recovery.entries[WAL_TEST_MAX_ENTRIES - 1U].index,
                       WAL_TEST_MAX_ENTRIES);
         tr_raft_wal_recovery_destroy(&recovery);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
         wal_test_cleanup(prefix);
     }
 
@@ -416,13 +416,13 @@ spec("raft segmented WAL storage")
         tr_raft_wal_storage_t *first = NULL;
         tr_raft_wal_storage_t *second = NULL;
 
-        check_int_eq(tr_raft_wal_storage_open(&config, &first), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_open(&config, &second), TURBO_EBUSY);
+        check_equal(tr_raft_wal_storage_open(&config, &first), TURBO_OK);
+        check_equal(tr_raft_wal_storage_open(&config, &second), TURBO_EBUSY);
         check_null(second);
-        check_int_eq(tr_raft_wal_storage_close(first), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(first), TURBO_OK);
         config.create_if_missing = false;
-        check_int_eq(tr_raft_wal_storage_open(&config, &second), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_close(second), TURBO_OK);
+        check_equal(tr_raft_wal_storage_open(&config, &second), TURBO_OK);
+        check_equal(tr_raft_wal_storage_close(second), TURBO_OK);
         wal_test_cleanup(prefix);
     }
 }

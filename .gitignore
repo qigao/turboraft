@@ -68,6 +68,7 @@ Thumbs.db
 
 # User specific settings
 .env
+CMakeUserPresets.json
  
 # agents
 .codex-*

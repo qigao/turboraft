@@ -139,7 +139,7 @@ target_include_directories(
 target_link_libraries(
   turboraft_core
   PUBLIC TurboUtils::Core
-  PRIVATE TurboParser::DataBind)
+  PRIVATE TurboUtils::STL TurboParser::DataBind)
 
 add_library(turboraft_service STATIC src/service/raft_service.c)
 add_library(TurboRaft::Service ALIAS turboraft_service)
@@ -255,7 +255,7 @@ if(TurboNet_FOUND)
   target_link_libraries(
     turboraft_coronet
     PUBLIC TurboRaft::Core TurboNet::CoroNet
-    PRIVATE TurboRaft::SnapshotReceiver)
+    PRIVATE TurboUtils::STL TurboRaft::SnapshotReceiver)
 
   add_library(turboraft_snapshot_peer STATIC src/service/raft_snapshot_peer.c)
   target_include_directories(turboraft_snapshot_peer
@@ -296,8 +296,10 @@ if(TurboNet_FOUND AND TARGET FlowMQ::FlowMQ)
     turboraft_flowmq
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-  target_link_libraries(turboraft_flowmq
-                        PUBLIC TurboRaft::CoroNet FlowMQ::FlowMQ)
+  target_link_libraries(
+    turboraft_flowmq
+    PUBLIC TurboRaft::CoroNet FlowMQ::FlowMQ
+    PRIVATE TurboUtils::STL)
 else()
   message(STATUS "FlowMQ::FlowMQ not found; FlowMQ peer transport is disabled")
 endif()

@@ -102,7 +102,7 @@ spec("raft runtime ordering")
         core_config.election_max_ticks = 10U;
         core_config.initial_election_timeout_ticks = 5U;
         core_config.max_log_entries = 4U;
-        check_int_eq(tr_raft_core_create(&core_config, &core), TURBO_OK);
+        check_equal(tr_raft_core_create(&core_config, &core), TURBO_OK);
 
         memset(&fixture, 0, sizeof(fixture));
         memset(&runtime_config, 0, sizeof(runtime_config));
@@ -117,35 +117,35 @@ spec("raft runtime ordering")
         runtime_config.storage.rollback = storage_rollback;
         runtime_config.state_machine.context = &fixture;
         runtime_config.state_machine.apply_batch = state_apply;
-        check_int_eq(tr_raft_runtime_init(&runtime, &runtime_config), TURBO_OK);
+        check_equal(tr_raft_runtime_init(&runtime, &runtime_config), TURBO_OK);
 
         memset(&ready, 0, sizeof(ready));
-        check_int_eq(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
-        check_int_eq(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
                      TURBO_OK);
         fixture.event_count = 0U;
 
         memset(&ready, 0, sizeof(ready));
-        check_int_eq(tr_raft_core_propose(core, &proposal, &ready), TURBO_OK);
-        check_int_eq(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), TURBO_OK);
+        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
                      TURBO_OK);
         check_true(result.durable);
-        check_int_eq(result.stage, TR_RAFT_RUNTIME_COMPLETE);
-        check_size_eq(fixture.event_count, 5U);
-        check_int_eq(fixture.events[0], EVENT_BEGIN);
-        check_int_eq(fixture.events[1], EVENT_APPEND);
-        check_int_eq(fixture.events[2], EVENT_COMMIT_INDEX);
-        check_int_eq(fixture.events[3], EVENT_STORAGE_COMMIT);
-        check_int_eq(fixture.events[4], EVENT_APPLY);
-        check_int_eq(tr_raft_core_status(core, &status), TURBO_OK);
-        check_long_eq(status.applied_index, 1U);
+        check_equal(result.stage, TR_RAFT_RUNTIME_COMPLETE);
+        check_equal(fixture.event_count, 5U);
+        check_equal(fixture.events[0], EVENT_BEGIN);
+        check_equal(fixture.events[1], EVENT_APPEND);
+        check_equal(fixture.events[2], EVENT_COMMIT_INDEX);
+        check_equal(fixture.events[3], EVENT_STORAGE_COMMIT);
+        check_equal(fixture.events[4], EVENT_APPLY);
+        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(status.applied_index, 1U);
         memset(&ready, 0, sizeof(ready));
-        check_int_eq(tr_raft_core_read_index(core, 11U, &ready), TURBO_OK);
-        check_int_eq(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_core_read_index(core, 11U, &ready), TURBO_OK);
+        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
                      TURBO_OK);
         check(result.read_state_ready);
-        check_long_eq(result.read_state.context_id, 11U);
-        check_long_eq(result.read_state.index, 1U);
+        check_equal(result.read_state.context_id, 11U);
+        check_equal(result.read_state.index, 1U);
         tr_raft_core_destroy(core);
     }
 }

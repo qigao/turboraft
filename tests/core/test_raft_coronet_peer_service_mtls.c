@@ -303,7 +303,7 @@ spec("raft CoroNet peer service mTLS integration")
         receiver_config.max_snapshot_bytes = 1024U;
         receiver_config.install = peer_service_mtls_install_snapshot;
         receiver_config.install_context = &state;
-        check_int_eq(tr_raft_snapshot_receiver_create(
+        check_equal(tr_raft_snapshot_receiver_create(
                          &receiver_config, &state.snapshot_receiver),
                      TURBO_OK);
         server_config.snapshot_receiver = state.snapshot_receiver;
@@ -319,10 +319,10 @@ spec("raft CoroNet peer service mTLS integration")
         server_config.context = state.context;
         server_config.outbound_queue_capacity =
             PEER_SERVICE_MTLS_QUEUE_CAPACITY;
-        check_int_eq(tr_raft_coronet_peer_service_create(
+        check_equal(tr_raft_coronet_peer_service_create(
                          &client_config, &state.client_service),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_peer_service_create(
+        check_equal(tr_raft_coronet_peer_service_create(
                          &server_config, &state.server_service),
                      TURBO_OK);
 
@@ -339,11 +339,11 @@ spec("raft CoroNet peer service mTLS integration")
         inbound_config.admission.message_context = &state;
         inbound_config.on_result = peer_service_mtls_collect_inbound;
         inbound_config.result_context = &state;
-        check_int_eq(tr_raft_coronet_peer_service_configure_inbound(
+        check_equal(tr_raft_coronet_peer_service_configure_inbound(
                          state.server_service, &inbound_config),
                      TURBO_OK);
 
-        check_int_eq(tr_test_reserve_loopback_port(&state.port), TURBO_OK);
+        check_equal(tr_test_reserve_loopback_port(&state.port), TURBO_OK);
         listener = coro_socket_create(state.context, CORO_SOCKET_TLS);
         check_not_null(listener);
         tls_server_config.size = sizeof(tls_server_config);
@@ -353,10 +353,10 @@ spec("raft CoroNet peer service mTLS integration")
             PEER_SERVICE_MTLS_FIXTURE("node2-key.pem");
         tls_server_config.ca_file = PEER_SERVICE_MTLS_FIXTURE("ca.pem");
         tls_server_config.client_auth = TURBO_TLS_CLIENT_AUTH_REQUIRED;
-        check_int_eq(coro_socket_set_tls_server_config(
+        check_equal(coro_socket_set_tls_server_config(
                          listener, &tls_server_config),
                      TURBO_OK);
-        check_int_eq(coro_socket_listen_on(
+        check_equal(coro_socket_listen_on(
                          listener, "127.0.0.1", state.port,
                          tr_raft_coronet_peer_service_handle_inbound,
                          state.server_service),
@@ -390,11 +390,11 @@ spec("raft CoroNet peer service mTLS integration")
         dial_config.initial_retry_delay_ms = 1U;
         dial_config.max_retry_delay_ms = 1U;
         dial_config.max_attempts = 1U;
-        check_int_eq(tr_raft_coronet_peer_service_add_outbound(
+        check_equal(tr_raft_coronet_peer_service_add_outbound(
                          state.client_service, &dial_config),
                      TURBO_OK);
 
-        check_int_eq(coro_context_spawn(state.context,
+        check_equal(coro_context_spawn(state.context,
                                         peer_service_mtls_connect,
                                         &state),
                      TURBO_OK);
@@ -404,9 +404,9 @@ spec("raft CoroNet peer service mTLS integration")
             coro_context_run(state.context, TURBO_RUN_ONCE);
         }
 
-        check_int_eq(state.client_result, TURBO_OK);
-        check_int_eq(state.server_result, TURBO_OK);
-        check_int_eq(state.server_peer_node_id, 1);
+        check_equal(state.client_result, TURBO_OK);
+        check_equal(state.server_result, TURBO_OK);
+        check_equal(state.server_peer_node_id, 1);
         {
             tr_raft_message_t message;
             size_t index;
@@ -418,7 +418,7 @@ spec("raft CoroNet peer service mTLS integration")
             for (index = 0U; index < PEER_SERVICE_MTLS_BATCH_SIZE;
                  ++index) {
                 message.term = index + 1U;
-                check_int_eq(tr_raft_coronet_peer_service_enqueue(
+                check_equal(tr_raft_coronet_peer_service_enqueue(
                                  state.client_service, &message),
                              TURBO_OK);
             }
@@ -430,14 +430,14 @@ spec("raft CoroNet peer service mTLS integration")
                  ++index) {
                 coro_context_run(state.context, TURBO_RUN_NOWAIT);
             }
-            check_size_eq(state.received_count, 3U);
-            check_long_eq(state.received_terms[0], 1U);
-            check_long_eq(state.received_terms[1], 2U);
-            check_long_eq(state.received_terms[2], 3U);
-            check_int_eq(tr_raft_coronet_peer_service_get_status(
+            check_equal(state.received_count, 3U);
+            check_equal(state.received_terms[0], 1U);
+            check_equal(state.received_terms[1], 2U);
+            check_equal(state.received_terms[2], 3U);
+            check_equal(tr_raft_coronet_peer_service_get_status(
                              state.client_service, &client_status),
                          TURBO_OK);
-            check_size_eq(client_status.queued_message_count, 0U);
+            check_equal(client_status.queued_message_count, 0U);
         }
         {
             static const uint8_t abc_sha256[
@@ -467,7 +467,7 @@ spec("raft CoroNet peer service mTLS integration")
             payload.data.snapshot_chunk.done = true;
             memcpy(payload.data.snapshot_chunk.snapshot_digest, abc_sha256,
                    sizeof(abc_sha256));
-            check_int_eq(tr_raft_coronet_peer_service_enqueue_payload(
+            check_equal(tr_raft_coronet_peer_service_enqueue_payload(
                              state.client_service, &payload),
                          TURBO_OK);
             memset(chunk_data, 0, sizeof(chunk_data));
@@ -476,22 +476,22 @@ spec("raft CoroNet peer service mTLS integration")
                  ++run_count) {
                 coro_context_run(state.context, TURBO_RUN_NOWAIT);
             }
-            check_size_eq(state.snapshot_install_count, 1U);
-            check_size_eq(state.installed_snapshot_size, 3U);
-            check_mem_eq(state.installed_snapshot, "abc", 3U);
-            check_size_eq(state.snapshot_ack_count, 1U);
+            check_equal(state.snapshot_install_count, 1U);
+            check_equal(state.installed_snapshot_size, 3U);
+            check_equal(state.installed_snapshot, "abc", 3U);
+            check_equal(state.snapshot_ack_count, 1U);
             check(state.snapshot_ack.accepted);
-            check_long_eq(state.snapshot_ack.next_offset, 3U);
-            check_int_eq(tr_raft_coronet_peer_service_get_status(
+            check_equal(state.snapshot_ack.next_offset, 3U);
+            check_equal(tr_raft_coronet_peer_service_get_status(
                              state.server_service, &server_status),
                          TURBO_OK);
-            check_long_eq(server_status.snapshot_install_count, 1U);
-            check_int_eq(tr_raft_coronet_peer_service_get_status(
+            check_equal(server_status.snapshot_install_count, 1U);
+            check_equal(tr_raft_coronet_peer_service_get_status(
                              state.client_service, &client_status),
                          TURBO_OK);
-            check_long_eq(client_status.snapshot_ack_count, 1U);
+            check_equal(client_status.snapshot_ack_count, 1U);
         }
-        check_int_eq(tr_raft_coronet_peer_service_disconnect_peer(
+        check_equal(tr_raft_coronet_peer_service_disconnect_peer(
                          state.client_service, 2U, turbo_monotonic_ms()),
                      TURBO_OK);
         {
@@ -505,7 +505,7 @@ spec("raft CoroNet peer service mTLS integration")
             for (index = PEER_SERVICE_MTLS_BATCH_SIZE;
                  index < PEER_SERVICE_MTLS_MESSAGE_COUNT; ++index) {
                 message.term = index + 1U;
-                check_int_eq(tr_raft_coronet_peer_service_enqueue(
+                check_equal(tr_raft_coronet_peer_service_enqueue(
                                  state.client_service, &message),
                              TURBO_OK);
             }
@@ -513,24 +513,24 @@ spec("raft CoroNet peer service mTLS integration")
         deadline = turbo_monotonic_ms() + PEER_SERVICE_MTLS_TEST_TIMEOUT_MS;
         do {
             coro_context_run(state.context, TURBO_RUN_ONCE);
-            check_int_eq(tr_raft_coronet_peer_service_get_status(
+            check_equal(tr_raft_coronet_peer_service_get_status(
                              state.client_service, &client_status),
                          TURBO_OK);
-            check_int_eq(tr_raft_coronet_peer_service_get_status(
+            check_equal(tr_raft_coronet_peer_service_get_status(
                              state.server_service, &server_status),
                          TURBO_OK);
         } while ((client_status.active_reader_count != 0U ||
                   server_status.active_reader_count != 0U) &&
                  turbo_monotonic_ms() < deadline);
-        check_size_eq(client_status.active_reader_count, 0U);
-        check_size_eq(server_status.active_reader_count, 0U);
-        check_size_eq(client_status.queued_message_count,
+        check_equal(client_status.active_reader_count, 0U);
+        check_equal(server_status.active_reader_count, 0U);
+        check_equal(client_status.queued_message_count,
                       PEER_SERVICE_MTLS_BATCH_SIZE);
 
         state.client_result = TURBO_EBUSY;
         state.server_result = TURBO_EBUSY;
         state.server_peer_node_id = 0U;
-        check_int_eq(coro_context_spawn(state.context,
+        check_equal(coro_context_spawn(state.context,
                                         peer_service_mtls_connect,
                                         &state),
                      TURBO_OK);
@@ -539,49 +539,49 @@ spec("raft CoroNet peer service mTLS integration")
                turbo_monotonic_ms() < deadline) {
             coro_context_run(state.context, TURBO_RUN_ONCE);
         }
-        check_int_eq(state.client_result, TURBO_OK);
-        check_int_eq(state.server_result, TURBO_OK);
-        check_int_eq(state.server_peer_node_id, 1);
+        check_equal(state.client_result, TURBO_OK);
+        check_equal(state.server_result, TURBO_OK);
+        check_equal(state.server_peer_node_id, 1);
         deadline = turbo_monotonic_ms() + PEER_SERVICE_MTLS_TEST_TIMEOUT_MS;
         while (state.received_count < PEER_SERVICE_MTLS_MESSAGE_COUNT &&
                turbo_monotonic_ms() < deadline) {
             coro_context_run(state.context, TURBO_RUN_ONCE);
         }
-        check_size_eq(state.received_count,
+        check_equal(state.received_count,
                       PEER_SERVICE_MTLS_MESSAGE_COUNT);
-        check_long_eq(state.received_terms[3], 4U);
-        check_long_eq(state.received_terms[4], 5U);
-        check_long_eq(state.received_terms[5], 6U);
-        check_int_eq(tr_raft_coronet_peer_service_get_status(
+        check_equal(state.received_terms[3], 4U);
+        check_equal(state.received_terms[4], 5U);
+        check_equal(state.received_terms[5], 6U);
+        check_equal(tr_raft_coronet_peer_service_get_status(
                          state.client_service, &client_status),
                      TURBO_OK);
-        check_size_eq(client_status.queued_message_count, 0U);
-        check_int_eq(state.client_step.scheduler_count, 1);
-        check_int_eq(state.client_step.attempted_count, 1);
-        check_int_eq(state.client_step.newly_connected_count, 1);
-        check_int_eq(state.client_step.failed_count, 0);
-        check_int_eq(tr_raft_coronet_peer_service_get_status(
+        check_equal(client_status.queued_message_count, 0U);
+        check_equal(state.client_step.scheduler_count, 1);
+        check_equal(state.client_step.attempted_count, 1);
+        check_equal(state.client_step.newly_connected_count, 1);
+        check_equal(state.client_step.failed_count, 0);
+        check_equal(tr_raft_coronet_peer_service_get_status(
                          state.client_service, &client_status),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_peer_service_get_status(
+        check_equal(tr_raft_coronet_peer_service_get_status(
                          state.server_service, &server_status),
                      TURBO_OK);
-        check_long_eq(client_status.identity_generation, 1U);
-        check_long_eq(server_status.identity_generation, 1U);
-        check_int_eq(server_status.inbound_configured, 1);
+        check_equal(client_status.identity_generation, 1U);
+        check_equal(server_status.identity_generation, 1U);
+        check_equal(server_status.inbound_configured, 1);
 
         coro_socket_destroy(listener);
-        check_int_eq(tr_raft_coronet_peer_service_stop(state.client_service),
+        check_equal(tr_raft_coronet_peer_service_stop(state.client_service),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_peer_service_stop(state.server_service),
+        check_equal(tr_raft_coronet_peer_service_stop(state.server_service),
                      TURBO_OK);
         deadline = turbo_monotonic_ms() +
                    PEER_SERVICE_MTLS_SOCKET_TIMEOUT_MS;
         do {
-            check_int_eq(tr_raft_coronet_peer_service_get_status(
+            check_equal(tr_raft_coronet_peer_service_get_status(
                              state.client_service, &client_status),
                          TURBO_OK);
-            check_int_eq(tr_raft_coronet_peer_service_get_status(
+            check_equal(tr_raft_coronet_peer_service_get_status(
                              state.server_service, &server_status),
                          TURBO_OK);
             if (client_status.active_operation_count == 0U &&
@@ -590,12 +590,12 @@ spec("raft CoroNet peer service mTLS integration")
             }
             coro_context_run(state.context, TURBO_RUN_NOWAIT);
         } while (turbo_monotonic_ms() < deadline);
-        check_int_eq(client_status.active_operation_count, 0);
-        check_int_eq(server_status.active_operation_count, 0);
-        check_int_eq(tr_raft_coronet_peer_service_destroy(
+        check_equal(client_status.active_operation_count, 0);
+        check_equal(server_status.active_operation_count, 0);
+        check_equal(tr_raft_coronet_peer_service_destroy(
                          state.client_service),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_peer_service_destroy(
+        check_equal(tr_raft_coronet_peer_service_destroy(
                          state.server_service),
                      TURBO_OK);
         tr_raft_snapshot_receiver_destroy(state.snapshot_receiver);

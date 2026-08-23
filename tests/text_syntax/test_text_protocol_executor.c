@@ -194,10 +194,10 @@ spec("TurboRaft text protocol executor") {
     size_t frame_length = 0u;
     int input_length;
 
-    check_int_eq(tr_text_protocol_executor_make_raft_frame(
+    check_equal(tr_text_protocol_executor_make_raft_frame(
                      wire_frame, sizeof(wire_frame), &frame_length),
                  TURBO_OK);
-    check_int_eq(tr_text_protocol_executor_hex_encode(
+    check_equal(tr_text_protocol_executor_hex_encode(
                      wire_frame, frame_length, payload, sizeof(payload)),
                  TURBO_OK);
     input_length = snprintf(
@@ -207,18 +207,18 @@ spec("TurboRaft text protocol executor") {
         payload);
     check(input_length > 0);
     check((size_t)input_length < sizeof(input));
-    check_int_eq(tr_text_protocol_debug_parse(
+    check_equal(tr_text_protocol_debug_parse(
                      input, (size_t)input_length, NULL, &plan, &diagnostic),
                  TURBO_OK);
-    check_int_eq(tr_text_protocol_debug_execute(
+    check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
                  TURBO_OK);
-    check_int_eq(state.calls, 1);
-    check_int_eq(state.payload_kind, TR_RAFT_WIRE_PAYLOAD_RAFT);
-    check_int_eq(state.message_type, TR_RAFT_MSG_TIMEOUT_NOW);
-    check_long_eq(state.from, 1u);
-    check_long_eq(state.to, 2u);
-    check_long_eq(state.term, 9u);
+    check_equal(state.calls, 1);
+    check_equal(state.payload_kind, TR_RAFT_WIRE_PAYLOAD_RAFT);
+    check_equal(state.message_type, TR_RAFT_MSG_TIMEOUT_NOW);
+    check_equal(state.from, 1u);
+    check_equal(state.to, 2u);
+    check_equal(state.term, 9u);
   }
 
   it("decodes snapshot chunks and acknowledgements") {
@@ -231,15 +231,15 @@ spec("TurboRaft text protocol executor") {
     size_t chunk_length = 0u;
     size_t ack_length = 0u;
 
-    check_int_eq(tr_text_protocol_executor_make_snapshot_frames(
+    check_equal(tr_text_protocol_executor_make_snapshot_frames(
                      chunk_frame, sizeof(chunk_frame), &chunk_length,
                      ack_frame, sizeof(ack_frame), &ack_length),
                  TURBO_OK);
-    check_int_eq(tr_text_protocol_executor_hex_encode(
+    check_equal(tr_text_protocol_executor_hex_encode(
                      chunk_frame, chunk_length, chunk_payload,
                      sizeof(chunk_payload)),
                  TURBO_OK);
-    check_int_eq(tr_text_protocol_executor_hex_encode(
+    check_equal(tr_text_protocol_executor_hex_encode(
                      ack_frame, ack_length, ack_payload, sizeof(ack_payload)),
                  TURBO_OK);
     tr_text_protocol_executor_set_frame(
@@ -255,15 +255,15 @@ spec("TurboRaft text protocol executor") {
     plan.frames[1].term = 7u;
     plan.frame_count = 2u;
 
-    check_int_eq(tr_text_protocol_debug_execute(
+    check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
                  TURBO_OK);
-    check_int_eq(state.calls, 2);
-    check_int_eq(state.payload_kind, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK);
-    check_long_eq(state.from, 2u);
-    check_long_eq(state.to, 1u);
-    check_long_eq(state.term, 7u);
-    check_long_eq(state.snapshot_index, 50u);
+    check_equal(state.calls, 2);
+    check_equal(state.payload_kind, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK);
+    check_equal(state.from, 2u);
+    check_equal(state.to, 1u);
+    check_equal(state.term, 7u);
+    check_equal(state.snapshot_index, 50u);
   }
 
   it("rejects missing payload before invoking the callback") {
@@ -274,10 +274,10 @@ spec("TurboRaft text protocol executor") {
         &plan.frames[0], 3u, "raft", "timeout_now", "");
     plan.frame_count = 1u;
 
-    check_int_eq(tr_text_protocol_debug_execute(
+    check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
                  TURBO_EINVAL);
-    check_int_eq(state.calls, 0);
+    check_equal(state.calls, 0);
   }
 
   it("rejects a payload larger than the bounded frame buffer") {
@@ -301,10 +301,10 @@ spec("TurboRaft text protocol executor") {
         &plan.frames[0], 3u, "raft", "timeout_now", payload);
     plan.frame_count = 1u;
 
-    check_int_eq(tr_text_protocol_debug_execute(
+    check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
                  TURBO_ENOSPC);
-    check_int_eq(state.calls, 0);
+    check_equal(state.calls, 0);
   }
 
   it("rejects a message name that does not match the decoded frame") {
@@ -314,20 +314,20 @@ spec("TurboRaft text protocol executor") {
     tr_text_protocol_executor_test_state_t state = {0};
     size_t frame_length = 0u;
 
-    check_int_eq(tr_text_protocol_executor_make_raft_frame(
+    check_equal(tr_text_protocol_executor_make_raft_frame(
                      wire_frame, sizeof(wire_frame), &frame_length),
                  TURBO_OK);
-    check_int_eq(tr_text_protocol_executor_hex_encode(
+    check_equal(tr_text_protocol_executor_hex_encode(
                      wire_frame, frame_length, payload, sizeof(payload)),
                  TURBO_OK);
     tr_text_protocol_executor_set_frame(
         &plan.frames[0], 3u, "raft", "append_request", payload);
     plan.frame_count = 1u;
 
-    check_int_eq(tr_text_protocol_debug_execute(
+    check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
                  TURBO_EPROTO);
-    check_int_eq(state.calls, 0);
+    check_equal(state.calls, 0);
   }
 
   it("returns callback errors without continuing") {
@@ -338,19 +338,19 @@ spec("TurboRaft text protocol executor") {
         .result = TURBO_EBUSY};
     size_t frame_length = 0u;
 
-    check_int_eq(tr_text_protocol_executor_make_raft_frame(
+    check_equal(tr_text_protocol_executor_make_raft_frame(
                      wire_frame, sizeof(wire_frame), &frame_length),
                  TURBO_OK);
-    check_int_eq(tr_text_protocol_executor_hex_encode(
+    check_equal(tr_text_protocol_executor_hex_encode(
                      wire_frame, frame_length, payload, sizeof(payload)),
                  TURBO_OK);
     tr_text_protocol_executor_set_frame(
         &plan.frames[0], 3u, "raft", "timeout_now", payload);
     plan.frame_count = 1u;
 
-    check_int_eq(tr_text_protocol_debug_execute(
+    check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
                  TURBO_EBUSY);
-    check_int_eq(state.calls, 1);
+    check_equal(state.calls, 1);
   }
 }

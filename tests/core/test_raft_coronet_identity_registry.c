@@ -31,21 +31,21 @@ spec("raft CoroNet certificate identity registry")
         entries[2] = identity_entry('c', 2U);
         memcpy(second_fingerprint, entries[0].certificate_sha256,
                sizeof(second_fingerprint));
-        check_int_eq(tr_raft_coronet_identity_registry_create(
+        check_equal(tr_raft_coronet_identity_registry_create(
                          entries, 3U, &registry),
                      TURBO_OK);
 
         memset(entries, 0, sizeof(entries));
-        check_int_eq(tr_raft_coronet_identity_registry_resolve(
+        check_equal(tr_raft_coronet_identity_registry_resolve(
                          registry, second_fingerprint, &node_id),
                      TURBO_OK);
-        check_int_eq(node_id, 2);
-        check_int_eq(tr_raft_coronet_identity_registry_resolve(
+        check_equal(node_id, 2);
+        check_equal(tr_raft_coronet_identity_registry_resolve(
                          registry,
                          "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                          &node_id),
                      TURBO_OK);
-        check_int_eq(node_id, 2);
+        check_equal(node_id, 2);
         tr_raft_coronet_identity_registry_destroy(registry);
     }
 
@@ -57,27 +57,27 @@ spec("raft CoroNet certificate identity registry")
 
         entries[0] = identity_entry('a', 1U);
         entries[1] = identity_entry('a', 2U);
-        check_int_eq(tr_raft_coronet_identity_registry_create(
+        check_equal(tr_raft_coronet_identity_registry_create(
                          entries, 2U, &registry),
                      TURBO_EINVAL);
         check_null(registry);
 
         entries[1] = identity_entry('b', 2U);
-        check_int_eq(tr_raft_coronet_identity_registry_create(
+        check_equal(tr_raft_coronet_identity_registry_create(
                          entries, 2U, &registry),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_identity_registry_resolve(
+        check_equal(tr_raft_coronet_identity_registry_resolve(
                          registry,
                          "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                          &node_id),
                      TURBO_EPERM);
-        check_int_eq(node_id, 0);
-        check_int_eq(tr_raft_coronet_identity_registry_resolve(
+        check_equal(node_id, 0);
+        check_equal(tr_raft_coronet_identity_registry_resolve(
                          registry,
                          "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                          &node_id),
                      TURBO_EPROTO);
-        check_int_eq(node_id, 0);
+        check_equal(node_id, 0);
         tr_raft_coronet_identity_registry_destroy(registry);
     }
 }

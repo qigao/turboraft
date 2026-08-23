@@ -30,10 +30,10 @@ spec("raft control operation JSON")
 
         for (index = 0U; index < sizeof(states) / sizeof(states[0]); ++index) {
             status.state = states[index];
-            check_int_eq(tr_control_operation_status_json(
+            check_equal(tr_control_operation_status_json(
                              &status, json, sizeof(json), &json_size),
                          TURBO_OK);
-            check_size_eq(json_size, strlen(json));
+            check_equal(json_size, strlen(json));
             check_not_null(strstr(json, names[index]));
             check_not_null(strstr(json, "\"term\":12"));
             check_not_null(strstr(json, "\"index\":481"));
@@ -50,13 +50,13 @@ spec("raft control operation JSON")
         status.state = TR_RAFT_OPERATION_PENDING;
         status.term = 1U;
         status.index = 1U;
-        check_int_eq(tr_control_operation_status_json(
+        check_equal(tr_control_operation_status_json(
                          &status, json, sizeof(json), &json_size),
                      TURBO_ENOSPC);
-        check_size_eq(json_size, 99U);
+        check_equal(json_size, 99U);
 
         status.state = (tr_raft_operation_state_t)99;
-        check_int_eq(tr_control_operation_status_json(
+        check_equal(tr_control_operation_status_json(
                          &status, json, sizeof(json), &json_size),
                      TURBO_EINVAL);
     }

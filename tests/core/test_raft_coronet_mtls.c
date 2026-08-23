@@ -147,10 +147,10 @@ static void mtls_run_identity_mismatch_case(void)
 
     state.context = coro_context_create(NULL);
     check_not_null(state.context);
-    check_int_eq(tr_raft_coronet_peer_manager_create(
+    check_equal(tr_raft_coronet_peer_manager_create(
                      &client_manager_config, &state.client_manager),
                  TURBO_OK);
-    check_int_eq(tr_raft_coronet_peer_manager_create(
+    check_equal(tr_raft_coronet_peer_manager_create(
                      &server_manager_config, &state.server_manager),
                  TURBO_OK);
 
@@ -168,11 +168,11 @@ static void mtls_run_identity_mismatch_case(void)
         tr_raft_coronet_peer_manager_admit_owned_socket;
     inbound_config.on_result = mtls_collect_inbound_result;
     inbound_config.result_context = &state;
-    check_int_eq(tr_raft_coronet_inbound_service_create(
+    check_equal(tr_raft_coronet_inbound_service_create(
                      &inbound_config, &state.inbound_service),
                  TURBO_OK);
 
-    check_int_eq(tr_test_reserve_loopback_port(&port), TURBO_OK);
+    check_equal(tr_test_reserve_loopback_port(&port), TURBO_OK);
     server = coro_socket_create(state.context, CORO_SOCKET_TLS);
     check_not_null(server);
     tls_server_config.size = sizeof(tls_server_config);
@@ -180,9 +180,9 @@ static void mtls_run_identity_mismatch_case(void)
     tls_server_config.key_file = MTLS_FIXTURE("node2-key.pem");
     tls_server_config.ca_file = MTLS_FIXTURE("ca.pem");
     tls_server_config.client_auth = TURBO_TLS_CLIENT_AUTH_REQUIRED;
-    check_int_eq(coro_socket_set_tls_server_config(server, &tls_server_config),
+    check_equal(coro_socket_set_tls_server_config(server, &tls_server_config),
                  TURBO_OK);
-    check_int_eq(coro_socket_listen_on(
+    check_equal(coro_socket_listen_on(
                      server, "127.0.0.1", port,
                      tr_raft_coronet_inbound_service_handle,
                      state.inbound_service),
@@ -209,7 +209,7 @@ static void mtls_run_identity_mismatch_case(void)
     state.outbound.admission.peer_idle_timeout_ms = MTLS_SOCKET_TIMEOUT_MS;
     state.outbound.admission.on_message = mtls_ignore_message;
 
-    check_int_eq(coro_context_spawn(state.context, mtls_connect_client,
+    check_equal(coro_context_spawn(state.context, mtls_connect_client,
                                     &state),
                  TURBO_OK);
     deadline = turbo_monotonic_ms() + MTLS_TEST_TIMEOUT_MS;
@@ -218,18 +218,18 @@ static void mtls_run_identity_mismatch_case(void)
         coro_context_run(state.context, TURBO_RUN_ONCE);
     }
 
-    check_int_eq(state.client_result, TURBO_EPROTO);
-    check_int_eq(state.server_result, TURBO_EPROTO);
-    check_int_eq(state.client_peer_node_id, 0);
-    check_int_eq(state.server_peer_node_id, 0);
+    check_equal(state.client_result, TURBO_EPROTO);
+    check_equal(state.server_result, TURBO_EPROTO);
+    check_equal(state.client_peer_node_id, 0);
+    check_equal(state.server_peer_node_id, 0);
 
     coro_socket_destroy(server);
-    check_int_eq(tr_raft_coronet_inbound_service_destroy(
+    check_equal(tr_raft_coronet_inbound_service_destroy(
                      state.inbound_service),
                  TURBO_OK);
-    check_int_eq(tr_raft_coronet_peer_manager_destroy(state.client_manager),
+    check_equal(tr_raft_coronet_peer_manager_destroy(state.client_manager),
                  TURBO_OK);
-    check_int_eq(tr_raft_coronet_peer_manager_destroy(state.server_manager),
+    check_equal(tr_raft_coronet_peer_manager_destroy(state.server_manager),
                  TURBO_OK);
     deadline = turbo_monotonic_ms() + MTLS_SOCKET_TIMEOUT_MS;
     while (coro_context_alive(state.context) &&
@@ -281,10 +281,10 @@ spec("raft CoroNet mTLS integration")
 
         state.context = coro_context_create(NULL);
         check_not_null(state.context);
-        check_int_eq(tr_raft_coronet_peer_manager_create(
+        check_equal(tr_raft_coronet_peer_manager_create(
                          &client_manager_config, &state.client_manager),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_peer_manager_create(
+        check_equal(tr_raft_coronet_peer_manager_create(
                          &server_manager_config, &state.server_manager),
                      TURBO_OK);
 
@@ -305,11 +305,11 @@ spec("raft CoroNet mTLS integration")
             tr_raft_coronet_peer_manager_admit_owned_socket;
         inbound_config.on_result = mtls_collect_inbound_result;
         inbound_config.result_context = &state;
-        check_int_eq(tr_raft_coronet_inbound_service_create(
+        check_equal(tr_raft_coronet_inbound_service_create(
                          &inbound_config, &state.inbound_service),
                      TURBO_OK);
 
-        check_int_eq(tr_test_reserve_loopback_port(&port), TURBO_OK);
+        check_equal(tr_test_reserve_loopback_port(&port), TURBO_OK);
         server = coro_socket_create(state.context, CORO_SOCKET_TLS);
         check_not_null(server);
         tls_server_config.size = sizeof(tls_server_config);
@@ -317,10 +317,10 @@ spec("raft CoroNet mTLS integration")
         tls_server_config.key_file = MTLS_FIXTURE("node2-key.pem");
         tls_server_config.ca_file = MTLS_FIXTURE("ca.pem");
         tls_server_config.client_auth = TURBO_TLS_CLIENT_AUTH_REQUIRED;
-        check_int_eq(coro_socket_set_tls_server_config(
+        check_equal(coro_socket_set_tls_server_config(
                          server, &tls_server_config),
                      TURBO_OK);
-        check_int_eq(coro_socket_listen_on(
+        check_equal(coro_socket_listen_on(
                          server, "127.0.0.1", port,
                          tr_raft_coronet_inbound_service_handle,
                          state.inbound_service),
@@ -348,7 +348,7 @@ spec("raft CoroNet mTLS integration")
             MTLS_SOCKET_TIMEOUT_MS;
         state.outbound.admission.on_message = mtls_ignore_message;
 
-        check_int_eq(coro_context_spawn(state.context, mtls_connect_client,
+        check_equal(coro_context_spawn(state.context, mtls_connect_client,
                                         &state),
                      TURBO_OK);
         deadline = turbo_monotonic_ms() + MTLS_TEST_TIMEOUT_MS;
@@ -357,19 +357,19 @@ spec("raft CoroNet mTLS integration")
             coro_context_run(state.context, TURBO_RUN_ONCE);
         }
 
-        check_int_eq(state.client_result, TURBO_OK);
-        check_int_eq(state.server_result, TURBO_OK);
-        check_int_eq(state.client_peer_node_id, 2);
-        check_int_eq(state.server_peer_node_id, 1);
+        check_equal(state.client_result, TURBO_OK);
+        check_equal(state.server_result, TURBO_OK);
+        check_equal(state.client_peer_node_id, 2);
+        check_equal(state.server_peer_node_id, 1);
 
         coro_socket_destroy(server);
-        check_int_eq(tr_raft_coronet_inbound_service_destroy(
+        check_equal(tr_raft_coronet_inbound_service_destroy(
                          state.inbound_service),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_peer_manager_destroy(
+        check_equal(tr_raft_coronet_peer_manager_destroy(
                          state.client_manager),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_peer_manager_destroy(
+        check_equal(tr_raft_coronet_peer_manager_destroy(
                          state.server_manager),
                      TURBO_OK);
         deadline = turbo_monotonic_ms() + MTLS_SOCKET_TIMEOUT_MS;

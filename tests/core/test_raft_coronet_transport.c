@@ -172,7 +172,7 @@ static tr_raft_coronet_session_t *make_session(
     config.first_outbound_message_id = 1U;
     config.on_message = collect_message;
     config.message_context = received;
-    check_int_eq(tr_raft_coronet_session_create(&config, &session), TURBO_OK);
+    check_equal(tr_raft_coronet_session_create(&config, &session), TURBO_OK);
     return session;
 }
 
@@ -210,7 +210,7 @@ static tr_raft_coronet_session_t *make_connected_session(
     config.handshake = &handshake;
     config.on_message = collect_message;
     config.message_context = received;
-    check_int_eq(tr_raft_coronet_session_create(&config, &session), TURBO_OK);
+    check_equal(tr_raft_coronet_session_create(&config, &session), TURBO_OK);
     return session;
 }
 
@@ -270,9 +270,9 @@ spec("raft CoroNet transport")
         receiver_config.message_context = &receiver_messages;
         receiver_config.on_snapshot = collect_snapshot;
         receiver_config.snapshot_context = &receiver_snapshots;
-        check_int_eq(tr_raft_coronet_session_create(&sender_config, &sender),
+        check_equal(tr_raft_coronet_session_create(&sender_config, &sender),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_session_create(&receiver_config,
+        check_equal(tr_raft_coronet_session_create(&receiver_config,
                                                      &receiver),
                      TURBO_OK);
 
@@ -295,16 +295,16 @@ spec("raft CoroNet transport")
         payload.data.snapshot_chunk.done = true;
         memset(payload.data.snapshot_chunk.snapshot_digest, 1,
                sizeof(payload.data.snapshot_chunk.snapshot_digest));
-        check_int_eq(tr_raft_coronet_encode_payload_packet(
+        check_equal(tr_raft_coronet_encode_payload_packet(
                          sender, &payload, packet, sizeof(packet),
                          &packet_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_feed(receiver, packet, packet_size),
+        check_equal(tr_raft_coronet_feed(receiver, packet, packet_size),
                      TURBO_OK);
-        check_size_eq(receiver_snapshots.count, 1U);
-        check_int_eq(receiver_snapshots.values[0].kind,
+        check_equal(receiver_snapshots.count, 1U);
+        check_equal(receiver_snapshots.values[0].kind,
                      TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK);
-        check_mem_eq(receiver_snapshots.values[0].data.snapshot_chunk.data,
+        check_equal(receiver_snapshots.values[0].data.snapshot_chunk.data,
                      "abc", 3U);
 
         memset(&payload, 0, sizeof(payload));
@@ -318,16 +318,16 @@ spec("raft CoroNet transport")
         payload.data.snapshot_ack.accepted = true;
         memset(payload.data.snapshot_ack.snapshot_digest, 1,
                sizeof(payload.data.snapshot_ack.snapshot_digest));
-        check_int_eq(tr_raft_coronet_encode_payload_packet(
+        check_equal(tr_raft_coronet_encode_payload_packet(
                          receiver, &payload, packet, sizeof(packet),
                          &packet_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_feed(sender, packet, packet_size),
+        check_equal(tr_raft_coronet_feed(sender, packet, packet_size),
                      TURBO_OK);
-        check_size_eq(sender_snapshots.count, 1U);
-        check_int_eq(sender_snapshots.values[0].kind,
+        check_equal(sender_snapshots.count, 1U);
+        check_equal(sender_snapshots.values[0].kind,
                      TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK);
-        check_long_eq(sender_snapshots.values[0].data.snapshot_ack.next_offset,
+        check_equal(sender_snapshots.values[0].data.snapshot_ack.next_offset,
                       3U);
         tr_raft_coronet_session_destroy(receiver);
         tr_raft_coronet_session_destroy(sender);
@@ -351,22 +351,22 @@ spec("raft CoroNet transport")
         first = make_heartbeat(1U, 2U, 4U);
         second = make_heartbeat(1U, 2U, 5U);
 
-        check_int_eq(tr_raft_coronet_encode_packet(
+        check_equal(tr_raft_coronet_encode_packet(
                          sender, &first, packets,
                          TR_RAFT_CORONET_MAX_PACKET_SIZE, &first_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_encode_packet(
+        check_equal(tr_raft_coronet_encode_packet(
                          sender, &second, packets + first_size,
                          sizeof(packets) - first_size, &second_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_feed(receiver, packets, 2U), TURBO_OK);
-        check_int_eq(tr_raft_coronet_feed(
+        check_equal(tr_raft_coronet_feed(receiver, packets, 2U), TURBO_OK);
+        check_equal(tr_raft_coronet_feed(
                          receiver, packets + 2U,
                          first_size + second_size - 2U),
                      TURBO_OK);
-        check_size_eq(receiver_received.count, 2U);
-        check_long_eq(receiver_received.values[0].term, 4U);
-        check_long_eq(receiver_received.values[1].term, 5U);
+        check_equal(receiver_received.count, 2U);
+        check_equal(receiver_received.values[0].term, 4U);
+        check_equal(receiver_received.values[1].term, 5U);
 
         tr_raft_coronet_session_destroy(receiver);
         tr_raft_coronet_session_destroy(sender);
@@ -389,14 +389,14 @@ spec("raft CoroNet transport")
         receiver = make_session(12U, 2U, 1U, &receiver_received);
         message = make_heartbeat(1U, 2U, 6U);
 
-        check_int_eq(tr_raft_coronet_encode_packet(
+        check_equal(tr_raft_coronet_encode_packet(
                          sender, &message, packet, sizeof(packet), &packet_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_feed(receiver, packet, packet_size),
+        check_equal(tr_raft_coronet_feed(receiver, packet, packet_size),
                      TURBO_EPROTO);
-        check_int_eq(tr_raft_coronet_get_status(receiver, &status), TURBO_OK);
-        check_int_eq(status.state, TR_RAFT_CORONET_STATE_FAULTED);
-        check_size_eq(receiver_received.count, 0U);
+        check_equal(tr_raft_coronet_get_status(receiver, &status), TURBO_OK);
+        check_equal(status.state, TR_RAFT_CORONET_STATE_FAULTED);
+        check_equal(receiver_received.count, 0U);
 
         tr_raft_coronet_session_destroy(receiver);
         tr_raft_coronet_session_destroy(sender);
@@ -418,12 +418,12 @@ spec("raft CoroNet transport")
         receiver = make_session(21U, 2U, 1U, &receiver_received);
         message = make_heartbeat(1U, 2U, 7U);
 
-        check_int_eq(tr_raft_coronet_encode_packet(
+        check_equal(tr_raft_coronet_encode_packet(
                          sender, &message, packet, sizeof(packet), &packet_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_feed(receiver, packet, packet_size),
+        check_equal(tr_raft_coronet_feed(receiver, packet, packet_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_feed(receiver, packet, packet_size),
+        check_equal(tr_raft_coronet_feed(receiver, packet, packet_size),
                      TURBO_EPROTO);
 
         tr_raft_coronet_session_destroy(receiver);
@@ -451,28 +451,28 @@ spec("raft CoroNet transport")
         manager_config.local_node_id = 1U;
         manager_config.peer_node_ids = peer_ids;
         manager_config.peer_count = 2U;
-        check_int_eq(tr_raft_coronet_peer_manager_create(&manager_config,
+        check_equal(tr_raft_coronet_peer_manager_create(&manager_config,
                                                           &manager),
                      TURBO_OK);
 
         session = make_session(31U, 1U, 2U, &received);
-        check_int_eq(tr_raft_coronet_peer_manager_attach(manager, session),
+        check_equal(tr_raft_coronet_peer_manager_attach(manager, session),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_peer_manager_get_status(
+        check_equal(tr_raft_coronet_peer_manager_get_status(
                          manager, &manager_status),
                      TURBO_OK);
-        check_size_eq(manager_status.configured_count, 2U);
-        check_size_eq(manager_status.attached_count, 1U);
-        check_size_eq(manager_status.detached_count, 1U);
-        check_size_eq(manager_status.connected_count, 0U);
-        check_int_eq(tr_raft_coronet_peer_manager_get_peer_status(
+        check_equal(manager_status.configured_count, 2U);
+        check_equal(manager_status.attached_count, 1U);
+        check_equal(manager_status.detached_count, 1U);
+        check_equal(manager_status.connected_count, 0U);
+        check_equal(tr_raft_coronet_peer_manager_get_peer_status(
                          manager, 2U, &peer_status),
                      TURBO_OK);
-        check_int_eq(peer_status.attached, 1);
-        check_int_eq(peer_status.session.state,
+        check_equal(peer_status.attached, 1);
+        check_equal(peer_status.session.state,
                      TR_RAFT_CORONET_STATE_DETACHED);
 
-        check_int_eq(tr_raft_coronet_peer_manager_detach(
+        check_equal(tr_raft_coronet_peer_manager_detach(
                          manager, 2U, &detached),
                      TURBO_OK);
         tr_raft_coronet_session_destroy(detached);
@@ -497,12 +497,12 @@ spec("raft CoroNet transport")
         manager_config.local_node_id = 1U;
         manager_config.peer_node_ids = peer_ids;
         manager_config.peer_count = 1U;
-        check_int_eq(tr_raft_coronet_peer_manager_create(&manager_config,
+        check_equal(tr_raft_coronet_peer_manager_create(&manager_config,
                                                           &manager),
                      TURBO_OK);
 
         session = make_session(42U, 1U, 2U, &received);
-        check_int_eq(tr_raft_coronet_peer_manager_attach(manager, session),
+        check_equal(tr_raft_coronet_peer_manager_attach(manager, session),
                      TURBO_EPROTO);
         tr_raft_coronet_session_destroy(session);
         tr_raft_coronet_peer_manager_destroy(manager);
@@ -529,30 +529,30 @@ spec("raft CoroNet transport")
         manager_config.local_node_id = 1U;
         manager_config.peer_node_ids = peer_ids;
         manager_config.peer_count = 1U;
-        check_int_eq(tr_raft_coronet_peer_manager_create(&manager_config,
+        check_equal(tr_raft_coronet_peer_manager_create(&manager_config,
                                                           &manager),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_expected_direction(1U, 2U, &direction),
+        check_equal(tr_raft_coronet_expected_direction(1U, 2U, &direction),
                      TURBO_OK);
-        check_int_eq(direction, TR_RAFT_CORONET_CONNECTION_OUTBOUND);
-        check_int_eq(tr_raft_coronet_expected_direction(2U, 1U, &direction),
+        check_equal(direction, TR_RAFT_CORONET_CONNECTION_OUTBOUND);
+        check_equal(tr_raft_coronet_expected_direction(2U, 1U, &direction),
                      TURBO_OK);
-        check_int_eq(direction, TR_RAFT_CORONET_CONNECTION_INBOUND);
+        check_equal(direction, TR_RAFT_CORONET_CONNECTION_INBOUND);
 
         wrong_direction = make_connected_session(51U, 1U, 2U, &received);
-        check_int_eq(tr_raft_coronet_peer_manager_admit(
+        check_equal(tr_raft_coronet_peer_manager_admit(
                          manager, TR_RAFT_CORONET_CONNECTION_INBOUND,
                          wrong_direction),
                      TURBO_EPROTO);
         tr_raft_coronet_session_destroy(wrong_direction);
 
         accepted = make_connected_session(51U, 1U, 2U, &received);
-        check_int_eq(tr_raft_coronet_peer_manager_admit(
+        check_equal(tr_raft_coronet_peer_manager_admit(
                          manager, TR_RAFT_CORONET_CONNECTION_OUTBOUND,
                          accepted),
                      TURBO_OK);
         duplicate = make_connected_session(51U, 1U, 2U, &received);
-        check_int_eq(tr_raft_coronet_peer_manager_admit(
+        check_equal(tr_raft_coronet_peer_manager_admit(
                          manager, TR_RAFT_CORONET_CONNECTION_OUTBOUND,
                          duplicate),
                      TURBO_EPROTO);
@@ -578,7 +578,7 @@ spec("raft CoroNet transport")
         config.first_outbound_message_id = 1U;
         config.on_message = collect_message;
         config.message_context = &received;
-        check_int_eq(tr_raft_coronet_session_create(&config, &session),
+        check_equal(tr_raft_coronet_session_create(&config, &session),
                      TURBO_EINVAL);
     }
 
@@ -604,18 +604,18 @@ spec("raft CoroNet transport")
         config.admission.peer_idle_timeout_ms = 10000U;
         config.admission.on_message = collect_message;
 
-        check_int_eq(tr_raft_coronet_outbound_config_validate(&config),
+        check_equal(tr_raft_coronet_outbound_config_validate(&config),
                      TURBO_OK);
         config.tls.verify_peer = 0;
-        check_int_eq(tr_raft_coronet_outbound_config_validate(&config),
+        check_equal(tr_raft_coronet_outbound_config_validate(&config),
                      TURBO_EINVAL);
         config.tls.verify_peer = 1;
         config.request_host = NULL;
-        check_int_eq(tr_raft_coronet_outbound_config_validate(&config),
+        check_equal(tr_raft_coronet_outbound_config_validate(&config),
                      TURBO_EINVAL);
         config.request_host = "node-2.mesh";
         config.admission.direction = TR_RAFT_CORONET_CONNECTION_INBOUND;
-        check_int_eq(tr_raft_coronet_outbound_config_validate(&config),
+        check_equal(tr_raft_coronet_outbound_config_validate(&config),
                      TURBO_EINVAL);
     }
 
@@ -645,36 +645,36 @@ spec("raft CoroNet transport")
         config.on_result = collect_inbound_result;
         config.result_context = &test;
 
-        check_int_eq(tr_raft_coronet_inbound_service_config_validate(&config),
+        check_equal(tr_raft_coronet_inbound_service_config_validate(&config),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_inbound_service_create(&config, &service),
+        check_equal(tr_raft_coronet_inbound_service_create(&config, &service),
                      TURBO_OK);
         test.service = service;
         test.admission_result = TURBO_OK;
         tr_raft_coronet_inbound_service_handle(
             (coro_socket_t *) (uintptr_t) 1, service);
-        check_int_eq(test.result_count, 1);
-        check_int_eq(test.result_peer_node_id, 2);
-        check_int_eq(test.destroy_result, TURBO_EBUSY);
+        check_equal(test.result_count, 1);
+        check_equal(test.result_peer_node_id, 2);
+        check_equal(test.destroy_result, TURBO_EBUSY);
 
         test.admission_result = TURBO_EPROTO;
         tr_raft_coronet_inbound_service_handle(
             (coro_socket_t *) (uintptr_t) 1, service);
-        check_int_eq(test.result_count, 2);
-        check_int_eq(test.result_peer_node_id, 0);
-        check_int_eq(tr_raft_coronet_inbound_service_get_status(service,
+        check_equal(test.result_count, 2);
+        check_equal(test.result_peer_node_id, 0);
+        check_equal(tr_raft_coronet_inbound_service_get_status(service,
                                                                 &status),
                      TURBO_OK);
-        check_long_eq(status.accepted_socket_count, 2U);
-        check_long_eq(status.admitted_socket_count, 1U);
-        check_long_eq(status.rejected_socket_count, 1U);
-        check_int_eq(status.active_admission_count, 0);
-        check_int_eq(status.last_error, TURBO_EPROTO);
-        check_int_eq(tr_raft_coronet_inbound_service_destroy(service),
+        check_equal(status.accepted_socket_count, 2U);
+        check_equal(status.admitted_socket_count, 1U);
+        check_equal(status.rejected_socket_count, 1U);
+        check_equal(status.active_admission_count, 0);
+        check_equal(status.last_error, TURBO_EPROTO);
+        check_equal(tr_raft_coronet_inbound_service_destroy(service),
                      TURBO_OK);
 
         config.admission.expected_peer_node_id = 2U;
-        check_int_eq(tr_raft_coronet_inbound_service_config_validate(&config),
+        check_equal(tr_raft_coronet_inbound_service_config_validate(&config),
                      TURBO_EINVAL);
     }
 
@@ -714,52 +714,52 @@ spec("raft CoroNet transport")
         config.max_attempts = 3U;
         test.failures_remaining = 2;
 
-        check_int_eq(tr_raft_coronet_dial_scheduler_create(&config,
+        check_equal(tr_raft_coronet_dial_scheduler_create(&config,
                                                             &scheduler),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_dial_scheduler_step(scheduler, 100U),
+        check_equal(tr_raft_coronet_dial_scheduler_step(scheduler, 100U),
                      TURBO_EIO);
-        check_int_eq(tr_raft_coronet_dial_scheduler_get_status(scheduler,
+        check_equal(tr_raft_coronet_dial_scheduler_get_status(scheduler,
                                                                &status),
                      TURBO_OK);
-        check_int_eq(status.state, TR_RAFT_CORONET_DIAL_WAITING);
-        check_int_eq(status.attempt_count, 1);
-        check_long_eq(status.next_attempt_ms, 110U);
-        check_int_eq(tr_raft_coronet_dial_scheduler_step(scheduler, 109U),
+        check_equal(status.state, TR_RAFT_CORONET_DIAL_WAITING);
+        check_equal(status.attempt_count, 1);
+        check_equal(status.next_attempt_ms, 110U);
+        check_equal(tr_raft_coronet_dial_scheduler_step(scheduler, 109U),
                      TURBO_EBUSY);
-        check_int_eq(test.connect_count, 1);
+        check_equal(test.connect_count, 1);
 
-        check_int_eq(tr_raft_coronet_dial_scheduler_step(scheduler, 110U),
+        check_equal(tr_raft_coronet_dial_scheduler_step(scheduler, 110U),
                      TURBO_EIO);
-        check_int_eq(tr_raft_coronet_dial_scheduler_get_status(scheduler,
+        check_equal(tr_raft_coronet_dial_scheduler_get_status(scheduler,
                                                                &status),
                      TURBO_OK);
-        check_long_eq(status.next_attempt_ms, 130U);
-        check_int_eq(tr_raft_coronet_dial_scheduler_step(scheduler, 130U),
+        check_equal(status.next_attempt_ms, 130U);
+        check_equal(tr_raft_coronet_dial_scheduler_step(scheduler, 130U),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_dial_scheduler_get_status(scheduler,
+        check_equal(tr_raft_coronet_dial_scheduler_get_status(scheduler,
                                                                &status),
                      TURBO_OK);
-        check_int_eq(status.state, TR_RAFT_CORONET_DIAL_CONNECTED);
-        check_int_eq(status.attempt_count, 3);
-        check_int_eq(test.resolve_count, 3);
-        check_int_eq(test.connect_count, 3);
+        check_equal(status.state, TR_RAFT_CORONET_DIAL_CONNECTED);
+        check_equal(status.attempt_count, 3);
+        check_equal(test.resolve_count, 3);
+        check_equal(test.connect_count, 3);
 
         test.failures_remaining = 3;
-        check_int_eq(tr_raft_coronet_dial_scheduler_reset(scheduler, 200U),
+        check_equal(tr_raft_coronet_dial_scheduler_reset(scheduler, 200U),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_dial_scheduler_step(scheduler, 200U),
+        check_equal(tr_raft_coronet_dial_scheduler_step(scheduler, 200U),
                      TURBO_EIO);
-        check_int_eq(tr_raft_coronet_dial_scheduler_step(scheduler, 210U),
+        check_equal(tr_raft_coronet_dial_scheduler_step(scheduler, 210U),
                      TURBO_EIO);
-        check_int_eq(tr_raft_coronet_dial_scheduler_step(scheduler, 230U),
+        check_equal(tr_raft_coronet_dial_scheduler_step(scheduler, 230U),
                      TURBO_EIO);
-        check_int_eq(tr_raft_coronet_dial_scheduler_get_status(scheduler,
+        check_equal(tr_raft_coronet_dial_scheduler_get_status(scheduler,
                                                                &status),
                      TURBO_OK);
-        check_int_eq(status.state, TR_RAFT_CORONET_DIAL_EXHAUSTED);
-        check_int_eq(status.attempt_count, 3);
-        check_int_eq(tr_raft_coronet_dial_scheduler_step(scheduler, 250U),
+        check_equal(status.state, TR_RAFT_CORONET_DIAL_EXHAUSTED);
+        check_equal(status.attempt_count, 3);
+        check_equal(tr_raft_coronet_dial_scheduler_step(scheduler, 250U),
                      TURBO_EBUSY);
         tr_raft_coronet_dial_scheduler_destroy(scheduler);
     }
@@ -791,7 +791,7 @@ spec("raft CoroNet transport")
         manager_config.local_node_id = 2U;
         manager_config.peer_node_ids = peer_ids;
         manager_config.peer_count = 1U;
-        check_int_eq(tr_raft_coronet_peer_manager_create(&manager_config,
+        check_equal(tr_raft_coronet_peer_manager_create(&manager_config,
                                                           &manager),
                      TURBO_OK);
 
@@ -801,22 +801,22 @@ spec("raft CoroNet transport")
         receiver_config.first_outbound_message_id = 1U;
         receiver_config.on_message = try_reentrant_detach;
         receiver_config.message_context = &callback_context;
-        check_int_eq(tr_raft_coronet_session_create(&receiver_config,
+        check_equal(tr_raft_coronet_session_create(&receiver_config,
                                                      &receiver),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_peer_manager_attach(manager, receiver),
+        check_equal(tr_raft_coronet_peer_manager_attach(manager, receiver),
                      TURBO_OK);
         callback_context.manager = manager;
         callback_context.peer_node_id = 1U;
         sender = make_session(71U, 1U, 2U, &sender_received);
         message = make_heartbeat(1U, 2U, 9U);
-        check_int_eq(tr_raft_coronet_encode_packet(
+        check_equal(tr_raft_coronet_encode_packet(
                          sender, &message, packet, sizeof(packet), &packet_size),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_feed(receiver, packet, packet_size),
+        check_equal(tr_raft_coronet_feed(receiver, packet, packet_size),
                      TURBO_OK);
-        check_int_eq(callback_context.detach_result, TURBO_EBUSY);
-        check_int_eq(tr_raft_coronet_peer_manager_detach(
+        check_equal(callback_context.detach_result, TURBO_EBUSY);
+        check_equal(tr_raft_coronet_peer_manager_detach(
                          manager, 1U, &detached),
                      TURBO_OK);
 

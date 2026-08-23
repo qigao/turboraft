@@ -19,7 +19,7 @@ static void advance_ready(tr_raft_core_t *core, tr_raft_ready_t *ready)
         ready->role_changed || ready->log_changed || ready->commit_changed ||
         ready->committed_entry_count != 0U || ready->read_state_ready ||
         ready->snapshot_request_count != 0U) {
-        check_int_eq(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), TURBO_OK);
     }
 }
 
@@ -54,15 +54,15 @@ spec("compacted leader replication")
         config.initial_log_entry_count = 1U;
         config.initial_commit_index = 2U;
         config.initial_applied_index = 2U;
-        check_int_eq(tr_raft_core_create(&config, &core), TURBO_OK);
+        check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
 
         prepare_ready(&ready, messages);
         {
             tr_raft_tick_t tick = {2U, 2U};
-            check_int_eq(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+            check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
         }
-        check_size_eq(ready.message_count, 1U);
-        check_int_eq(ready.messages[0].type, TR_RAFT_MSG_PRE_VOTE_REQUEST);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_PRE_VOTE_REQUEST);
         advance_ready(core, &ready);
 
         memset(&response, 0, sizeof(response));
@@ -73,16 +73,16 @@ spec("compacted leader replication")
         response.campaign_term = 3U;
         response.granted = true;
         prepare_ready(&ready, messages);
-        check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
-        check_size_eq(ready.message_count, 1U);
-        check_int_eq(ready.messages[0].type, TR_RAFT_MSG_VOTE_REQUEST);
+        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_VOTE_REQUEST);
         advance_ready(core, &ready);
 
         response.type = TR_RAFT_MSG_VOTE_RESPONSE;
         response.term = 3U;
         prepare_ready(&ready, messages);
-        check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
-        check_size_eq(ready.message_count, 1U);
+        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(ready.message_count, 1U);
         advance_ready(core, &ready);
 
         memset(&response, 0, sizeof(response));
@@ -92,25 +92,25 @@ spec("compacted leader replication")
         response.term = 3U;
         response.reject_hint = 1U;
         prepare_ready(&ready, messages);
-        check_int_eq(tr_raft_core_step(core, &response, &ready), TURBO_OK);
-        check_size_eq(ready.message_count, 0U);
-        check_size_eq(ready.snapshot_request_count, 1U);
-        check_long_eq(ready.snapshot_requests[0].peer_id, 2U);
-        check_long_eq(ready.snapshot_requests[0].leader_term, 3U);
-        check_long_eq(ready.snapshot_requests[0].snapshot_index, 2U);
-        check_long_eq(ready.snapshot_requests[0].snapshot_term, 1U);
+        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(ready.message_count, 0U);
+        check_equal(ready.snapshot_request_count, 1U);
+        check_equal(ready.snapshot_requests[0].peer_id, 2U);
+        check_equal(ready.snapshot_requests[0].leader_term, 3U);
+        check_equal(ready.snapshot_requests[0].snapshot_index, 2U);
+        check_equal(ready.snapshot_requests[0].snapshot_term, 1U);
         advance_ready(core, &ready);
 
         prepare_ready(&ready, messages);
-        check_int_eq(tr_raft_core_snapshot_completed(core, 2U, 2U, &ready),
+        check_equal(tr_raft_core_snapshot_completed(core, 2U, 2U, &ready),
                      TURBO_OK);
-        check_size_eq(ready.snapshot_request_count, 0U);
-        check_size_eq(ready.message_count, 1U);
-        check_int_eq(ready.messages[0].type, TR_RAFT_MSG_APPEND_REQUEST);
-        check_long_eq(ready.messages[0].previous_log_index, 2U);
-        check_long_eq(ready.messages[0].previous_log_term, 1U);
-        check_size_eq(ready.messages[0].entry_count, 1U);
-        check_long_eq(ready.messages[0].entries[0].index, 3U);
+        check_equal(ready.snapshot_request_count, 0U);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_APPEND_REQUEST);
+        check_equal(ready.messages[0].previous_log_index, 2U);
+        check_equal(ready.messages[0].previous_log_term, 1U);
+        check_equal(ready.messages[0].entry_count, 1U);
+        check_equal(ready.messages[0].entries[0].index, 3U);
         advance_ready(core, &ready);
         tr_raft_core_destroy(core);
     }

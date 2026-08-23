@@ -2,7 +2,7 @@
 #define TURBORAFT_TEXT_SYNTAX_H
 
 #include <turbo_error.h>
-#include <turbo_str_view.h>
+#include <turbo_vstr.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -62,12 +62,12 @@ typedef struct {
 
 typedef struct {
   uint64_t version;
-  tstr_v kind;
+  vstr kind;
   uint64_t from;
   uint64_t to;
   uint64_t term;
-  tstr_v message;
-  tstr_v payload_hex;
+  vstr message;
+  vstr payload_hex;
 } tr_text_protocol_frame_t;
 
 typedef struct {
@@ -107,13 +107,13 @@ typedef struct {
   uint64_t peer_id;
   uint64_t value;
   tr_text_replay_comparison_t comparison;
-  tstr_v name;
+  vstr name;
   uint64_t client_id;
   uint64_t request_id;
   uint64_t sequence;
   uint64_t timeout_ticks;
   tr_text_replay_poll_target_t poll_target;
-  tstr_v payload_hex;
+  vstr payload_hex;
 } tr_text_replay_action_t;
 
 typedef struct {

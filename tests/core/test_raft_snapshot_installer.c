@@ -41,21 +41,21 @@ static tr_raft_wal_storage_t *installer_open_storage(void)
     config.max_log_entries = 16U;
     config.create_if_missing = true;
     config.max_snapshot_bytes = 1024U;
-    check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+    check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
     return storage;
 }
 
 static void installer_close_storage(tr_raft_wal_storage_t *storage)
 {
     char path[TURBO_FS_MAX_PATH];
-    check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+    check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
     snprintf(path, sizeof(path), "%s.snapshot.9.6", installer_path_prefix);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(tt_remove_file(path), 0);
     snprintf(path, sizeof(path), "%s.00000001.wal", installer_path_prefix);
-    check_int_eq(tt_remove_file(path), 0);
+    check_equal(tt_remove_file(path), 0);
     snprintf(path, sizeof(path), "%s.lock", installer_path_prefix);
-    check_int_eq(tt_remove_file(path), 0);
-    check_int_eq(tt_remove_file(installer_path_prefix), 0);
+    check_equal(tt_remove_file(path), 0);
+    check_equal(tt_remove_file(installer_path_prefix), 0);
     free(installer_path_prefix);
     installer_path_prefix = NULL;
 }
@@ -106,7 +106,7 @@ static tr_raft_snapshot_installer_t *installer_create(
     config.application_context = capture;
     config.reload_runtime = installer_reload;
     config.runtime_context = capture;
-    check_int_eq(tr_raft_snapshot_installer_create(&config, &installer),
+    check_equal(tr_raft_snapshot_installer_create(&config, &installer),
                  TURBO_OK);
     return installer;
 }
@@ -123,20 +123,20 @@ spec("raft snapshot installer")
 
         memset(&capture, 0, sizeof(capture));
         installer = installer_create(storage, &capture);
-        check_int_eq(tr_raft_snapshot_installer_install(
+        check_equal(tr_raft_snapshot_installer_install(
                          installer, 7U, 9U, 6U, &installer_configuration,
                          snapshot, sizeof(snapshot)), TURBO_OK);
-        check_int_eq(capture.restore_order, 1);
-        check_int_eq(capture.reload_order, 2);
-        check_size_eq(capture.size, sizeof(snapshot));
-        check_mem_eq(capture.data, snapshot, sizeof(snapshot));
-        check_int_eq(tr_raft_snapshot_installer_get_status(installer, &status),
+        check_equal(capture.restore_order, 1);
+        check_equal(capture.reload_order, 2);
+        check_equal(capture.size, sizeof(snapshot));
+        check_equal(capture.data, snapshot, sizeof(snapshot));
+        check_equal(tr_raft_snapshot_installer_get_status(installer, &status),
                      TURBO_OK);
         check(!status.faulted);
-        check_int_eq(status.stage, TR_RAFT_SNAPSHOT_INSTALL_COMPLETE);
-        check_long_eq(status.durable_index, 9U);
-        check_long_eq(status.restored_index, 9U);
-        check_long_eq(status.active_index, 9U);
+        check_equal(status.stage, TR_RAFT_SNAPSHOT_INSTALL_COMPLETE);
+        check_equal(status.durable_index, 9U);
+        check_equal(status.restored_index, 9U);
+        check_equal(status.active_index, 9U);
 
         tr_raft_snapshot_installer_destroy(installer);
         installer_close_storage(storage);
@@ -153,19 +153,19 @@ spec("raft snapshot installer")
         memset(&capture, 0, sizeof(capture));
         capture.restore_result = TURBO_EPIPE;
         installer = installer_create(storage, &capture);
-        check_int_eq(tr_raft_snapshot_installer_install(
+        check_equal(tr_raft_snapshot_installer_install(
                          installer, 7U, 9U, 6U, &installer_configuration,
                          snapshot, sizeof(snapshot)), TURBO_EPIPE);
-        check_int_eq(tr_raft_snapshot_installer_get_status(installer, &status),
+        check_equal(tr_raft_snapshot_installer_get_status(installer, &status),
                      TURBO_OK);
         check(status.faulted);
-        check_int_eq(status.stage, TR_RAFT_SNAPSHOT_INSTALL_APPLICATION);
-        check_int_eq(status.cause, TURBO_EPIPE);
-        check_long_eq(status.durable_index, 9U);
-        check_long_eq(status.restored_index, 0U);
-        check_long_eq(status.active_index, 0U);
-        check_int_eq(capture.reload_order, 0);
-        check_int_eq(tr_raft_snapshot_installer_install(
+        check_equal(status.stage, TR_RAFT_SNAPSHOT_INSTALL_APPLICATION);
+        check_equal(status.cause, TURBO_EPIPE);
+        check_equal(status.durable_index, 9U);
+        check_equal(status.restored_index, 0U);
+        check_equal(status.active_index, 0U);
+        check_equal(capture.reload_order, 0);
+        check_equal(tr_raft_snapshot_installer_install(
                          installer, 8U, 10U, 7U, &installer_configuration,
                          snapshot, sizeof(snapshot)), TURBO_EPROTO);
 

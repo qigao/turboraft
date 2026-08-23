@@ -5,7 +5,7 @@
 
 #include "raft_configuration.h"
 
-#include <turbo_vec.h>
+#include <turbostl/vec.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -17,10 +17,8 @@ typedef tr_raft_index_t tr_raft_log_index_t;
 typedef tr_raft_term_t tr_raft_log_term_t;
 typedef tr_raft_entry_t tr_raft_log_entry_t;
 
-TURBO_VEC_DEFINE(tr_raft_log_entry_vec_t, tr_raft_log_entry_t)
-
 typedef struct tr_raft_log {
-    tr_raft_log_entry_vec_t entries;
+    vec_t entries;
     size_t max_entries;
     tr_raft_log_index_t base_index;
     tr_raft_log_term_t base_term;

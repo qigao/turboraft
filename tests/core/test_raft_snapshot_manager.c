@@ -122,54 +122,54 @@ spec("raft snapshot manager")
         manager_config.max_snapshot_bytes = 1024U;
         manager_config.enqueue = manager_enqueue;
         manager_config.enqueue_context = &payloads;
-        check_int_eq(tr_raft_snapshot_manager_create(&manager_config, &manager),
+        check_equal(tr_raft_snapshot_manager_create(&manager_config, &manager),
                      TURBO_OK);
 
         receiver_config.self_id = 2U;
         receiver_config.max_snapshot_bytes = 1024U;
         receiver_config.install = manager_install;
         receiver_config.install_context = &installed_two;
-        check_int_eq(tr_raft_snapshot_receiver_create(
+        check_equal(tr_raft_snapshot_receiver_create(
                          &receiver_config, &receiver_two), TURBO_OK);
         receiver_config.self_id = 3U;
         receiver_config.install_context = &installed_three;
-        check_int_eq(tr_raft_snapshot_receiver_create(
+        check_equal(tr_raft_snapshot_receiver_create(
                          &receiver_config, &receiver_three), TURBO_OK);
 
-        check_int_eq(tr_raft_snapshot_manager_begin(
+        check_equal(tr_raft_snapshot_manager_begin(
                          manager, 3U, 7U, 10U, 7U,
                          &manager_configuration,
                          snapshot_three, sizeof(snapshot_three)), TURBO_OK);
-        check_int_eq(tr_raft_snapshot_manager_begin(
+        check_equal(tr_raft_snapshot_manager_begin(
                          manager, 2U, 7U, 9U, 6U,
                          &manager_configuration,
                          snapshot_two, sizeof(snapshot_two)), TURBO_OK);
-        check_size_eq(payloads.count, 2U);
-        check_long_eq(payloads.payloads[0].data.snapshot_chunk.to, 3U);
-        check_long_eq(payloads.payloads[1].data.snapshot_chunk.to, 2U);
+        check_equal(payloads.count, 2U);
+        check_equal(payloads.payloads[0].data.snapshot_chunk.to, 3U);
+        check_equal(payloads.payloads[1].data.snapshot_chunk.to, 2U);
 
-        check_int_eq(manager_receive_and_ack(
+        check_equal(manager_receive_and_ack(
                          manager, receiver_three, &payloads.payloads[0]),
                      TURBO_OK);
-        check_int_eq(manager_receive_and_ack(
+        check_equal(manager_receive_and_ack(
                          manager, receiver_two, &payloads.payloads[1]),
                      TURBO_OK);
-        check_size_eq(payloads.count, 3U);
-        check_long_eq(payloads.payloads[2].data.snapshot_chunk.to, 2U);
-        check_long_eq(payloads.payloads[2].data.snapshot_chunk.snapshot_offset,
+        check_equal(payloads.count, 3U);
+        check_equal(payloads.payloads[2].data.snapshot_chunk.to, 2U);
+        check_equal(payloads.payloads[2].data.snapshot_chunk.snapshot_offset,
                       512U);
-        check_int_eq(manager_receive_and_ack(
+        check_equal(manager_receive_and_ack(
                          manager, receiver_two, &payloads.payloads[2]),
                      TURBO_OK);
 
-        check_int_eq(tr_raft_snapshot_manager_get_status(manager, 2U, &status),
+        check_equal(tr_raft_snapshot_manager_get_status(manager, 2U, &status),
                      TURBO_OK);
         check(status.complete);
-        check_int_eq(tr_raft_snapshot_manager_get_status(manager, 3U, &status),
+        check_equal(tr_raft_snapshot_manager_get_status(manager, 3U, &status),
                      TURBO_OK);
         check(status.complete);
-        check_size_eq(installed_two.count, 1U);
-        check_size_eq(installed_three.count, 1U);
+        check_equal(installed_two.count, 1U);
+        check_equal(installed_three.count, 1U);
 
         tr_raft_snapshot_receiver_destroy(receiver_three);
         tr_raft_snapshot_receiver_destroy(receiver_two);

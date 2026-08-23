@@ -1,9 +1,10 @@
 #include <turboraft/raft_flowmq_peer_service.h>
 
 #include "raft_coronet_payload_storage.h"
+#include "../turboraft_stl_status.h"
 
 #include <ring_buffer_spsc.h>
-#include <turbo_deque.h>
+#include <turbostl/deque.h>
 #include <turbo_error.h>
 #include <turbo_thread.h>
 
@@ -11,8 +12,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-TURBO_DEQUE_DEFINE(tr_raft_flowmq_payload_queue_t, tr_raft_owned_coronet_payload_t)
 
 #define TR_RAFT_FLOWMQ_CONTROL_CAPACITY 2U
 #define TR_RAFT_FLOWMQ_STOP_POLL_MS 10U
@@ -41,7 +40,7 @@ typedef struct tr_raft_flowmq_peer tr_raft_flowmq_peer_t;
 
 typedef struct tr_raft_flowmq_send_command {
   tr_raft_flowmq_peer_t *peer;
-  tstr_t *frames;
+  tstr *frames;
   size_t frame_count;
   size_t submitted;
   int result;
@@ -66,7 +65,7 @@ struct tr_raft_flowmq_peer {
   int connector_thread_created;
   tr_raft_handshake_exchange_t *exchange;
   tr_raft_coronet_session_t *session;
-  tr_raft_flowmq_payload_queue_t outbound;
+  deque_t outbound;
   size_t outbound_snapshot_bytes;
   size_t outbound_data_bytes;
   tr_raft_flowmq_control_queue_t control;
@@ -88,7 +87,7 @@ struct tr_raft_flowmq_peer_service {
   size_t max_send_batch_items;
   size_t max_send_batch_bytes;
   size_t max_inflight_data_bytes;
-  tstr_t *send_frames;
+  tstr *send_frames;
   uint8_t *send_packets;
   ring_spsc_t inbound;
   turbo_mutex_t inbound_producer_mutex;
@@ -287,7 +286,7 @@ static tr_raft_flowmq_peer_t *tr_raft_flowmq_find_peer_node(tr_raft_flowmq_peer_
 }
 
 static tr_raft_flowmq_peer_t *
-tr_raft_flowmq_find_peer_identity(tr_raft_flowmq_peer_service_t *service, tstr_v identity) {
+tr_raft_flowmq_find_peer_identity(tr_raft_flowmq_peer_service_t *service, vstr identity) {
   size_t index;
 
   if (service == NULL || identity.data == NULL || identity.len == 0U) {
@@ -438,7 +437,7 @@ static int tr_raft_flowmq_peer_receive_handshake(tr_raft_flowmq_peer_t *peer, co
 }
 
 static int tr_raft_flowmq_router_frame(void *context, const flowmq_router_route_t *route,
-                                       tstr_v peer_identity, tstr_v peer_topic,
+                                       vstr peer_identity, vstr peer_topic,
                                        const flowmq_protocol_frame_t *frame) {
   tr_raft_flowmq_peer_service_t *service = (tr_raft_flowmq_peer_service_t *)context;
   tr_raft_flowmq_peer_t *peer;
@@ -469,7 +468,7 @@ done:
 static void tr_raft_flowmq_send_post(void *arg1, void *arg2) {
   tr_raft_flowmq_send_command_t *command = (tr_raft_flowmq_send_command_t *)arg1;
   tr_raft_flowmq_peer_t *peer;
-  tstr_t *frames;
+  tstr *frames;
   size_t frame_count;
   size_t submitted = 0U;
   int result = TURBO_OK;
@@ -496,7 +495,7 @@ static void tr_raft_flowmq_send_post(void *arg1, void *arg2) {
   turbo_mutex_unlock(&command->mutex);
 }
 
-static int tr_raft_flowmq_send_frames(tr_raft_flowmq_peer_t *peer, tstr_t *frames,
+static int tr_raft_flowmq_send_frames(tr_raft_flowmq_peer_t *peer, tstr *frames,
                                       size_t frame_count, size_t *out_submitted) {
   tr_raft_flowmq_send_command_t *command;
   int result;
@@ -534,7 +533,7 @@ static int tr_raft_flowmq_send_frames(tr_raft_flowmq_peer_t *peer, tstr_t *frame
 }
 
 static int tr_raft_flowmq_encode_data(tr_raft_flowmq_peer_t *peer, const void *payload,
-                                      size_t payload_size, tstr_t *out_frame) {
+                                      size_t payload_size, tstr *out_frame) {
   flowmq_protocol_frame_t frame;
   int result;
 
@@ -546,7 +545,7 @@ static int tr_raft_flowmq_encode_data(tr_raft_flowmq_peer_t *peer, const void *p
   frame.kind = FLOWMQ_PROTOCOL_FRAME_DATA;
   frame.pattern = FLOWMQ_PROTOCOL_DEALER;
   frame.message_id = peer->next_fmq_message_id;
-  frame.payload = tstr_v_from_buf(payload, payload_size);
+  frame.payload = vstr_from_buf(payload, payload_size);
   result = flowmq_protocol_encode_frame(&frame, peer->max_frame_size, out_frame);
   if (result == TURBO_OK) {
     ++peer->next_fmq_message_id;
@@ -586,10 +585,10 @@ static void tr_raft_flowmq_peer_cleanup(tr_raft_flowmq_peer_t *peer) {
   peer->session = NULL;
   tr_raft_handshake_exchange_destroy(peer->exchange);
   peer->exchange = NULL;
-  while (tr_raft_flowmq_payload_queue_t_pop_front(&peer->outbound, &owned)) {
+  while (deque_pop_front(&peer->outbound, &owned) == STL_OK) {
     tr_raft_owned_coronet_payload_release(&owned);
   }
-  tr_raft_flowmq_payload_queue_t_destroy(&peer->outbound);
+  deque_destroy(&peer->outbound);
 }
 
 static void tr_raft_flowmq_service_cleanup(tr_raft_flowmq_peer_service_t *service) {
@@ -720,7 +719,7 @@ int tr_raft_flowmq_peer_service_create(const tr_raft_flowmq_peer_service_config_
   service->snapshot_context = config->snapshot_context;
   atomic_init(&service->callback_depth, 0U);
   atomic_init(&service->inbound_error, TURBO_OK);
-  service->send_frames = (tstr_t *)calloc(send_batch_items, sizeof(*service->send_frames));
+  service->send_frames = (tstr *)calloc(send_batch_items, sizeof(*service->send_frames));
   service->send_packets = (uint8_t *)malloc(send_packet_storage_bytes);
   service->inbound_storage = (uint8_t *)malloc(service->inbound_queue_capacity_bytes);
   if (service->send_frames == NULL || service->send_packets == NULL ||
@@ -789,7 +788,10 @@ int tr_raft_flowmq_peer_service_create(const tr_raft_flowmq_peer_service_config_
     atomic_init(&peer->connector_error, TURBO_OK);
     atomic_init(&peer->dealer_ready, 0);
     memcpy(peer->identity, source->peer_identity, strlen(source->peer_identity) + 1U);
-    result = tr_raft_flowmq_payload_queue_t_init(&peer->outbound);
+    result = tr_raft_stl_status_to_error(deque_init_bytes(
+        &peer->outbound, sizeof(tr_raft_owned_coronet_payload_t),
+        _Alignof(tr_raft_owned_coronet_payload_t),
+        service->outbound_queue_capacity));
     if (result != TURBO_OK) {
       break;
     }
@@ -797,8 +799,8 @@ int tr_raft_flowmq_peer_service_create(const tr_raft_flowmq_peer_service_config_
     turbo_cond_init(&peer->send_command.complete);
     peer->send_command.sync_initialized = 1;
     ++service->initialized_peer_count;
-    result =
-        tr_raft_flowmq_payload_queue_t_reserve(&peer->outbound, service->outbound_queue_capacity);
+    result = tr_raft_stl_status_to_error(
+        deque_reserve(&peer->outbound, service->outbound_queue_capacity));
     if (result != TURBO_OK) {
       break;
     }
@@ -977,7 +979,7 @@ static int tr_raft_flowmq_peer_step(tr_raft_flowmq_peer_t *peer,
     ++out_result->control_frames_sent;
   }
   if (peer->handshake_complete && peer->session != NULL) {
-    size_t available = tr_raft_flowmq_payload_queue_t_size(&peer->outbound);
+    size_t available = deque_size(&peer->outbound);
     size_t batch_count =
         available < service->max_send_batch_items ? available : service->max_send_batch_items;
     size_t batch_bytes = 0U;
@@ -987,7 +989,8 @@ static int tr_raft_flowmq_peer_step(tr_raft_flowmq_peer_t *peer,
     tr_raft_flowmq_clear_send_frames(service, service->max_send_batch_items);
     for (index = 0U; index < batch_count; ++index) {
       const tr_raft_owned_coronet_payload_t *owned =
-          tr_raft_flowmq_payload_queue_t_at_const(&peer->outbound, index);
+          (const tr_raft_owned_coronet_payload_t *)deque_at_const(
+              &peer->outbound, index);
       uint8_t *packet = service->send_packets + index * TR_RAFT_CORONET_MAX_PACKET_SIZE;
       size_t packet_size = 0U;
 
@@ -1025,7 +1028,7 @@ static int tr_raft_flowmq_peer_step(tr_raft_flowmq_peer_t *peer,
     for (index = 0U; index < submitted; ++index) {
       tr_raft_owned_coronet_payload_t discarded;
 
-      if (!tr_raft_flowmq_payload_queue_t_pop_front(&peer->outbound, &discarded)) {
+      if (deque_pop_front(&peer->outbound, &discarded) != STL_OK) {
         return TURBO_EPROTO;
       }
       if (discarded.payload.kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
@@ -1212,7 +1215,7 @@ int tr_raft_flowmq_peer_service_enqueue_payload(tr_raft_flowmq_peer_service_t *s
   if (peer == NULL) {
     return TURBO_EPROTO;
   }
-  if (tr_raft_flowmq_payload_queue_t_size(&peer->outbound) >= service->outbound_queue_capacity) {
+  if (deque_size(&peer->outbound) >= service->outbound_queue_capacity) {
     return TURBO_ENOSPC;
   }
   if (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK &&
@@ -1231,7 +1234,8 @@ int tr_raft_flowmq_peer_service_enqueue_payload(tr_raft_flowmq_peer_service_t *s
   if (result != TURBO_OK) {
     return result;
   }
-  result = tr_raft_flowmq_payload_queue_t_push_back(&peer->outbound, owned);
+  result = tr_raft_stl_status_to_error(
+      deque_push_back(&peer->outbound, &owned));
   if (result != TURBO_OK) {
     tr_raft_owned_coronet_payload_release(&owned);
   } else if (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
@@ -1264,7 +1268,7 @@ int tr_raft_flowmq_peer_service_get_status(const tr_raft_flowmq_peer_service_t *
   out_status->last_error = service->last_error;
   for (index = 0U; index < service->peer_count; ++index) {
     out_status->queued_payload_count +=
-        tr_raft_flowmq_payload_queue_t_size(&service->peers[index].outbound);
+        deque_size(&service->peers[index].outbound);
     out_status->queued_data_bytes += service->peers[index].outbound_data_bytes;
     if (service->peers[index].handshake_complete) {
       ++out_status->handshake_complete_count;

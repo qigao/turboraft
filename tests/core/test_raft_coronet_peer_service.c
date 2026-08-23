@@ -59,7 +59,7 @@ static void service_collect_inbound(void *context,
     ++test->inbound_result_count;
     test->inbound_peer_node_id = peer_node_id;
     test->destroy_result = tr_raft_coronet_peer_service_destroy(test->service);
-    check_int_eq(result, TURBO_OK);
+    check_equal(result, TURBO_OK);
 }
 
 static int service_resolve_endpoint(
@@ -144,7 +144,7 @@ spec("raft CoroNet peer service")
         service_config.identity_entry_count = 2U;
         service_config.admit_owned_socket = service_fake_admit;
         service_config.connect_outbound = service_fake_connect;
-        check_int_eq(tr_raft_coronet_peer_service_create(&service_config,
+        check_equal(tr_raft_coronet_peer_service_create(&service_config,
                                                           &service),
                      TURBO_OK);
         test.service = service;
@@ -160,20 +160,20 @@ spec("raft CoroNet peer service")
         inbound_config.admission.message_context = &test;
         inbound_config.on_result = service_collect_inbound;
         inbound_config.result_context = &test;
-        check_int_eq(tr_raft_coronet_peer_service_configure_inbound(
+        check_equal(tr_raft_coronet_peer_service_configure_inbound(
                          service, &inbound_config),
                      TURBO_OK);
         tr_raft_coronet_peer_service_handle_inbound(
             (coro_socket_t *) (uintptr_t) 1, service);
-        check_int_eq(test.inbound_result_count, 1);
-        check_int_eq(test.inbound_peer_node_id, 1);
-        check_int_eq(test.destroy_result, TURBO_EBUSY);
+        check_equal(test.inbound_result_count, 1);
+        check_equal(test.inbound_peer_node_id, 1);
+        check_equal(test.destroy_result, TURBO_EBUSY);
 
         {
             tr_raft_message_t queued_message;
             size_t queue_index;
 
-            check_int_eq(tr_raft_coronet_peer_service_get_status(
+            check_equal(tr_raft_coronet_peer_service_get_status(
                              service, &status),
                          TURBO_OK);
             memset(&queued_message, 0, sizeof(queued_message));
@@ -184,12 +184,12 @@ spec("raft CoroNet peer service")
                  queue_index < status.outbound_queue_capacity;
                  ++queue_index) {
                 queued_message.term = queue_index + 1U;
-                check_int_eq(tr_raft_coronet_peer_service_enqueue(
+                check_equal(tr_raft_coronet_peer_service_enqueue(
                                  service, &queued_message),
                              TURBO_OK);
             }
             queued_message.term = status.outbound_queue_capacity + 1U;
-            check_int_eq(tr_raft_coronet_peer_service_enqueue(
+            check_equal(tr_raft_coronet_peer_service_enqueue(
                          service, &queued_message),
                      TURBO_ENOSPC);
             {
@@ -201,22 +201,22 @@ spec("raft CoroNet peer service")
                 snapshot_ack.data.snapshot_ack.to = 3U;
                 snapshot_ack.data.snapshot_ack.term = 1U;
                 snapshot_ack.data.snapshot_ack.snapshot_index = 1U;
-                check_int_eq(tr_raft_coronet_peer_service_enqueue_payload(
+                check_equal(tr_raft_coronet_peer_service_enqueue_payload(
                                  service, &snapshot_ack),
                              TURBO_ENOSPC);
             }
-            check_int_eq(tr_raft_coronet_peer_service_get_status(
+            check_equal(tr_raft_coronet_peer_service_get_status(
                              service, &status),
                          TURBO_OK);
-            check_size_eq(status.queued_message_count,
+            check_equal(status.queued_message_count,
                           status.outbound_queue_capacity);
-            check_size_eq(status.queued_payload_count,
+            check_equal(status.queued_payload_count,
                           status.outbound_queue_capacity);
             coro_context_run(coro_context, TURBO_RUN_NOWAIT);
-            check_int_eq(tr_raft_coronet_peer_service_get_status(
+            check_equal(tr_raft_coronet_peer_service_get_status(
                              service, &status),
                          TURBO_OK);
-            check_size_eq(status.queued_message_count,
+            check_equal(status.queued_message_count,
                           status.outbound_queue_capacity);
         }
 
@@ -239,35 +239,35 @@ spec("raft CoroNet peer service")
         dial_config.initial_retry_delay_ms = 10U;
         dial_config.max_retry_delay_ms = 20U;
         dial_config.max_attempts = 3U;
-        check_int_eq(tr_raft_coronet_peer_service_add_outbound(
+        check_equal(tr_raft_coronet_peer_service_add_outbound(
                          service, &dial_config),
                      TURBO_OK);
-        check_int_eq(tr_raft_coronet_peer_service_step(service, 100U,
+        check_equal(tr_raft_coronet_peer_service_step(service, 100U,
                                                         &step_result),
                      TURBO_OK);
-        check_int_eq(step_result.scheduler_count, 1);
-        check_int_eq(step_result.attempted_count, 1);
-        check_int_eq(step_result.newly_connected_count, 1);
-        check_int_eq(step_result.failed_count, 0);
-        check_int_eq(test.outbound_identity_node_id, 3);
+        check_equal(step_result.scheduler_count, 1);
+        check_equal(step_result.attempted_count, 1);
+        check_equal(step_result.newly_connected_count, 1);
+        check_equal(step_result.failed_count, 0);
+        check_equal(test.outbound_identity_node_id, 3);
         coro_context_run(coro_context, TURBO_RUN_NOWAIT);
 
         identities[0] = service_identity('a', 3U);
         identities[1] = service_identity('b', 1U);
-        check_int_eq(tr_raft_coronet_peer_service_update_identities(
+        check_equal(tr_raft_coronet_peer_service_update_identities(
                          service, identities, 2U),
                      TURBO_OK);
         tr_raft_coronet_peer_service_handle_inbound(
             (coro_socket_t *) (uintptr_t) 1, service);
-        check_int_eq(test.inbound_peer_node_id, 3);
-        check_int_eq(tr_raft_coronet_peer_service_get_status(service, &status),
+        check_equal(test.inbound_peer_node_id, 3);
+        check_equal(tr_raft_coronet_peer_service_get_status(service, &status),
                      TURBO_OK);
-        check_int_eq(status.peer_count, 2);
-        check_int_eq(status.scheduler_count, 1);
-        check_long_eq(status.identity_generation, 2U);
-        check_int_eq(status.inbound_configured, 1);
+        check_equal(status.peer_count, 2);
+        check_equal(status.scheduler_count, 1);
+        check_equal(status.identity_generation, 2U);
+        check_equal(status.inbound_configured, 1);
         coro_context_run(coro_context, TURBO_RUN_NOWAIT);
-        check_int_eq(tr_raft_coronet_peer_service_destroy(service), TURBO_OK);
+        check_equal(tr_raft_coronet_peer_service_destroy(service), TURBO_OK);
         coro_context_destroy(coro_context);
     }
 }

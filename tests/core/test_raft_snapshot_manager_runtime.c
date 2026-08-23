@@ -133,7 +133,7 @@ spec("snapshot manager runtime bridge")
         manager_config.provider_context = &capture;
         manager_config.complete = runtime_manager_complete;
         manager_config.complete_context = &capture;
-        check_int_eq(tr_raft_snapshot_manager_create(&manager_config,
+        check_equal(tr_raft_snapshot_manager_create(&manager_config,
                                                      &manager), TURBO_OK);
 
         memset(&request, 0, sizeof(request));
@@ -141,36 +141,36 @@ spec("snapshot manager runtime bridge")
         request.leader_term = 8U;
         request.snapshot_index = 10U;
         request.snapshot_term = 7U;
-        check_int_eq(tr_raft_snapshot_manager_enqueue_request(manager,
+        check_equal(tr_raft_snapshot_manager_enqueue_request(manager,
                                                               &request),
                      TURBO_OK);
-        check_int_eq(tr_raft_snapshot_manager_enqueue_request(manager,
+        check_equal(tr_raft_snapshot_manager_enqueue_request(manager,
                                                               &request),
                      TURBO_OK);
-        check_size_eq(capture.provider_count, 1U);
-        check_size_eq(capture.payload_count, 1U);
+        check_equal(capture.provider_count, 1U);
+        check_equal(capture.payload_count, 1U);
 
         memset(&receiver_config, 0, sizeof(receiver_config));
         receiver_config.self_id = 2U;
         receiver_config.max_snapshot_bytes = 1024U;
         receiver_config.install = runtime_manager_install;
         receiver_config.install_context = &capture;
-        check_int_eq(tr_raft_snapshot_receiver_create(&receiver_config,
+        check_equal(tr_raft_snapshot_receiver_create(&receiver_config,
                                                       &receiver), TURBO_OK);
-        check_int_eq(tr_raft_snapshot_receiver_handle(
+        check_equal(tr_raft_snapshot_receiver_handle(
                          receiver,
                          &capture.payloads[0].data.snapshot_chunk,
                          &receive_result), TURBO_OK);
         memset(&ack_payload, 0, sizeof(ack_payload));
         ack_payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
         ack_payload.data.snapshot_ack = receive_result.ack;
-        check_int_eq(tr_raft_snapshot_manager_handle_payload(manager,
+        check_equal(tr_raft_snapshot_manager_handle_payload(manager,
                                                              &ack_payload),
                      TURBO_OK);
-        check_size_eq(capture.install_count, 1U);
-        check_size_eq(capture.complete_count, 1U);
-        check_long_eq(capture.completed_peer, 2U);
-        check_long_eq(capture.completed_index, 10U);
+        check_equal(capture.install_count, 1U);
+        check_equal(capture.complete_count, 1U);
+        check_equal(capture.completed_peer, 2U);
+        check_equal(capture.completed_index, 10U);
 
         tr_raft_snapshot_receiver_destroy(receiver);
         tr_raft_snapshot_manager_destroy(manager);

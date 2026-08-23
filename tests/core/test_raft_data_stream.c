@@ -64,16 +64,16 @@ spec("raft data stream")
         descriptor.stream_size = TEST_STREAM_BYTES;
         memset(descriptor.stream_digest, 0x71,
                sizeof(descriptor.stream_digest));
-        check_int_eq(tr_raft_data_descriptor_encode(
+        check_equal(tr_raft_data_descriptor_encode(
                          &descriptor, encoded, sizeof(encoded),
                          &encoded_size), TURBO_OK);
-        check_size_eq(encoded_size, TR_RAFT_DATA_DESCRIPTOR_ENCODED_SIZE);
-        check_size_le(encoded_size, TR_RAFT_MAX_ENTRY_BYTES);
-        check_int_eq(tr_raft_data_descriptor_decode(
+        check_equal(encoded_size, TR_RAFT_DATA_DESCRIPTOR_ENCODED_SIZE);
+        check_less_equal(encoded_size, TR_RAFT_MAX_ENTRY_BYTES);
+        check_equal(tr_raft_data_descriptor_decode(
                          encoded, encoded_size, &decoded), TURBO_OK);
-        check_long_eq(decoded.stream_id, descriptor.stream_id);
-        check_long_eq(decoded.stream_size, descriptor.stream_size);
-        check_mem_eq(decoded.stream_digest, descriptor.stream_digest,
+        check_equal(decoded.stream_id, descriptor.stream_id);
+        check_equal(decoded.stream_size, descriptor.stream_size);
+        check_equal(decoded.stream_digest, descriptor.stream_digest,
                      sizeof(descriptor.stream_digest));
     }
 
@@ -98,10 +98,10 @@ spec("raft data stream")
         config.descriptor.stream_size = TEST_STREAM_BYTES;
         memset(config.descriptor.stream_digest, 0x4a,
                sizeof(config.descriptor.stream_digest));
-        check_int_eq(tr_raft_data_quorum_create(&config, &quorum), TURBO_OK);
-        check_int_eq(tr_raft_data_quorum_mark_local_durable(quorum), TURBO_OK);
+        check_equal(tr_raft_data_quorum_create(&config, &quorum), TURBO_OK);
+        check_equal(tr_raft_data_quorum_mark_local_durable(quorum), TURBO_OK);
         check_false(tr_raft_data_quorum_ready(quorum));
-        check_int_eq(tr_raft_data_quorum_make_proposal(
+        check_equal(tr_raft_data_quorum_make_proposal(
                          quorum, 91U, descriptor, &proposal), TURBO_EBUSY);
 
         ack.from = 2U;
@@ -114,17 +114,17 @@ spec("raft data stream")
         ack.durable = true;
         memcpy(ack.stream_digest, config.descriptor.stream_digest,
                sizeof(ack.stream_digest));
-        check_int_eq(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
+        check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
         check_false(tr_raft_data_quorum_ready(quorum));
         ack.from = 3U;
-        check_int_eq(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
+        check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
         check_true(tr_raft_data_quorum_ready(quorum));
-        check_int_eq(tr_raft_data_quorum_make_proposal(
+        check_equal(tr_raft_data_quorum_make_proposal(
                          quorum, 91U, descriptor, &proposal), TURBO_OK);
-        check_long_eq(proposal.command_id, 91U);
-        check_size_eq(proposal.data_length,
+        check_equal(proposal.command_id, 91U);
+        check_equal(proposal.data_length,
                       TR_RAFT_DATA_DESCRIPTOR_ENCODED_SIZE);
-        check_ptr_eq(proposal.data, descriptor);
+        check_equal(proposal.data, descriptor);
         tr_raft_data_quorum_destroy(quorum);
     }
 
@@ -153,8 +153,8 @@ spec("raft data stream")
         config.descriptor.stream_size = TEST_STREAM_BYTES;
         memset(config.descriptor.stream_digest, 0x5b,
                sizeof(config.descriptor.stream_digest));
-        check_int_eq(tr_raft_data_quorum_create(&config, &quorum), TURBO_OK);
-        check_int_eq(tr_raft_data_quorum_mark_local_durable(quorum), TURBO_OK);
+        check_equal(tr_raft_data_quorum_create(&config, &quorum), TURBO_OK);
+        check_equal(tr_raft_data_quorum_mark_local_durable(quorum), TURBO_OK);
         ack.to = 3U;
         ack.term = config.term;
         ack.stream_id = config.descriptor.stream_id;
@@ -165,16 +165,16 @@ spec("raft data stream")
         memcpy(ack.stream_digest, config.descriptor.stream_digest,
                sizeof(ack.stream_digest));
         ack.from = 2U;
-        check_int_eq(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
+        check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
         check_false(tr_raft_data_quorum_ready(quorum));
         ack.from = 4U;
-        check_int_eq(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
+        check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
         check_false(tr_raft_data_quorum_ready(quorum));
         ack.from = 1U;
-        check_int_eq(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
+        check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
         check_false(tr_raft_data_quorum_ready(quorum));
         ack.from = 5U;
-        check_int_eq(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
+        check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), TURBO_OK);
         check_true(tr_raft_data_quorum_ready(quorum));
         tr_raft_data_quorum_destroy(quorum);
     }
@@ -205,35 +205,35 @@ spec("raft data stream")
         receiver_config.sink.abort = test_stream_abort;
         receiver_config.sink.context = &sink;
 
-        check_int_eq(tr_raft_data_stream_sender_create(
+        check_equal(tr_raft_data_stream_sender_create(
                          &sender_config, &sender), TURBO_OK);
-        check_int_eq(tr_raft_data_stream_receiver_create(
+        check_equal(tr_raft_data_stream_receiver_create(
                          &receiver_config, &receiver), TURBO_OK);
-        check_int_eq(tr_raft_data_stream_sender_begin(
+        check_equal(tr_raft_data_stream_sender_begin(
                          sender, 3U, 9U, source, sizeof(source)), TURBO_OK);
         for (index = 0U; index < 4U; ++index) {
-            check_int_eq(tr_raft_data_stream_sender_next(
+            check_equal(tr_raft_data_stream_sender_next(
                              sender, &chunks[index]), TURBO_OK);
-            check_size_eq(chunks[index].data_length,
+            check_equal(chunks[index].data_length,
                           TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES);
         }
-        check_int_eq(tr_raft_data_stream_sender_next(sender, &chunks[0]),
+        check_equal(tr_raft_data_stream_sender_next(sender, &chunks[0]),
                      TURBO_EBUSY);
         for (index = 0U; index < 4U; ++index) {
-            check_int_eq(tr_raft_data_stream_receiver_handle(
+            check_equal(tr_raft_data_stream_receiver_handle(
                              receiver, &chunks[index], &received), TURBO_OK);
         }
         check_true(received.committed);
         check_true(received.ack.durable);
-        check_long_eq(received.ack.next_offset, sizeof(source));
-        check_int_eq(tr_raft_data_stream_sender_acknowledge(
+        check_equal(received.ack.next_offset, sizeof(source));
+        check_equal(tr_raft_data_stream_sender_acknowledge(
                          sender, &received.ack), TURBO_OK);
-        check_int_eq(tr_raft_data_stream_sender_get_status(sender, &status),
+        check_equal(tr_raft_data_stream_sender_get_status(sender, &status),
                      TURBO_OK);
         check_true(status.complete);
-        check_size_eq(sink.writes, 4U);
-        check_size_eq(sink.used, sizeof(source));
-        check_mem_eq(sink.data, source, sizeof(source));
+        check_equal(sink.writes, 4U);
+        check_equal(sink.used, sizeof(source));
+        check_equal(sink.data, source, sizeof(source));
         check_true(sink.committed);
         check_false(sink.aborted);
 
@@ -257,13 +257,13 @@ spec("raft data stream")
         config.self_id = 1U;
         config.peer_id = 2U;
         config.max_stream_bytes = sizeof(source);
-        check_int_eq(tr_raft_data_stream_sender_create(&config, &sender),
+        check_equal(tr_raft_data_stream_sender_create(&config, &sender),
                      TURBO_OK);
-        check_int_eq(tr_raft_data_stream_sender_begin(
+        check_equal(tr_raft_data_stream_sender_begin(
                          sender, 5U, 81U, source, sizeof(source)), TURBO_OK);
         for (window = 0U; window < 8U; ++window) {
             for (index = 0U; index < 4U; ++index) {
-                check_int_eq(tr_raft_data_stream_sender_next(
+                check_equal(tr_raft_data_stream_sender_next(
                                  sender, &chunks[index]), TURBO_OK);
             }
             memset(&ack, 0, sizeof(ack));
@@ -278,13 +278,13 @@ spec("raft data stream")
             ack.durable = ack.next_offset == sizeof(source);
             memcpy(ack.stream_digest, chunks[0].stream_digest,
                    sizeof(ack.stream_digest));
-            check_int_eq(tr_raft_data_stream_sender_acknowledge(sender, &ack),
+            check_equal(tr_raft_data_stream_sender_acknowledge(sender, &ack),
                          TURBO_OK);
         }
-        check_int_eq(tr_raft_data_stream_sender_get_status(sender, &status),
+        check_equal(tr_raft_data_stream_sender_get_status(sender, &status),
                      TURBO_OK);
         check_true(status.complete);
-        check_long_eq(status.acknowledged_offset, sizeof(source));
+        check_equal(status.acknowledged_offset, sizeof(source));
         tr_raft_data_stream_sender_destroy(sender);
     }
 }
