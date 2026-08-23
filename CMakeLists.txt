@@ -299,7 +299,7 @@ if(TurboNet_FOUND AND TARGET FlowMQ::FlowMQ)
   target_link_libraries(
     turboraft_flowmq
     PUBLIC TurboRaft::CoroNet FlowMQ::FlowMQ
-    PRIVATE TurboUtils::STL)
+    PRIVATE TurboUtils::Platform TurboUtils::STL)
 else()
   message(STATUS "FlowMQ::FlowMQ not found; FlowMQ peer transport is disabled")
 endif()
@@ -343,7 +343,7 @@ if(BUILD_TESTS)
   target_link_libraries(
     turboraft_control_plane_http_tests
     PRIVATE TurboRaft::ControlPlane TurboHttp::Iris TurboHttp::TurboHttp
-            TurboUtils::TinyTest)
+            TurboUtils::Platform TurboUtils::TinyTest)
   add_custom_command(
     TARGET turboraft_control_plane_http_tests
     POST_BUILD
@@ -514,6 +514,7 @@ if(TurboNet_FOUND AND TurboHttp_FOUND)
                    tests/control/test_raft_control_owner_bridge.c)
     target_link_libraries(
       turboraft_control_owner_bridge_tests PRIVATE TurboRaft::ControlPlane
+                                                     TurboUtils::Platform
                                                      TurboUtils::TinyTest)
     target_compile_definitions(turboraft_control_owner_bridge_tests
                                PRIVATE TURBORAFT_HAS_SERVICE_OWNER=1)

@@ -201,6 +201,7 @@ add_test(NAME turboraft.service_wal_reload
   target_link_libraries(turboraft_multiprocess_chaos_tests
                         PRIVATE TurboRaft::Core
                                 TurboUtils::Core
+                                TurboUtils::Platform
                                 TurboUtils::TinyTest)
   add_test(NAME turboraft.multiprocess_chaos
            COMMAND turboraft_multiprocess_chaos_tests)
@@ -388,7 +389,8 @@ if(TARGET turboraft_coronet)
     turboraft_coronet_mtls_tests
     PRIVATE TURBORAFT_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
   target_link_libraries(turboraft_coronet_mtls_tests
-                        PRIVATE TurboRaft::CoroNet TurboUtils::TinyTest)
+                        PRIVATE TurboRaft::CoroNet TurboUtils::Platform
+                                TurboUtils::TinyTest)
   if(WIN32)
     target_link_libraries(turboraft_coronet_mtls_tests PRIVATE ws2_32)
   endif()
@@ -400,7 +402,8 @@ if(TARGET turboraft_coronet)
     turboraft_coronet_mtls_rejection_tests
     PRIVATE TURBORAFT_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
   target_link_libraries(turboraft_coronet_mtls_rejection_tests
-                        PRIVATE TurboRaft::CoroNet TurboUtils::TinyTest)
+                        PRIVATE TurboRaft::CoroNet TurboUtils::Platform
+                                TurboUtils::TinyTest)
   if(WIN32)
     target_link_libraries(turboraft_coronet_mtls_rejection_tests
                           PRIVATE ws2_32)
@@ -431,6 +434,7 @@ if(TARGET turboraft_coronet)
                         PRIVATE TurboRaft::CoroNet
                                 TurboRaft::SnapshotReceiver
                                 TurboRaft::SnapshotSender
+                                TurboUtils::Platform
                                 TurboUtils::TinyTest)
   if(WIN32)
     target_link_libraries(turboraft_coronet_peer_service_mtls_tests
@@ -445,7 +449,8 @@ if(TARGET turboraft_coronet)
     turboraft_coronet_three_node_mtls_tests
     PRIVATE TURBORAFT_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
   target_link_libraries(turboraft_coronet_three_node_mtls_tests
-                        PRIVATE TurboRaft::CoroNet TurboUtils::TinyTest)
+                        PRIVATE TurboRaft::CoroNet TurboUtils::Platform
+                                TurboUtils::TinyTest)
   if(WIN32)
     target_link_libraries(turboraft_coronet_three_node_mtls_tests
                           PRIVATE ws2_32)
@@ -461,6 +466,7 @@ if(TARGET turboraft_coronet)
       PRIVATE TURBORAFT_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
     target_link_libraries(turboraft_flowmq_peer_service_tests
                           PRIVATE TurboRaft::FlowMQ TurboRaft::DataStream
+                                  TurboUtils::Platform
                                   TurboUtils::TinyTest)
     if(WIN32)
       target_link_libraries(turboraft_flowmq_peer_service_tests PRIVATE ws2_32)
