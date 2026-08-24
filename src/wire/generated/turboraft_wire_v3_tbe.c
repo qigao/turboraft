@@ -873,6 +873,7 @@ static const TbeTypedDescriptor RaftWireMessageV3_TYPED_DESCRIPTOR =
 
 TBE_TYPED_DEFINE_RECORD(RaftWireMessageV3)
 
+
 static DataBindStatus TurboRaftWireV3_schema_codec_error(DataBindError *error,
                                                                 DataBindStatus status,
                                                                 const char *path,

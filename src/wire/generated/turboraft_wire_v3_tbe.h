@@ -61,6 +61,7 @@ typedef struct turbo_uuid_s {
 
 #include "tbe_typed.h"
 
+
 #ifndef TBE_SCHEMA_CODEC_V1_DEFINED
 #define TBE_SCHEMA_CODEC_V1_DEFINED
 
@@ -1449,6 +1450,9 @@ static inline bool RaftWireMessageV3_entry8_command_id_set(RaftWireMessageV3_bui
 static inline uint64_t RaftWireMessageV3_entry8_command_id_get(const RaftWireMessageV3_view_t *view) {
     return tbe_wire_read_u64(view->data + 280, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
+
+
+
 
 
 

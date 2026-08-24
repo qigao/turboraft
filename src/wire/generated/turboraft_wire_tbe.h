@@ -61,6 +61,7 @@ typedef struct turbo_uuid_s {
 
 #include "tbe_typed.h"
 
+
 #ifndef TBE_SCHEMA_CODEC_V1_DEFINED
 #define TBE_SCHEMA_CODEC_V1_DEFINED
 
@@ -1209,6 +1210,9 @@ static inline bool InstallSnapshotAck_accepted_set(InstallSnapshotAck_builder_t 
 static inline uint8_t InstallSnapshotAck_accepted_get(const InstallSnapshotAck_view_t *view) {
     return tbe_wire_read_u8(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
+
+
+
 
 
 

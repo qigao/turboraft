@@ -14,18 +14,5 @@ option(BUILD_EXAMPLES "Build TurboRaft examples" OFF)
 
 # TurboNet/TurboHttp-backed adapters (CoroNet transport, snapshot manager,
 # service owner, control plane, console) are enabled automatically when the
-# corresponding packages are found during configure. A missing package only
-# disables the dependent targets; it does not fail the configure.
-
-set(TURBO_UTILS_ROOT
-    ""
-    CACHE PATH "TurboUtils package prefix")
-set(TURBO_NET_ROOT
-    ""
-    CACHE PATH "TurboNet package prefix")
-set(TURBO_HTTP_ROOT
-    ""
-    CACHE PATH "TurboHttp package prefix")
-set(TURBO_FLOW_ROOT
-    ""
-    CACHE PATH "TurboFlow package prefix")
+# corresponding packages are found during configure. First-party package roots
+# are supplied only by the active CMake user preset.

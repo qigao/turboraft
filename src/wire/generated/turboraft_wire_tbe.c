@@ -748,6 +748,7 @@ TBE_TYPED_DEFINE_RECORD(RaftWireMessage)
 TBE_TYPED_DEFINE_RECORD(InstallSnapshotChunk)
 TBE_TYPED_DEFINE_RECORD(InstallSnapshotAck)
 
+
 static DataBindStatus TurboRaftWire_schema_codec_error(DataBindError *error,
                                                                 DataBindStatus status,
                                                                 const char *path,

@@ -61,22 +61,55 @@ endif()
 
 include(CTest)
 
-find_package(TurboUtils CONFIG REQUIRED PATHS "${TURBO_UTILS_ROOT}")
-find_package(TurboParser CONFIG REQUIRED PATHS "${TURBOPARSER_ROOT}")
+foreach(_turboraft_required_root IN ITEMS TURBOUTILS_ROOT TURBOPARSER_ROOT)
+  if(NOT DEFINED ENV{${_turboraft_required_root}} OR
+     "$ENV{${_turboraft_required_root}}" STREQUAL "")
+    message(FATAL_ERROR
+            "Required dependency root is not defined: ${_turboraft_required_root}")
+  endif()
+  if(NOT IS_DIRECTORY "$ENV{${_turboraft_required_root}}")
+    message(FATAL_ERROR
+            "${_turboraft_required_root} is not a directory: $ENV{${_turboraft_required_root}}")
+  endif()
+endforeach()
+
+find_package(TurboUtils CONFIG REQUIRED
+             PATHS "$ENV{TURBOUTILS_ROOT}" NO_DEFAULT_PATH)
+find_package(TurboParser CONFIG REQUIRED
+             PATHS "$ENV{TURBOPARSER_ROOT}" NO_DEFAULT_PATH)
 find_package(OpenSSL REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 
-find_program(
-  TURBORAFT_TBE_COMPILER
-  NAMES tbe_compiler
-  HINTS "${TURBOPARSER_ROOT}/bin"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../turbo-parser/build/Msvc-Release/bin"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../turbo-parser/build/Msvc/bin"
-  DOC "TurboParser TBE schema compiler")
+if(CMAKE_CROSSCOMPILING)
+  set(_turboraft_tbe_root_name TURBOPARSER_HOST_ROOT)
+else()
+  set(_turboraft_tbe_root_name TURBOPARSER_ROOT)
+endif()
+if(NOT DEFINED ENV{${_turboraft_tbe_root_name}} OR
+   "$ENV{${_turboraft_tbe_root_name}}" STREQUAL "" OR
+   NOT IS_DIRECTORY "$ENV{${_turboraft_tbe_root_name}}")
+  message(FATAL_ERROR
+          "${_turboraft_tbe_root_name} must name the TurboParser host install prefix")
+endif()
+file(REAL_PATH "$ENV{${_turboraft_tbe_root_name}}" _turboraft_tbe_root_real)
+unset(TURBORAFT_TBE_COMPILER CACHE)
+unset(TURBORAFT_TBE_COMPILER)
+find_program(TURBORAFT_TBE_COMPILER NAMES tbe_compiler tbe_compiler.exe
+             PATHS "${_turboraft_tbe_root_real}/bin" NO_DEFAULT_PATH
+             DOC "TurboParser TBE schema compiler")
 if(NOT TURBORAFT_TBE_COMPILER)
   message(
     FATAL_ERROR "tbe_compiler is required to generate the TurboRaft wire codec")
 endif()
+file(REAL_PATH "${TURBORAFT_TBE_COMPILER}" _turboraft_tbe_compiler_real)
+cmake_path(IS_PREFIX _turboraft_tbe_root_real
+           "${_turboraft_tbe_compiler_real}" NORMALIZE
+           _turboraft_tbe_compiler_in_root)
+if(NOT _turboraft_tbe_compiler_in_root)
+  message(FATAL_ERROR
+          "tbe_compiler resolved outside ${_turboraft_tbe_root_name}: ${_turboraft_tbe_compiler_real}")
+endif()
+set(TURBORAFT_TBE_COMPILER "${_turboraft_tbe_compiler_real}")
 
 set(TURBORAFT_WIRE_SCHEMA
     "${CMAKE_CURRENT_SOURCE_DIR}/schema/turboraft_wire.schema")
@@ -231,9 +264,27 @@ target_link_libraries(turboraft_service_wal_reload
                       PUBLIC TurboRaft::Service TurboRaft::WalStorage)
 
 find_package(Threads REQUIRED)
-find_package(TurboNet CONFIG QUIET PATHS "${TURBO_NET_ROOT}")
-find_package(TurboHttp CONFIG QUIET PATHS "${TURBO_HTTP_ROOT}")
-find_package(FlowMQ CONFIG QUIET PATHS "${FLOWMQ_ROOT}")
+foreach(_turboraft_optional_root IN ITEMS
+        TURBONET_ROOT TURBOHTTP_ROOT FLOWMQ_ROOT)
+  if(DEFINED ENV{${_turboraft_optional_root}} AND
+     NOT "$ENV{${_turboraft_optional_root}}" STREQUAL "" AND
+     NOT IS_DIRECTORY "$ENV{${_turboraft_optional_root}}")
+    message(FATAL_ERROR
+            "${_turboraft_optional_root} is not a directory: $ENV{${_turboraft_optional_root}}")
+  endif()
+endforeach()
+if(DEFINED ENV{TURBONET_ROOT} AND NOT "$ENV{TURBONET_ROOT}" STREQUAL "")
+  find_package(TurboNet CONFIG QUIET
+               PATHS "$ENV{TURBONET_ROOT}" NO_DEFAULT_PATH)
+endif()
+if(DEFINED ENV{TURBOHTTP_ROOT} AND NOT "$ENV{TURBOHTTP_ROOT}" STREQUAL "")
+  find_package(TurboHttp CONFIG QUIET
+               PATHS "$ENV{TURBOHTTP_ROOT}" NO_DEFAULT_PATH)
+endif()
+if(DEFINED ENV{FLOWMQ_ROOT} AND NOT "$ENV{FLOWMQ_ROOT}" STREQUAL "")
+  find_package(FlowMQ CONFIG QUIET
+               PATHS "$ENV{FLOWMQ_ROOT}" NO_DEFAULT_PATH)
+endif()
 
 if(TurboNet_FOUND)
   add_library(
