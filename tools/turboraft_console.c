@@ -1,38 +1,159 @@
-#include <rpc_client.h>
-#include <turbo_http.h>
-
+#include <turboraft/raft_control_plane.h>
 #include <turboraft/text_syntax.h>
+
+#include <chttp/chttp.h>
+#include <salts_error.h>
 
 #include <stdio.h>
 #include <string.h>
 
-static char tr_console_input[TR_TEXT_MAX_INPUT_BYTES + 1u];
+enum { TR_CONSOLE_URI_CAPACITY = 512, TR_CONSOLE_TIMEOUT_MS = 5000 };
 
-static int tr_console_call(rpc_client_t *client,
-                           const char *method,
-                           const char *params)
+typedef struct tr_console_endpoint {
+    char connection_uri[TR_CONSOLE_URI_CAPACITY];
+    char authority[TR_CONSOLE_URI_CAPACITY];
+    char target[TR_CONSOLE_URI_CAPACITY];
+} tr_console_endpoint_t;
+
+static char tr_console_input[TR_TEXT_MAX_INPUT_BYTES + 1U];
+
+static native_io_backend_kind tr_console_backend(void)
 {
-    rpc_call_result_t result = {0};
-    int call_result;
+#if defined(_WIN32)
+    return NATIVE_IO_BACKEND_IOCP;
+#elif defined(__linux__)
+    return NATIVE_IO_BACKEND_EPOLL;
+#else
+    return NATIVE_IO_BACKEND_KQUEUE;
+#endif
+}
 
-    call_result = rpc_client_call(client, method, params, &result);
-    if (call_result != 0) {
-        fprintf(stderr, "RPC transport failed for %s\n", method);
+static int tr_console_copy(char *output,
+                           size_t capacity,
+                           const char *input,
+                           size_t size)
+{
+    if (output == NULL || input == NULL || size == 0U || size >= capacity) {
+        return SALTS_ERANGE;
+    }
+    memcpy(output, input, size);
+    output[size] = '\0';
+    return SALTS_OK;
+}
+
+static int tr_console_parse_endpoint(const char *url,
+                                     tr_console_endpoint_t *out_endpoint)
+{
+    const char *authority;
+    const char *target;
+    const char *transport;
+    size_t authority_size;
+    int written;
+
+    if (url == NULL || out_endpoint == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (strncmp(url, "http://", 7U) == 0) {
+        authority = url + 7U;
+        transport = "tcp";
+    } else if (strncmp(url, "https://", 8U) == 0) {
+        authority = url + 8U;
+        transport = "tls";
+    } else {
+        return SALTS_EINVAL;
+    }
+    target = strchr(authority, '/');
+    authority_size = target == NULL ? strlen(authority)
+                                    : (size_t)(target - authority);
+    memset(out_endpoint, 0, sizeof(*out_endpoint));
+    if (tr_console_copy(out_endpoint->authority,
+                        sizeof(out_endpoint->authority), authority,
+                        authority_size) != SALTS_OK) {
+        return SALTS_ERANGE;
+    }
+    written = snprintf(out_endpoint->connection_uri,
+                       sizeof(out_endpoint->connection_uri), "%s://%s",
+                       transport, out_endpoint->authority);
+    if (written <= 0 || (size_t)written >=
+                            sizeof(out_endpoint->connection_uri)) {
+        return SALTS_ERANGE;
+    }
+    if (target == NULL) {
+        memcpy(out_endpoint->target, TR_RAFT_CONTROL_STATUS_PATH,
+               sizeof(TR_RAFT_CONTROL_STATUS_PATH));
+    } else if (tr_console_copy(out_endpoint->target,
+                               sizeof(out_endpoint->target), target,
+                               strlen(target)) != SALTS_OK) {
+        return SALTS_ERANGE;
+    }
+    return SALTS_OK;
+}
+
+static chttp_client_config tr_console_client_config(void)
+{
+    chttp_client_config config;
+
+    memset(&config, 0, sizeof(config));
+    config.network.backend = tr_console_backend();
+    config.network.connection_capacity = 2U;
+    config.network.command_capacity = 16U;
+    config.network.request_capacity = 8U;
+    config.network.completion_batch_capacity = 8U;
+    config.network.event_capacity = 16U;
+    config.network.max_send_bytes = 64U * 1024U;
+    config.network.receive_buffer_bytes = 16U * 1024U;
+    config.network.connect_timeout_ms = TR_CONSOLE_TIMEOUT_MS;
+    config.network.read_timeout_ms = TR_CONSOLE_TIMEOUT_MS;
+    config.network.write_timeout_ms = TR_CONSOLE_TIMEOUT_MS;
+    config.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
+    config.network.tls_handshake_timeout_ms = TR_CONSOLE_TIMEOUT_MS;
+    config.request_capacity = 2U;
+    config.max_start_line_bytes = 1024U;
+    config.max_header_count = 32U;
+    config.max_header_bytes = 8192U;
+    config.max_request_body_bytes = 8192U;
+    config.max_response_body_bytes = 64U * 1024U;
+    config.max_informational_responses = 2U;
+    return config;
+}
+
+static int tr_console_status(chttp_client *client,
+                             const tr_console_endpoint_t *endpoint)
+{
+    chttp_options options;
+    chttp_response response;
+    chttp_error error;
+    int result;
+
+    memset(&options, 0, sizeof(options));
+    memset(&response, 0, sizeof(response));
+    memset(&error, 0, sizeof(error));
+    options.connection_uri = endpoint->connection_uri;
+    options.authority = endpoint->authority;
+    options.target = endpoint->target;
+    options.timeout_ms = TR_CONSOLE_TIMEOUT_MS;
+    result = chttp_get(client, &options, &response, &error);
+    if (result != SALTS_OK) {
+        fprintf(stderr, "HTTP status request failed at %s: %d\n",
+                error.stage == NULL ? "unknown" : error.stage, result);
         return 1;
     }
-    if (!result.success) {
-        fprintf(stderr, "RPC %s failed: %d %s\n", method,
-                result.error_code,
-                result.error_message == NULL ? "" : result.error_message);
-        rpc_result_free(&result);
+    if (response.status_code != 200U) {
+        fprintf(stderr, "HTTP status request returned %u\n",
+                response.status_code);
+        chttp_response_destroy(&response);
         return 1;
     }
-    puts(result.result == NULL ? "null" : result.result);
-    rpc_result_free(&result);
+    if (response.body_size != 0U) {
+        (void)fwrite(response.body, 1U, response.body_size, stdout);
+    }
+    fputc('\n', stdout);
+    chttp_response_destroy(&response);
     return 0;
 }
 
-static int tr_console_execute_query(rpc_client_t *client,
+static int tr_console_execute_query(chttp_client *client,
+                                    const tr_console_endpoint_t *endpoint,
                                     const char *input,
                                     size_t input_length)
 {
@@ -43,48 +164,21 @@ static int tr_console_execute_query(rpc_client_t *client,
 
     result = tr_text_query_parse(input, input_length, NULL, &plan,
                                  &diagnostic);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         fprintf(stderr, "query parse failed at %zu:%zu: %s\n",
                 diagnostic.line, diagnostic.column,
-                diagnostic.message == NULL ? "invalid input" :
-                                             diagnostic.message);
+                diagnostic.message == NULL ? "invalid input"
+                                           : diagnostic.message);
         return 1;
     }
-    for (index = 0u; index < plan.command_count; ++index) {
-        const tr_text_query_command_t *command = &plan.commands[index];
-
-        switch (command->kind) {
-            case TR_TEXT_QUERY_SHOW_STATUS:
-                result = tr_console_call(client, "raft.status", "{}");
-                break;
-            case TR_TEXT_QUERY_SHOW_MEMBERS:
-                if (command->role == TR_TEXT_QUERY_ROLE_ANY) {
-                    result = tr_console_call(client, "raft.members", "{}");
-                } else {
-                    result = tr_console_call(
-                        client, "raft.members",
-                        command->role == TR_TEXT_QUERY_ROLE_VOTER
-                            ? "{\"role\":\"voter\"}"
-                            : "{\"role\":\"learner\"}");
-                }
-                break;
-            case TR_TEXT_QUERY_SHOW_PROGRESS: {
-                char params[64];
-                int written = snprintf(params, sizeof(params),
-                                       "{\"node_id\":%llu}",
-                                       (unsigned long long)command->node_id);
-
-                if (written <= 0 || (size_t)written >= sizeof(params)) {
-                    return 1;
-                }
-                result = tr_console_call(client, "raft.progress", params);
-                break;
-            }
-            default:
-                return 1;
+    for (index = 0U; index < plan.command_count; ++index) {
+        if (plan.commands[index].kind != TR_TEXT_QUERY_SHOW_STATUS) {
+            fputs("this control plane currently exposes SHOW STATUS only\n",
+                  stderr);
+            return 1;
         }
-        if (result != 0) {
-            return result;
+        if (tr_console_status(client, endpoint) != 0) {
+            return 1;
         }
     }
     return 0;
@@ -93,30 +187,24 @@ static int tr_console_execute_query(rpc_client_t *client,
 static void tr_console_print_usage(const char *program)
 {
     fprintf(stderr,
-            "Usage: %s --endpoint <http[s]://host:port/raft/rpc> "
+            "Usage: %s --endpoint <http[s]://host:port/raft/status> "
             "[--query <query DSL>]\n",
             program);
 }
 
 int main(int argc, char **argv)
 {
-    const char *endpoint;
+    tr_console_endpoint_t endpoint;
+    chttp_client_config client_config;
+    chttp_client client;
     const char *query = NULL;
-    turbo_http_options_t http_options;
-    turbo_http_t *http = NULL;
-    rpc_client_config_t client_config = {0};
-    rpc_client_t *client;
     int exit_code = 0;
 
-    if (argc != 3 && argc != 5) {
+    if ((argc != 3 && argc != 5) || strcmp(argv[1], "--endpoint") != 0 ||
+        argv[2][0] == '\0') {
         tr_console_print_usage(argv[0]);
         return 2;
     }
-    if (strcmp(argv[1], "--endpoint") != 0 || argv[2][0] == '\0') {
-        tr_console_print_usage(argv[0]);
-        return 2;
-    }
-    endpoint = argv[2];
     if (argc == 5) {
         if (strcmp(argv[3], "--query") != 0 || argv[4][0] == '\0') {
             tr_console_print_usage(argv[0]);
@@ -124,29 +212,19 @@ int main(int argc, char **argv)
         }
         query = argv[4];
     }
-
-    if (turbo_http_options_init(&http_options,
-                                sizeof(http_options)) != TURBO_OK) {
-        fprintf(stderr, "cannot initialize HTTP client options\n");
-        return 1;
+    if (tr_console_parse_endpoint(argv[2], &endpoint) != SALTS_OK) {
+        tr_console_print_usage(argv[0]);
+        return 2;
     }
-    http_options.transport = TURBO_HTTP_TRANSPORT_AUTO;
-    http_options.follow_redirects = 0;
-    if (turbo_http_create_sync(&http_options, &http) != TURBO_OK) {
-        fprintf(stderr, "cannot create HTTP client\n");
-        return 1;
-    }
-    client_config.url = endpoint;
-    client_config.facade_client = http;
-    client = rpc_client_create(&client_config);
-    if (client == NULL || rpc_client_connect(client) != 0) {
-        fprintf(stderr, "cannot connect to %s\n", endpoint);
-        rpc_client_destroy(client);
-        turbo_http_destroy(http);
+    memset(&client, 0, sizeof(client));
+    client_config = tr_console_client_config();
+    if (chttp_client_init(&client, &client_config) != SALTS_OK) {
+        fputs("cannot initialize CHTTP client\n", stderr);
         return 1;
     }
     if (query != NULL) {
-        exit_code = tr_console_execute_query(client, query, strlen(query));
+        exit_code = tr_console_execute_query(&client, &endpoint, query,
+                                             strlen(query));
     } else {
         while (fputs("turboraft> ", stdout),
                fgets(tr_console_input, sizeof(tr_console_input), stdin) !=
@@ -155,14 +233,15 @@ int main(int argc, char **argv)
                 strcmp(tr_console_input, "quit\n") == 0) {
                 break;
             }
-            if (tr_console_execute_query(client, tr_console_input,
+            if (tr_console_execute_query(&client, &endpoint,
+                                         tr_console_input,
                                          strlen(tr_console_input)) != 0) {
                 exit_code = 1;
             }
         }
     }
-    rpc_client_disconnect(client);
-    rpc_client_destroy(client);
-    turbo_http_destroy(http);
+    if (chttp_client_destroy(&client, TR_CONSOLE_TIMEOUT_MS) != SALTS_OK) {
+        exit_code = 1;
+    }
     return exit_code;
 }

@@ -3,7 +3,7 @@
 #include <turboraft/raft_core.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -17,18 +17,18 @@ static void joint_recovery_entries(tr_raft_entry_t entries[2])
 
     check_equal(tr_raft_membership_transition_init(
                      &transition, voters, 1U, NULL, 0U),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_raft_membership_transition_propose(
                      &transition, target_voters, 2U, NULL, 0U, 201U,
                      &joint),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_raft_membership_final(&joint, &final_membership),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_raft_conf_entry_encode(&joint, 1U, 1U, &entries[0]),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_raft_conf_entry_encode(
                      &final_membership, 2U, 1U, &entries[1]),
-                 TURBO_OK);
+                 SALTS_OK);
 }
 
 static int joint_recovery_core(const tr_raft_entry_t *entries,
@@ -64,8 +64,8 @@ spec("raft joint recovery")
         tr_raft_status_t status;
 
         joint_recovery_entries(entries);
-        check_equal(joint_recovery_core(entries, 2U, 2U, &core), TURBO_OK);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(joint_recovery_core(entries, 2U, 2U, &core), SALTS_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check(!status.joint_configuration);
         check_equal(status.membership_transition_id, 201U);
         check_equal(status.voter_count, 2U);
@@ -81,8 +81,8 @@ spec("raft joint recovery")
         tr_raft_status_t status;
 
         joint_recovery_entries(entries);
-        check_equal(joint_recovery_core(entries, 2U, 1U, &core), TURBO_OK);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(joint_recovery_core(entries, 2U, 1U, &core), SALTS_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check(status.joint_configuration);
         check_equal(status.pending_configuration_count, 1U);
         check_equal(status.peer_count, 2U);
@@ -104,9 +104,9 @@ spec("raft joint recovery")
         invalid.members[1].node_id = 2U;
         invalid.members[1].roles = TR_RAFT_CONF_OLD_VOTER;
         check_equal(tr_raft_conf_entry_encode(&invalid, 1U, 1U, &entry),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(joint_recovery_core(&entry, 1U, 1U, &core),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
         check_null(core);
     }
 }

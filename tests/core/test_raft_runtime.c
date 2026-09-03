@@ -1,7 +1,7 @@
 #include <turboraft/raft_runtime.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -22,7 +22,7 @@ typedef struct runtime_fixture {
 static int record_event(runtime_fixture_t *fixture, int event)
 {
     fixture->events[fixture->event_count++] = event;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int storage_begin(void *ctx)
@@ -42,7 +42,7 @@ static int storage_truncate(void *ctx, tr_raft_index_t index)
 {
     (void) ctx;
     (void) index;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int storage_append(void *ctx, const tr_raft_entry_t *entries,
@@ -67,7 +67,7 @@ static int storage_commit(void *ctx)
 static int storage_rollback(void *ctx)
 {
     (void) ctx;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int state_apply(void *ctx, const tr_raft_entry_t *entries, size_t count)
@@ -102,7 +102,7 @@ spec("raft runtime ordering")
         core_config.election_max_ticks = 10U;
         core_config.initial_election_timeout_ticks = 5U;
         core_config.max_log_entries = 4U;
-        check_equal(tr_raft_core_create(&core_config, &core), TURBO_OK);
+        check_equal(tr_raft_core_create(&core_config, &core), SALTS_OK);
 
         memset(&fixture, 0, sizeof(fixture));
         memset(&runtime_config, 0, sizeof(runtime_config));
@@ -117,18 +117,18 @@ spec("raft runtime ordering")
         runtime_config.storage.rollback = storage_rollback;
         runtime_config.state_machine.context = &fixture;
         runtime_config.state_machine.apply_batch = state_apply;
-        check_equal(tr_raft_runtime_init(&runtime, &runtime_config), TURBO_OK);
+        check_equal(tr_raft_runtime_init(&runtime, &runtime_config), SALTS_OK);
 
         memset(&ready, 0, sizeof(ready));
-        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
         check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
-                     TURBO_OK);
+                     SALTS_OK);
         fixture.event_count = 0U;
 
         memset(&ready, 0, sizeof(ready));
-        check_equal(tr_raft_core_propose(core, &proposal, &ready), TURBO_OK);
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
         check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
-                     TURBO_OK);
+                     SALTS_OK);
         check_true(result.durable);
         check_equal(result.stage, TR_RAFT_RUNTIME_COMPLETE);
         check_equal(fixture.event_count, 5U);
@@ -137,12 +137,12 @@ spec("raft runtime ordering")
         check_equal(fixture.events[2], EVENT_COMMIT_INDEX);
         check_equal(fixture.events[3], EVENT_STORAGE_COMMIT);
         check_equal(fixture.events[4], EVENT_APPLY);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.applied_index, 1U);
         memset(&ready, 0, sizeof(ready));
-        check_equal(tr_raft_core_read_index(core, 11U, &ready), TURBO_OK);
+        check_equal(tr_raft_core_read_index(core, 11U, &ready), SALTS_OK);
         check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
-                     TURBO_OK);
+                     SALTS_OK);
         check(result.read_state_ready);
         check_equal(result.read_state.context_id, 11U);
         check_equal(result.read_state.index, 1U);

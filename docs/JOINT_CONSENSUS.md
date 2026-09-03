@@ -15,10 +15,9 @@ static clusters, but changing voters in place would allow two disjoint
 majorities to commit conflicting logs.
 
 Dynamic membership affects Core quorum calculations, log semantics, Runtime
-application, WAL recovery, snapshot metadata, transport peer ownership, and
-the future RPC control plane. The committed Raft log remains the primary fact
-source. RPC and UI code may request a transition, but may not directly mutate
-membership.
+application, WAL recovery, snapshot metadata, and transport peer ownership.
+The committed Raft log remains the primary fact source. The current status-only
+control plane observes membership but cannot mutate it.
 
 ## Decision
 
@@ -30,7 +29,7 @@ The entry data begins with a versioned binary configuration payload. Therefore:
 
 - existing AppendEntries wire versions carry configuration entries unchanged;
 - user command identifiers cannot collide with internal entries;
-- malformed command-zero entries fail with `TURBO_EPROTO`;
+- malformed command-zero entries fail with `SALTS_EPROTO`;
 - Runtime never forwards command-zero entries to the application state machine.
 
 The version-1 payload is encoded explicitly in network byte order and does not
@@ -65,7 +64,7 @@ Core owns exactly one committed configuration state:
 - `JOINT`: old voters, new voters, and target learners.
 
 Core also tracks at most one uncommitted configuration transition. A second
-request returns `TURBO_EBUSY`. The transition ID makes replay and duplicate
+request returns `SALTS_EBUSY`. The transition ID makes replay and duplicate
 delivery idempotent while rejecting a conflicting transition.
 
 The leader appends a `JOINT` entry containing the complete old/new state. That
@@ -128,23 +127,14 @@ configuration at exactly `last_included_index`. Snapshot application bytes stay
 opaque and unchanged. Configuration metadata is transported and persisted as a
 separate bounded field, not prepended to application data.
 
-### RPC control-plane contract
+### Control-plane boundary
 
-The future TurboHTTP RPC layer exposes commands rather than mutable state:
+The CHTTP/CRPC layer is status-only. It exposes `raft.status` at `/raft/rpc`
+and `GET /raft/status` through the same thread-safe status provider. Membership
+changes remain an internal Core/Runtime concern; there is no control-plane
+mutation command and no alternate owner bridge.
 
-- `raft.membership.get`
-- `raft.membership.change`
-- `raft.membership.status`
-
-`raft.membership.change` accepts a complete target voter/learner set and a
-client-generated idempotency key. Only the current leader accepts it; followers
-return the leader's virtual mesh address when known. RPC completion means the
-final entry committed, not merely that the joint entry was appended.
-
-The HTMX UI reads the same status view and invokes the same command API. It does
-not own separate membership state.
-
-## Compatibility and migration
+## Persistence and versioning
 
 - Normal command behavior and Raft AppendEntries wire versions remain
   compatible.

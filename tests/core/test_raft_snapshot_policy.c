@@ -1,7 +1,7 @@
 #include <turboraft/raft_service.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -17,7 +17,7 @@ typedef struct snapshot_policy_capture {
 static int storage_ok(void *context)
 {
     (void) context;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int storage_hard_state(void *context, tr_raft_term_t term,
@@ -26,14 +26,14 @@ static int storage_hard_state(void *context, tr_raft_term_t term,
     (void) context;
     (void) term;
     (void) vote;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int storage_truncate(void *context, tr_raft_index_t index)
 {
     (void) context;
     (void) index;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int storage_append(void *context, const tr_raft_entry_t *entries,
@@ -42,21 +42,21 @@ static int storage_append(void *context, const tr_raft_entry_t *entries,
     (void) context;
     (void) entries;
     (void) count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int storage_commit_index(void *context, tr_raft_index_t index)
 {
     (void) context;
     (void) index;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int transport_enqueue(void *context, const tr_raft_message_t *message)
 {
     (void) context;
     (void) message;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int state_machine_apply(void *context, const tr_raft_entry_t *entries,
@@ -67,7 +67,7 @@ static int state_machine_apply(void *context, const tr_raft_entry_t *entries,
 
     (void) entries;
     capture->applied_count += count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int snapshot_create(void *context, tr_raft_index_t applied_index,
@@ -79,12 +79,12 @@ static int snapshot_create(void *context, tr_raft_index_t applied_index,
         (snapshot_policy_capture_t *) context;
 
     if (applied_index != 2U || capacity < sizeof(data)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memcpy(buffer, data, sizeof(data));
     *out_size = sizeof(data);
     ++capture->create_count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int snapshot_store(void *context, tr_raft_index_t snapshot_index,
@@ -162,9 +162,9 @@ spec("automatic snapshot policy")
 
         memset(&capture, 0, sizeof(capture));
         snapshot_policy_config(&config, &capture, entries);
-        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
-        check_equal(tr_raft_service_poll(service), TURBO_OK);
-        check_equal(tr_raft_service_status(service, &status), TURBO_OK);
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+        check_equal(tr_raft_service_poll(service), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
         check_equal(capture.applied_count, 2U);
         check_equal(capture.create_count, 1U);
         check_equal(capture.store_count, 1U);
@@ -187,13 +187,13 @@ spec("automatic snapshot policy")
         tr_raft_entry_t entries[2];
 
         memset(&capture, 0, sizeof(capture));
-        capture.store_result = TURBO_EIO;
+        capture.store_result = SALTS_EIO;
         snapshot_policy_config(&config, &capture, entries);
-        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
-        check_equal(tr_raft_service_poll(service), TURBO_EIO);
-        check_equal(tr_raft_service_status(service, &status), TURBO_OK);
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+        check_equal(tr_raft_service_poll(service), SALTS_EIO);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
         check(status.faulted);
-        check_equal(status.cause, TURBO_EIO);
+        check_equal(status.cause, SALTS_EIO);
         check_equal(status.core.log_base_index, 0U);
         check_equal(status.core.log_entry_count, 2U);
         tr_raft_service_destroy(service);

@@ -32,7 +32,7 @@ typedef struct tr_text_query_executor_ops {
  * owns the read-only snapshot, role filtering, node lookup, and output
  * formatting. The callback must not retain the command view after returning.
  * The first callback error is returned unchanged and stops execution.
- * A command without a corresponding callback returns TURBO_ENOTSUP.
+ * A command without a corresponding callback returns SALTS_ENOTSUP.
  */
 int tr_text_query_execute(
     const tr_text_query_plan_t *plan,

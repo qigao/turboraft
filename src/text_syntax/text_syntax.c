@@ -43,9 +43,9 @@ static int tr_text_normalize_options(const tr_text_parse_options_t *options,
                         : options->max_statements;
   if (*max_input_bytes > TR_TEXT_MAX_INPUT_BYTES ||
       *max_statements > TR_TEXT_MAX_STATEMENTS) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int tr_text_parse_context_init(tr_text_parse_context_base_t *base,
@@ -56,15 +56,15 @@ int tr_text_parse_context_init(tr_text_parse_context_base_t *base,
   size_t max_input_bytes;
   size_t max_statements;
   if (base == NULL) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(base, 0, sizeof(*base));
   tr_text_diagnostic_reset(diagnostic);
-  base->status = TURBO_OK;
+  base->status = SALTS_OK;
   base->diagnostic = diagnostic;
   if (tr_text_normalize_options(options, &max_input_bytes, &max_statements) !=
-      TURBO_OK) {
-    tr_text_parse_context_fail_at(base, TURBO_EINVAL,
+      SALTS_OK) {
+    tr_text_parse_context_fail_at(base, SALTS_EINVAL,
                                   TR_TEXT_DIAGNOSTIC_ARGUMENT, 0u, 1u, 1u,
                                   "text parse options exceed hard limits");
     return base->status;
@@ -72,13 +72,13 @@ int tr_text_parse_context_init(tr_text_parse_context_base_t *base,
   base->max_statements = max_statements;
   if (input == NULL || input_length > max_input_bytes) {
     tr_text_parse_context_fail_at(
-        base, input == NULL ? TURBO_EINVAL : TURBO_ENOSPC,
+        base, input == NULL ? SALTS_EINVAL : SALTS_ENOSPC,
         input == NULL ? TR_TEXT_DIAGNOSTIC_ARGUMENT : TR_TEXT_DIAGNOSTIC_LIMIT,
         0u, 1u, 1u,
         input == NULL ? "text input is null" : "text input exceeds hard limit");
     return base->status;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void tr_text_parse_context_fail_at(tr_text_parse_context_base_t *base,
@@ -88,7 +88,7 @@ void tr_text_parse_context_fail_at(tr_text_parse_context_base_t *base,
                                    size_t line,
                                    size_t column,
                                    const char *message) {
-  if (base == NULL || base->status != TURBO_OK) {
+  if (base == NULL || base->status != SALTS_OK) {
     return;
   }
   base->status = code;
@@ -117,21 +117,21 @@ void tr_text_parse_context_fail(tr_text_parse_context_base_t *base,
 int tr_text_parse_context_reserve_statement(
     tr_text_parse_context_base_t *base) {
   if (base == NULL) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
-  if (base->status != TURBO_OK) {
+  if (base->status != SALTS_OK) {
     return base->status;
   }
   if (base->max_statements == 0u) {
-    tr_text_parse_context_fail(base, TURBO_ENOSPC, TR_TEXT_DIAGNOSTIC_LIMIT,
+    tr_text_parse_context_fail(base, SALTS_ENOSPC, TR_TEXT_DIAGNOSTIC_LIMIT,
                                "text statement limit is zero");
     return base->status;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 int tr_text_parse_context_finish(const tr_text_parse_context_base_t *base) {
-  return base == NULL ? TURBO_EINVAL : base->status;
+  return base == NULL ? SALTS_EINVAL : base->status;
 }
 
 void tr_text_lexer_init(tr_text_lexer_t *lexer,
@@ -187,21 +187,21 @@ int tr_text_parse_uint64(const char *data, size_t length, uint64_t *value) {
   size_t index;
   uint64_t result = 0u;
   if (data == NULL || value == NULL || length == 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   for (index = 0u; index < length; ++index) {
     uint64_t digit;
     if (data[index] < '0' || data[index] > '9') {
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
     digit = (uint64_t)(data[index] - '0');
     if (result > (UINT64_MAX - digit) / 10u) {
-      return TURBO_ERANGE;
+      return SALTS_ERANGE;
     }
     result = result * 10u + digit;
   }
   *value = result;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 void tr_text_token_set(tr_text_token_t *token,
@@ -232,19 +232,19 @@ static int tr_text_parser_run_query(const char *input,
   int status;
 
   if (plan == NULL) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(&ctx, 0, sizeof(ctx));
   memset(plan, 0, sizeof(*plan));
   if (tr_text_parse_context_init(&ctx.base, input, input_length, options,
-                                diagnostic) != TURBO_OK) {
+                                diagnostic) != SALTS_OK) {
     return ctx.base.status;
   }
   ctx.plan = plan;
   tr_text_query_lexer_init(&lexer, input, input_length);
   parser = tr_text_query_parserAlloc(malloc);
   if (parser == NULL) {
-    tr_text_parse_context_fail(&ctx.base, TURBO_ENOMEM,
+    tr_text_parse_context_fail(&ctx.base, SALTS_ENOMEM,
                                TR_TEXT_DIAGNOSTIC_LIMIT,
                                "query parser allocation failed");
     return ctx.base.status;
@@ -255,7 +255,7 @@ static int tr_text_parser_run_query(const char *input,
     token_type = tr_text_query_lexer_next(&lexer, &token);
     if (token_type < 0) {
       tr_text_parse_context_fail_at(
-          &ctx.base, lexer.error_code == 0 ? TURBO_EPROTO : lexer.error_code,
+          &ctx.base, lexer.error_code == 0 ? SALTS_EPROTO : lexer.error_code,
           TR_TEXT_DIAGNOSTIC_LEXICAL, token.offset, token.line, token.column,
           lexer.error_message == NULL ? "query lexical error"
                                        : lexer.error_message);
@@ -263,13 +263,13 @@ static int tr_text_parser_run_query(const char *input,
     }
     ctx.base.last_token = token;
     tr_text_query_parser(parser, token_type, token, &ctx);
-    if (ctx.base.status != TURBO_OK || token_type == 0) {
+    if (ctx.base.status != SALTS_OK || token_type == 0) {
       break;
     }
   }
   status = tr_text_parse_context_finish(&ctx.base);
   tr_text_query_parserFree(parser, free);
-  if (status != TURBO_OK) {
+  if (status != SALTS_OK) {
     memset(plan, 0, sizeof(*plan));
   }
   return status;
@@ -289,19 +289,19 @@ static int tr_text_parser_run_protocol(
   int status;
 
   if (plan == NULL) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(&ctx, 0, sizeof(ctx));
   memset(plan, 0, sizeof(*plan));
   if (tr_text_parse_context_init(&ctx.base, input, input_length, options,
-                                diagnostic) != TURBO_OK) {
+                                diagnostic) != SALTS_OK) {
     return ctx.base.status;
   }
   ctx.plan = plan;
   tr_text_protocol_debug_lexer_init(&lexer, input, input_length);
   parser = tr_text_protocol_debug_parserAlloc(malloc);
   if (parser == NULL) {
-    tr_text_parse_context_fail(&ctx.base, TURBO_ENOMEM,
+    tr_text_parse_context_fail(&ctx.base, SALTS_ENOMEM,
                                TR_TEXT_DIAGNOSTIC_LIMIT,
                                "protocol parser allocation failed");
     return ctx.base.status;
@@ -312,7 +312,7 @@ static int tr_text_parser_run_protocol(
     token_type = tr_text_protocol_debug_lexer_next(&lexer, &token);
     if (token_type < 0) {
       tr_text_parse_context_fail_at(
-          &ctx.base, lexer.error_code == 0 ? TURBO_EPROTO : lexer.error_code,
+          &ctx.base, lexer.error_code == 0 ? SALTS_EPROTO : lexer.error_code,
           TR_TEXT_DIAGNOSTIC_LEXICAL, token.offset, token.line, token.column,
           lexer.error_message == NULL ? "protocol lexical error"
                                        : lexer.error_message);
@@ -320,13 +320,13 @@ static int tr_text_parser_run_protocol(
     }
     ctx.base.last_token = token;
     tr_text_protocol_debug_parser(parser, token_type, token, &ctx);
-    if (ctx.base.status != TURBO_OK || token_type == 0) {
+    if (ctx.base.status != SALTS_OK || token_type == 0) {
       break;
     }
   }
   status = tr_text_parse_context_finish(&ctx.base);
   tr_text_protocol_debug_parserFree(parser, free);
-  if (status != TURBO_OK) {
+  if (status != SALTS_OK) {
     memset(plan, 0, sizeof(*plan));
   }
   return status;
@@ -345,19 +345,19 @@ static int tr_text_parser_run_replay(const char *input,
   int status;
 
   if (plan == NULL) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(&ctx, 0, sizeof(ctx));
   memset(plan, 0, sizeof(*plan));
   if (tr_text_parse_context_init(&ctx.base, input, input_length, options,
-                                diagnostic) != TURBO_OK) {
+                                diagnostic) != SALTS_OK) {
     return ctx.base.status;
   }
   ctx.plan = plan;
   tr_text_replay_lexer_init(&lexer, input, input_length);
   parser = tr_text_replay_parserAlloc(malloc);
   if (parser == NULL) {
-    tr_text_parse_context_fail(&ctx.base, TURBO_ENOMEM,
+    tr_text_parse_context_fail(&ctx.base, SALTS_ENOMEM,
                                TR_TEXT_DIAGNOSTIC_LIMIT,
                                "replay parser allocation failed");
     return ctx.base.status;
@@ -368,7 +368,7 @@ static int tr_text_parser_run_replay(const char *input,
     token_type = tr_text_replay_lexer_next(&lexer, &token);
     if (token_type < 0) {
       tr_text_parse_context_fail_at(
-          &ctx.base, lexer.error_code == 0 ? TURBO_EPROTO : lexer.error_code,
+          &ctx.base, lexer.error_code == 0 ? SALTS_EPROTO : lexer.error_code,
           TR_TEXT_DIAGNOSTIC_LEXICAL, token.offset, token.line, token.column,
           lexer.error_message == NULL ? "replay lexical error"
                                        : lexer.error_message);
@@ -376,13 +376,13 @@ static int tr_text_parser_run_replay(const char *input,
     }
     ctx.base.last_token = token;
     tr_text_replay_parser(parser, token_type, token, &ctx);
-    if (ctx.base.status != TURBO_OK || token_type == 0) {
+    if (ctx.base.status != SALTS_OK || token_type == 0) {
       break;
     }
   }
   status = tr_text_parse_context_finish(&ctx.base);
   tr_text_replay_parserFree(parser, free);
-  if (status != TURBO_OK) {
+  if (status != SALTS_OK) {
     memset(plan, 0, sizeof(*plan));
   }
   return status;
@@ -391,11 +391,11 @@ static int tr_text_parser_run_replay(const char *input,
 void tr_text_query_append_status(tr_text_query_parse_context_t *ctx) {
   tr_text_query_command_t *command;
   if (ctx == NULL ||
-      tr_text_parse_context_reserve_statement(&ctx->base) != TURBO_OK) {
+      tr_text_parse_context_reserve_statement(&ctx->base) != SALTS_OK) {
     return;
   }
   if (ctx->plan->command_count >= ctx->base.max_statements) {
-    tr_text_parse_context_fail(&ctx->base, TURBO_ENOSPC,
+    tr_text_parse_context_fail(&ctx->base, SALTS_ENOSPC,
                                TR_TEXT_DIAGNOSTIC_LIMIT,
                                "query statement limit exceeded");
     return;
@@ -410,11 +410,11 @@ void tr_text_query_append_members(tr_text_query_parse_context_t *ctx,
                                   tr_text_query_role_t role) {
   tr_text_query_command_t *command;
   if (ctx == NULL ||
-      tr_text_parse_context_reserve_statement(&ctx->base) != TURBO_OK) {
+      tr_text_parse_context_reserve_statement(&ctx->base) != SALTS_OK) {
     return;
   }
   if (ctx->plan->command_count >= ctx->base.max_statements) {
-    tr_text_parse_context_fail(&ctx->base, TURBO_ENOSPC,
+    tr_text_parse_context_fail(&ctx->base, SALTS_ENOSPC,
                                TR_TEXT_DIAGNOSTIC_LIMIT,
                                "query statement limit exceeded");
     return;
@@ -429,11 +429,11 @@ void tr_text_query_append_progress(tr_text_query_parse_context_t *ctx,
                                    uint64_t node_id) {
   tr_text_query_command_t *command;
   if (ctx == NULL ||
-      tr_text_parse_context_reserve_statement(&ctx->base) != TURBO_OK) {
+      tr_text_parse_context_reserve_statement(&ctx->base) != SALTS_OK) {
     return;
   }
   if (ctx->plan->command_count >= ctx->base.max_statements) {
-    tr_text_parse_context_fail(&ctx->base, TURBO_ENOSPC,
+    tr_text_parse_context_fail(&ctx->base, SALTS_ENOSPC,
                                TR_TEXT_DIAGNOSTIC_LIMIT,
                                "query statement limit exceeded");
     return;
@@ -447,17 +447,17 @@ void tr_text_query_append_progress(tr_text_query_parse_context_t *ctx,
 void tr_text_protocol_begin_frame(tr_text_protocol_debug_parse_context_t *ctx,
                                   tr_text_token_t version,
                                   tr_text_token_t kind) {
-  if (ctx == NULL || ctx->base.status != TURBO_OK) {
+  if (ctx == NULL || ctx->base.status != SALTS_OK) {
     return;
   }
   if (ctx->frame_active) {
-    tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+    tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                                TR_TEXT_DIAGNOSTIC_SEMANTIC,
                                "nested protocol frame");
     return;
   }
   if (ctx->plan->frame_count >= ctx->base.max_statements) {
-    tr_text_parse_context_fail(&ctx->base, TURBO_ENOSPC,
+    tr_text_parse_context_fail(&ctx->base, SALTS_ENOSPC,
                                TR_TEXT_DIAGNOSTIC_LIMIT,
                                "protocol frame limit exceeded");
     return;
@@ -473,17 +473,17 @@ void tr_text_protocol_begin_frame(tr_text_protocol_debug_parse_context_t *ctx,
 static int tr_text_protocol_claim_field(
     tr_text_protocol_debug_parse_context_t *ctx,
     uint32_t field) {
-  if (ctx == NULL || ctx->base.status != TURBO_OK) {
+  if (ctx == NULL || ctx->base.status != SALTS_OK) {
     return 0;
   }
   if (!ctx->frame_active) {
-    tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+    tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                                TR_TEXT_DIAGNOSTIC_SEMANTIC,
                                "protocol field is outside a frame");
     return 0;
   }
   if ((ctx->current_fields & field) != 0u) {
-    tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+    tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                                TR_TEXT_DIAGNOSTIC_SEMANTIC,
                                "duplicate protocol frame field");
     return 0;
@@ -497,7 +497,7 @@ void tr_text_protocol_set_value(tr_text_protocol_debug_parse_context_t *ctx,
                                 tr_text_token_t value) {
   uint32_t field;
   uint64_t *destination;
-  if (ctx == NULL || ctx->base.status != TURBO_OK) {
+  if (ctx == NULL || ctx->base.status != SALTS_OK) {
     return;
   }
   switch (kind) {
@@ -514,7 +514,7 @@ void tr_text_protocol_set_value(tr_text_protocol_debug_parse_context_t *ctx,
       destination = &ctx->current_frame.term;
       break;
     default:
-      tr_text_parse_context_fail(&ctx->base, TURBO_EINVAL,
+      tr_text_parse_context_fail(&ctx->base, SALTS_EINVAL,
                                  TR_TEXT_DIAGNOSTIC_SEMANTIC,
                                  "unknown protocol field");
       return;
@@ -528,7 +528,7 @@ void tr_text_protocol_set_value(tr_text_protocol_debug_parse_context_t *ctx,
 void tr_text_protocol_set_message(
     tr_text_protocol_debug_parse_context_t *ctx,
     tr_text_token_t message) {
-  if (ctx == NULL || ctx->base.status != TURBO_OK) {
+  if (ctx == NULL || ctx->base.status != SALTS_OK) {
     return;
   }
   if (!tr_text_protocol_claim_field(ctx, TR_TEXT_PROTOCOL_FIELD_MESSAGE)) {
@@ -541,14 +541,14 @@ void tr_text_protocol_set_payload(
     tr_text_protocol_debug_parse_context_t *ctx,
     tr_text_token_t payload) {
   size_t hex_digits;
-  if (ctx == NULL || ctx->base.status != TURBO_OK) {
+  if (ctx == NULL || ctx->base.status != SALTS_OK) {
     return;
   }
   if (!tr_text_protocol_claim_field(ctx, TR_TEXT_PROTOCOL_FIELD_PAYLOAD)) {
     return;
   }
   if (payload.text.len < 3u) {
-    tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+    tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                                TR_TEXT_DIAGNOSTIC_SEMANTIC,
                                "protocol payload is empty");
     return;
@@ -556,13 +556,13 @@ void tr_text_protocol_set_payload(
   hex_digits = payload.text.len - 2u;
   if ((hex_digits & 1u) != 0u) {
     tr_text_parse_context_fail(
-        &ctx->base, TURBO_EPROTO, TR_TEXT_DIAGNOSTIC_SEMANTIC,
+        &ctx->base, SALTS_EPROTO, TR_TEXT_DIAGNOSTIC_SEMANTIC,
         "protocol payload must contain an even number of hex digits");
     return;
   }
   if (hex_digits / 2u > TR_RAFT_WIRE_MAX_FRAME_SIZE) {
     tr_text_parse_context_fail(
-        &ctx->base, TURBO_ENOSPC, TR_TEXT_DIAGNOSTIC_LIMIT,
+        &ctx->base, SALTS_ENOSPC, TR_TEXT_DIAGNOSTIC_LIMIT,
         "protocol payload exceeds the maximum wire frame size");
     return;
   }
@@ -577,11 +577,11 @@ void tr_text_protocol_finish_frame(
                             TR_TEXT_PROTOCOL_FIELD_TO |
                             TR_TEXT_PROTOCOL_FIELD_TERM |
                             TR_TEXT_PROTOCOL_FIELD_MESSAGE;
-  if (ctx == NULL || ctx->base.status != TURBO_OK) {
+  if (ctx == NULL || ctx->base.status != SALTS_OK) {
     return;
   }
   if (!ctx->frame_active || (ctx->current_fields & required) != required) {
-    tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+    tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                                TR_TEXT_DIAGNOSTIC_SEMANTIC,
                                "protocol frame is missing a required field");
     return;
@@ -594,11 +594,11 @@ static tr_text_replay_action_t *tr_text_replay_append(
     tr_text_replay_parse_context_t *ctx) {
   tr_text_replay_action_t *action;
   if (ctx == NULL ||
-      tr_text_parse_context_reserve_statement(&ctx->base) != TURBO_OK) {
+      tr_text_parse_context_reserve_statement(&ctx->base) != SALTS_OK) {
     return NULL;
   }
   if (ctx->plan->action_count >= ctx->base.max_statements) {
-    tr_text_parse_context_fail(&ctx->base, TURBO_ENOSPC,
+    tr_text_parse_context_fail(&ctx->base, SALTS_ENOSPC,
                                TR_TEXT_DIAGNOSTIC_LIMIT,
                                "replay action limit exceeded");
     return NULL;
@@ -705,19 +705,19 @@ static int tr_text_validate_hex_payload(tr_text_parse_context_base_t *base,
                                         const char *oversize_message) {
   size_t hex_digits;
   if (payload.len < 3u) {
-    tr_text_parse_context_fail(base, TURBO_EPROTO,
+    tr_text_parse_context_fail(base, SALTS_EPROTO,
                                TR_TEXT_DIAGNOSTIC_SEMANTIC, empty_message);
     return 0;
   }
   hex_digits = payload.len - 2u;
   if ((hex_digits & 1u) != 0u) {
-    tr_text_parse_context_fail(base, TURBO_EPROTO,
+    tr_text_parse_context_fail(base, SALTS_EPROTO,
                                TR_TEXT_DIAGNOSTIC_SEMANTIC,
                                odd_length_message);
     return 0;
   }
   if (hex_digits / 2u > max_decoded_bytes) {
-    tr_text_parse_context_fail(base, TURBO_ENOSPC,
+    tr_text_parse_context_fail(base, SALTS_ENOSPC,
                                TR_TEXT_DIAGNOSTIC_LIMIT, oversize_message);
     return 0;
   }

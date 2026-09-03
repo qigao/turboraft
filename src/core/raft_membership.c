@@ -1,6 +1,6 @@
 #include "raft_membership.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <limits.h>
 #include <string.h>
@@ -20,23 +20,23 @@ static int tr_raft_membership_validate_set(
         learner_count > TR_RAFT_MAX_MEMBERS - voter_count ||
         (learner_count != 0U && learners == NULL) ||
         (learner_count == 0U && learners != NULL)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     for (index = 0U; index < voter_count; ++index) {
         if (voters[index] == 0U ||
             (index != 0U && voters[index - 1U] >= voters[index])) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
     }
     for (index = 0U; index < learner_count; ++index) {
         if (learners[index] == 0U ||
             (index != 0U && learners[index - 1U] >= learners[index])) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
     }
     while (voter_index < voter_count && learner_index < learner_count) {
         if (voters[voter_index] == learners[learner_index]) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
         if (voters[voter_index] < learners[learner_index]) {
             ++voter_index;
@@ -44,7 +44,7 @@ static int tr_raft_membership_validate_set(
             ++learner_index;
         }
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static bool tr_raft_membership_stable_valid(
@@ -132,8 +132,8 @@ int tr_raft_membership_stable(const tr_raft_node_id_t *voters,
 
     if (membership == NULL ||
         tr_raft_membership_validate_set(voters, voter_count, learners,
-                                        learner_count) != TURBO_OK) {
-        return TURBO_EINVAL;
+                                        learner_count) != SALTS_OK) {
+        return SALTS_EINVAL;
     }
     memset(membership, 0, sizeof(*membership));
     membership->phase = TR_RAFT_CONF_FINAL;
@@ -152,7 +152,7 @@ int tr_raft_membership_stable(const tr_raft_node_id_t *voters,
             member->roles = TR_RAFT_CONF_LEARNER;
         }
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_membership_joint(const tr_raft_membership_t *current,
@@ -171,13 +171,13 @@ int tr_raft_membership_joint(const tr_raft_membership_t *current,
         !tr_raft_membership_stable_valid(current) ||
         tr_raft_membership_validate_set(
             target_voters, target_voter_count, target_learners,
-            target_learner_count) != TURBO_OK) {
-        return TURBO_EINVAL;
+            target_learner_count) != SALTS_OK) {
+        return SALTS_EINVAL;
     }
     if (tr_raft_membership_union_count(
             current, target_voters, target_voter_count, target_learners,
             target_learner_count) > TR_RAFT_MAX_MEMBERS) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
 
     memset(joint, 0, sizeof(*joint));
@@ -232,11 +232,11 @@ int tr_raft_membership_joint(const tr_raft_membership_t *current,
             ++joint->member_count;
         }
     }
-    if (tr_raft_conf_validate(joint) != TURBO_OK) {
+    if (tr_raft_conf_validate(joint) != SALTS_OK) {
         memset(joint, 0, sizeof(*joint));
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_membership_final(const tr_raft_membership_t *joint,
@@ -246,8 +246,8 @@ int tr_raft_membership_final(const tr_raft_membership_t *joint,
 
     if (joint == NULL || final_membership == NULL ||
         joint->phase != TR_RAFT_CONF_JOINT ||
-        tr_raft_conf_validate(joint) != TURBO_OK) {
-        return TURBO_EINVAL;
+        tr_raft_conf_validate(joint) != SALTS_OK) {
+        return SALTS_EINVAL;
     }
     memset(final_membership, 0, sizeof(*final_membership));
     final_membership->phase = TR_RAFT_CONF_FINAL;

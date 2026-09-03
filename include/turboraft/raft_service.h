@@ -95,7 +95,7 @@ int tr_raft_service_read_index(tr_raft_service_t *service,
 
 /*
  * Takes the completed read state after enforcing applied_index >= read index.
- * Returns TURBO_ENOENT until quorum confirmation completes.
+ * Returns SALTS_ENOENT until quorum confirmation completes.
  */
 int tr_raft_service_take_read_state(tr_raft_service_t *service,
                                     tr_raft_read_state_t *out_read_state);

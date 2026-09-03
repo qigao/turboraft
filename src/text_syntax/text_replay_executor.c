@@ -37,26 +37,26 @@ static int tr_text_replay_decode_payload(
   if (output == NULL || output_size == NULL || payload.data == NULL ||
       payload.len < 3u || payload.data[0] != '0' ||
       (payload.data[1] != 'x' && payload.data[1] != 'X')) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   hex_digits = payload.len - 2u;
   if ((hex_digits & 1u) != 0u) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   decoded_size = hex_digits / 2u;
   if (decoded_size > output_capacity) {
-    return TURBO_ENOSPC;
+    return SALTS_ENOSPC;
   }
   for (index = 0u; index < decoded_size; ++index) {
     int high = tr_text_replay_hex_value(payload.data[2u + index * 2u]);
     int low = tr_text_replay_hex_value(payload.data[3u + index * 2u]);
     if (high < 0 || low < 0) {
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
     output[index] = (uint8_t)((high << 4) | low);
   }
   *output_size = decoded_size;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static bool tr_text_replay_find_receipt(
@@ -105,7 +105,7 @@ int tr_text_replay_execute(
 
   if (plan == NULL || ops == NULL ||
       plan->action_count > TR_TEXT_MAX_STATEMENTS) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   memset(receipts, 0, sizeof(receipts));
 
@@ -121,25 +121,25 @@ int tr_text_replay_execute(
         size_t slot_index;
 
         if (ops->submit == NULL) {
-          return TURBO_ENOTSUP;
+          return SALTS_ENOTSUP;
         }
         if (tr_text_replay_find_receipt(
                 receipts, TR_TEXT_MAX_STATEMENTS, action->request_id, NULL)) {
-          return TURBO_EALREADY;
+          return SALTS_EALREADY;
         }
         result = tr_text_replay_decode_payload(
             action->payload_hex, payload, sizeof(payload), &payload_size);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
           return result;
         }
         memset(&receipt, 0, sizeof(receipt));
         result = ops->submit(context, action, payload, payload_size, &receipt);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
           return result;
         }
         if (!tr_text_replay_find_free_slot(
                 receipts, TR_TEXT_MAX_STATEMENTS, &slot_index)) {
-          return TURBO_ENOSPC;
+          return SALTS_ENOSPC;
         }
         receipts[slot_index].occupied = true;
         receipts[slot_index].request_id = action->request_id;
@@ -150,32 +150,32 @@ int tr_text_replay_execute(
         size_t slot_index;
 
         if (ops->poll == NULL) {
-          return TURBO_ENOTSUP;
+          return SALTS_ENOTSUP;
         }
         if (!tr_text_replay_find_receipt(
                 receipts, TR_TEXT_MAX_STATEMENTS, action->request_id,
                 &slot_index)) {
-          return TURBO_ENOENT;
+          return SALTS_ENOENT;
         }
         result = ops->poll(context, action,
                            &receipts[slot_index].receipt);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
           return result;
         }
         break;
       }
       case TR_TEXT_REPLAY_TICK:
         if (ops->tick == NULL) {
-          return TURBO_ENOTSUP;
+          return SALTS_ENOTSUP;
         }
         result = ops->tick(context, action->value);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
           return result;
         }
         break;
       default:
-        return TURBO_ENOTSUP;
+        return SALTS_ENOTSUP;
     }
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }

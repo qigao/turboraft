@@ -1,7 +1,7 @@
 #ifndef TURBORAFT_RAFT_SNAPSHOT_MANAGER_H
 #define TURBORAFT_RAFT_SNAPSHOT_MANAGER_H
 
-#include <turboraft/raft_coronet_peer_service.h>
+#include <turboraft/raft_transport.h>
 #include <turboraft/raft_core.h>
 #include <turboraft/raft_snapshot_sender.h>
 
@@ -16,7 +16,7 @@ typedef struct tr_raft_snapshot_manager tr_raft_snapshot_manager_t;
 
 typedef int (*tr_raft_snapshot_manager_payload_enqueue_fn)(
     void *context,
-    const tr_raft_coronet_payload_t *payload);
+    const tr_raft_transport_payload_t *payload);
 
 typedef int (*tr_raft_snapshot_provider_fn)(
     void *context,
@@ -37,10 +37,10 @@ typedef struct tr_raft_snapshot_manager_config {
     const tr_raft_node_id_t *peer_node_ids;
     size_t peer_count;
     size_t max_snapshot_bytes;
-    /* Zero values preserve V4 512-byte stop-and-wait transfers. */
+    /* Both limits are required and validated; zero is rejected. */
     size_t snapshot_chunk_size;
     size_t snapshot_max_inflight_chunks;
-    /* Optional transport seam; leave null when bind_peer_service is used. */
+    /* Transport seam; FlowMQ and CNet adapters both match this callback. */
     tr_raft_snapshot_manager_payload_enqueue_fn enqueue;
     void *enqueue_context;
     /* Required when enqueue_request is used. */
@@ -56,10 +56,6 @@ int tr_raft_snapshot_manager_create(
     tr_raft_snapshot_manager_t **out_manager);
 
 void tr_raft_snapshot_manager_destroy(tr_raft_snapshot_manager_t *manager);
-
-int tr_raft_snapshot_manager_bind_peer_service(
-    tr_raft_snapshot_manager_t *manager,
-    tr_raft_coronet_peer_service_t *peer_service);
 
 int tr_raft_snapshot_manager_begin(
     tr_raft_snapshot_manager_t *manager,
@@ -77,7 +73,7 @@ int tr_raft_snapshot_manager_enqueue_request(
 
 int tr_raft_snapshot_manager_handle_payload(
     void *context,
-    const tr_raft_coronet_payload_t *payload);
+    const tr_raft_transport_payload_t *payload);
 
 int tr_raft_snapshot_manager_resume(
     tr_raft_snapshot_manager_t *manager,

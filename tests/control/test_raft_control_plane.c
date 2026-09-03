@@ -1,148 +1,113 @@
 #include <turboraft/raft_control_plane.h>
 
-#include <iris/iris_app.h>
-#include <iris/rpc_server.h>
+#include <salts_error.h>
 #include <tinytest.h>
-#include <turbo_error.h>
 
 #include <string.h>
 
-static int control_ok(void *context)
+static native_io_backend_kind control_backend(void)
 {
-    (void) context;
-    return TURBO_OK;
+#if defined(_WIN32)
+    return NATIVE_IO_BACKEND_IOCP;
+#elif defined(__linux__)
+    return NATIVE_IO_BACKEND_EPOLL;
+#else
+    return NATIVE_IO_BACKEND_KQUEUE;
+#endif
 }
 
-static int control_hard_state(void *context,
-                              tr_raft_term_t term,
-                              tr_raft_node_id_t voted_for)
+static crpc_server_config control_server_config(void)
 {
-    (void) context;
-    (void) term;
-    (void) voted_for;
-    return TURBO_OK;
-}
-
-static int control_truncate(void *context, tr_raft_index_t index)
-{
-    (void) context;
-    (void) index;
-    return TURBO_OK;
-}
-
-static int control_append(void *context,
-                          const tr_raft_entry_t *entries,
-                          size_t count)
-{
-    (void) context;
-    return entries != NULL && count != 0U ? TURBO_OK : TURBO_EINVAL;
-}
-
-static int control_commit_index(void *context, tr_raft_index_t index)
-{
-    (void) context;
-    (void) index;
-    return TURBO_OK;
-}
-
-static int control_enqueue(void *context, const tr_raft_message_t *message)
-{
-    (void) context;
-    return message == NULL ? TURBO_EINVAL : TURBO_OK;
-}
-
-static int control_apply(void *context,
-                         const tr_raft_entry_t *entries,
-                         size_t count)
-{
-    (void) context;
-    return entries != NULL && count != 0U ? TURBO_OK : TURBO_EINVAL;
-}
-
-static tr_raft_service_t *control_create_service(void)
-{
-    static const tr_raft_node_id_t voters[] = {7U};
-    tr_raft_service_config_t config;
-    tr_raft_service_t *service = NULL;
+    crpc_server_config config;
 
     memset(&config, 0, sizeof(config));
-    config.core.self_id = 7U;
-    config.core.voters = voters;
-    config.core.voter_count = 1U;
-    config.core.heartbeat_ticks = 1U;
-    config.core.election_min_ticks = 3U;
-    config.core.election_max_ticks = 5U;
-    config.core.initial_election_timeout_ticks = 3U;
-    config.core.max_log_entries = 16U;
-    config.storage.begin = control_ok;
-    config.storage.write_hard_state = control_hard_state;
-    config.storage.truncate_log = control_truncate;
-    config.storage.append_log = control_append;
-    config.storage.write_commit_index = control_commit_index;
-    config.storage.commit = control_ok;
-    config.storage.rollback = control_ok;
-    config.transport.enqueue = control_enqueue;
-    config.state_machine.apply_batch = control_apply;
-    check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
-    return service;
+    config.http.host = "127.0.0.1";
+    config.http.port = 0U;
+    config.http.backlog = 8U;
+    config.http.network.backend = control_backend();
+    config.http.network.connection_capacity = 8U;
+    config.http.network.command_capacity = 32U;
+    config.http.network.request_capacity = 16U;
+    config.http.network.completion_batch_capacity = 8U;
+    config.http.network.event_capacity = 32U;
+    config.http.network.max_send_bytes = 64U * 1024U;
+    config.http.network.receive_buffer_bytes = 4096U;
+    config.http.network.connect_timeout_ms = 1000U;
+    config.http.network.read_timeout_ms = 1000U;
+    config.http.network.write_timeout_ms = 1000U;
+    config.http.route_capacity = 8U;
+    config.http.middleware_capacity = 4U;
+    config.http.max_route_middleware_count = 4U;
+    config.http.max_route_param_count = 4U;
+    config.http.max_route_param_bytes = 128U;
+    config.http.max_target_bytes = 256U;
+    config.http.max_header_count = 16U;
+    config.http.max_header_bytes = 4096U;
+    config.http.max_request_body_bytes = 8192U;
+    config.http.max_response_header_count = 16U;
+    config.http.max_response_header_bytes = 4096U;
+    config.http.max_response_body_bytes = 8192U;
+    config.http.poll_slice_ms = 2U;
+    config.http.max_buffered_response_body_bytes = 8192U;
+    config.method_capacity = 8U;
+    config.max_method_bytes = 64U;
+    config.max_json_depth = 8U;
+    config.max_batch_items = 4U;
+    return config;
 }
 
-spec("raft TurboHTTP control plane")
+static int control_status(void *context,
+                          tr_raft_service_status_t *out_status)
 {
-    it("binds typed RPC methods and renders bounded HTMX status")
+    const tr_raft_service_status_t *status =
+        (const tr_raft_service_status_t *)context;
+
+    *out_status = *status;
+    return SALTS_OK;
+}
+
+spec("Raft CHTTP/CRPC control plane")
+{
+    it("renders status and owns an explicit server lifecycle")
     {
-        tr_raft_service_t *service;
+        tr_raft_service_status_t status;
         tr_raft_control_plane_config_t config;
         tr_raft_control_plane_t *plane = NULL;
-        iris_app_t *app;
-        rpc_context_t *rpc;
         char output[4096];
-        size_t size;
+        size_t size = 0U;
+        uint16_t port = 0U;
 
-        app = iris_app_create();
-        check_not_null(app);
-        service = control_create_service();
+        memset(&status, 0, sizeof(status));
         memset(&config, 0, sizeof(config));
-        config.service = service;
-        config.app = app;
-        check_equal(tr_raft_control_plane_create(&config, &plane), TURBO_OK);
-        check_not_null(plane);
-        check(tr_raft_control_plane_app(plane) == app);
-        rpc = (rpc_context_t *) iris_app_lookup_rpc_context(
-            app, TR_RAFT_CONTROL_RPC_ENDPOINT);
-        check_not_null(rpc);
-        check_equal(rpc->method_count, 19U);
-        check_equal(rpc->config.max_response_size, 64U * 1024U);
-        check(!rpc->methods[0].requires_auth);
-        check(!rpc->methods[1].requires_auth);
-        check(!rpc->methods[2].requires_auth);
-        check(!rpc->methods[3].requires_auth);
-        {
-            size_t method_index;
+        status.core.self_id = 7U;
+        status.core.leader_id = 7U;
+        status.core.role = TR_RAFT_LEADER;
+        status.core.term = 3U;
+        status.core.commit_index = 11U;
+        status.core.applied_index = 10U;
+        status.core.voter_count = 3U;
+        config.server = control_server_config();
+        config.status_provider = control_status;
+        config.status_context = &status;
+        config.stop_timeout_ms = 5000U;
 
-            for (method_index = 4U; method_index < 18U; ++method_index) {
-                check(rpc->methods[method_index].requires_auth);
-            }
-        }
-
+        check_equal(tr_raft_control_plane_create(&config, &plane), SALTS_OK);
+        check_not_null(tr_raft_control_plane_http(plane));
         check_equal(tr_raft_control_plane_render_status_json(
-                         plane, output, sizeof(output), &size), TURBO_OK);
-        check(size > 0U);
+                        plane, output, sizeof(output), &size),
+                    SALTS_OK);
         check_not_null(strstr(output, "\"node_id\":7"));
-        check_not_null(strstr(output, "\"role\":\"follower\""));
-        check_not_null(strstr(output, "\"log_base_index\":0"));
-        check_not_null(strstr(output,
-                              "\"snapshot_required_peer_count\":0"));
-        check_not_null(strstr(output, "\"owner\":{\"configured\":false"));
+        check_not_null(strstr(output, "\"role\":\"leader\""));
         check_equal(tr_raft_control_plane_render_status_html(
-                         plane, output, sizeof(output), &size), TURBO_OK);
-        check(size > 0U);
-        check_not_null(strstr(output, "7"));
-        check_not_null(strstr(output, "STABLE"));
-        check_not_null(strstr(output, "LEGACY"));
+                        plane, output, sizeof(output), &size),
+                    SALTS_OK);
+        check_not_null(strstr(output, "LEADER"));
 
-        tr_raft_control_plane_destroy(plane);
-        iris_app_destroy(app);
-        tr_raft_service_destroy(service);
+        check_equal(tr_raft_control_plane_start(plane), SALTS_OK);
+        check_equal(tr_raft_control_plane_port(plane, &port), SALTS_OK);
+        check(port != 0U);
+        check_equal(tr_raft_control_plane_destroy(plane), SALTS_EBUSY);
+        check_equal(tr_raft_control_plane_stop(plane), SALTS_OK);
+        check_equal(tr_raft_control_plane_destroy(plane), SALTS_OK);
     }
 }

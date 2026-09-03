@@ -2,7 +2,7 @@
 
 #include "raft_configuration.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -49,14 +49,14 @@ static int tr_runtime_persist(tr_raft_runtime_t *runtime,
 
     result->stage = TR_RAFT_RUNTIME_STORAGE_BEGIN;
     callback_result = runtime->storage.begin(runtime->storage.context);
-    if (callback_result != TURBO_OK) {
+    if (callback_result != SALTS_OK) {
         return tr_runtime_fail(runtime, result, result->stage, callback_result);
     }
     if (ready->hard_state_changed) {
         result->stage = TR_RAFT_RUNTIME_STORAGE_HARD_STATE;
         callback_result = runtime->storage.write_hard_state(
             runtime->storage.context, ready->term, ready->voted_for);
-        if (callback_result != TURBO_OK) {
+        if (callback_result != SALTS_OK) {
             return tr_runtime_rollback(runtime, result, result->stage,
                                        callback_result);
         }
@@ -65,7 +65,7 @@ static int tr_runtime_persist(tr_raft_runtime_t *runtime,
         result->stage = TR_RAFT_RUNTIME_STORAGE_TRUNCATE;
         callback_result = runtime->storage.truncate_log(
             runtime->storage.context, ready->log_truncate_from);
-        if (callback_result != TURBO_OK) {
+        if (callback_result != SALTS_OK) {
             return tr_runtime_rollback(runtime, result, result->stage,
                                        callback_result);
         }
@@ -75,7 +75,7 @@ static int tr_runtime_persist(tr_raft_runtime_t *runtime,
         callback_result = runtime->storage.append_log(
             runtime->storage.context, ready->log_entries,
             ready->log_entry_count);
-        if (callback_result != TURBO_OK) {
+        if (callback_result != SALTS_OK) {
             return tr_runtime_rollback(runtime, result, result->stage,
                                        callback_result);
         }
@@ -84,33 +84,33 @@ static int tr_runtime_persist(tr_raft_runtime_t *runtime,
         result->stage = TR_RAFT_RUNTIME_STORAGE_COMMIT_INDEX;
         callback_result = runtime->storage.write_commit_index(
             runtime->storage.context, ready->commit_index);
-        if (callback_result != TURBO_OK) {
+        if (callback_result != SALTS_OK) {
             return tr_runtime_rollback(runtime, result, result->stage,
                                        callback_result);
         }
     }
     result->stage = TR_RAFT_RUNTIME_STORAGE_COMMIT;
     callback_result = runtime->storage.commit(runtime->storage.context);
-    if (callback_result != TURBO_OK) {
+    if (callback_result != SALTS_OK) {
         return tr_runtime_rollback(runtime, result, result->stage,
                                    callback_result);
     }
     result->durable = true;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_runtime_init(tr_raft_runtime_t *runtime,
                          const tr_raft_runtime_config_t *config)
 {
     if (runtime == NULL || config == NULL || config->core == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(runtime, 0, sizeof(*runtime));
     runtime->core = config->core;
     runtime->storage = config->storage;
     runtime->transport = config->transport;
     runtime->state_machine = config->state_machine;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_runtime_process(tr_raft_runtime_t *runtime,
@@ -122,19 +122,19 @@ int tr_raft_runtime_process(tr_raft_runtime_t *runtime,
 
     if (runtime == NULL || ready == NULL || result == NULL ||
         runtime->core == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(result, 0, sizeof(*result));
     if (runtime->faulted) {
         return tr_runtime_fail(runtime, result, TR_RAFT_RUNTIME_IDLE,
-                               TURBO_EPROTO);
+                               SALTS_EPROTO);
     }
     if ((ready->message_count != 0U && ready->messages == NULL) ||
         (ready->log_entry_count != 0U && ready->log_entries == NULL) ||
         (ready->committed_entry_count != 0U &&
          ready->committed_entries == NULL)) {
         return tr_runtime_fail(runtime, result, TR_RAFT_RUNTIME_IDLE,
-                               TURBO_EINVAL);
+                               SALTS_EINVAL);
     }
     result->read_state_ready = ready->read_state_ready;
     result->read_state = ready->read_state;
@@ -142,23 +142,23 @@ int tr_raft_runtime_process(tr_raft_runtime_t *runtime,
         if (!tr_storage_complete(&runtime->storage)) {
             return tr_runtime_fail(runtime, result,
                                    TR_RAFT_RUNTIME_STORAGE_BEGIN,
-                                   TURBO_EINVAL);
+                                   SALTS_EINVAL);
         }
         callback_result = tr_runtime_persist(runtime, ready, result);
-        if (callback_result != TURBO_OK) {
+        if (callback_result != SALTS_OK) {
             return callback_result;
         }
     }
     if (ready->message_count != 0U && runtime->transport.enqueue == NULL) {
         return tr_runtime_fail(runtime, result,
                                TR_RAFT_RUNTIME_TRANSPORT_SEND,
-                               TURBO_EINVAL);
+                               SALTS_EINVAL);
     }
     result->stage = TR_RAFT_RUNTIME_TRANSPORT_SEND;
     for (index = 0U; index < ready->message_count; ++index) {
         callback_result = runtime->transport.enqueue(
             runtime->transport.context, &ready->messages[index]);
-        if (callback_result != TURBO_OK) {
+        if (callback_result != SALTS_OK) {
             return tr_runtime_fail(runtime, result, result->stage,
                                    callback_result);
         }
@@ -167,12 +167,12 @@ int tr_raft_runtime_process(tr_raft_runtime_t *runtime,
     for (index = 0U; index < ready->snapshot_request_count; ++index) {
         if (runtime->transport.enqueue_snapshot == NULL) {
             return tr_runtime_fail(runtime, result, result->stage,
-                                   TURBO_EINVAL);
+                                   SALTS_EINVAL);
         }
         callback_result = runtime->transport.enqueue_snapshot(
             runtime->transport.snapshot_context,
             &ready->snapshot_requests[index]);
-        if (callback_result != TURBO_OK) {
+        if (callback_result != SALTS_OK) {
             return tr_runtime_fail(runtime, result, result->stage,
                                    callback_result);
         }
@@ -197,12 +197,12 @@ int tr_raft_runtime_process(tr_raft_runtime_t *runtime,
             }
             if (runtime->state_machine.apply_batch == NULL) {
                 return tr_runtime_fail(runtime, result, result->stage,
-                                       TURBO_EINVAL);
+                                       SALTS_EINVAL);
             }
             callback_result = runtime->state_machine.apply_batch(
                 runtime->state_machine.context,
                 ready->committed_entries + begin, end - begin);
-            if (callback_result != TURBO_OK) {
+            if (callback_result != SALTS_OK) {
                 return tr_runtime_fail(runtime, result, result->stage,
                                        callback_result);
             }
@@ -213,12 +213,12 @@ int tr_raft_runtime_process(tr_raft_runtime_t *runtime,
     }
     result->stage = TR_RAFT_RUNTIME_CORE_ADVANCE;
     callback_result = tr_raft_core_advance(runtime->core);
-    if (callback_result != TURBO_OK) {
+    if (callback_result != SALTS_OK) {
         return tr_runtime_fail(runtime, result, result->stage,
                                callback_result);
     }
     result->stage = TR_RAFT_RUNTIME_COMPLETE;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 bool tr_raft_runtime_is_faulted(const tr_raft_runtime_t *runtime)

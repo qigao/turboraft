@@ -1,7 +1,7 @@
 #include <turboraft/raft_core.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -43,8 +43,8 @@ spec("native raft election core")
         tr_raft_ready_t ready = test_ready(messages, 2U);
         tr_raft_tick_t tick = {5U, 7U};
 
-        check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
-        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
         check_equal(ready.role, TR_RAFT_PRE_CANDIDATE);
         check_false(ready.hard_state_changed);
         check_equal(ready.message_count, 2U);
@@ -64,9 +64,9 @@ spec("native raft election core")
         tr_raft_tick_t tick = {5U, 7U};
         tr_raft_message_t response;
 
-        check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
-        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         memset(&response, 0, sizeof(response));
         response.type = TR_RAFT_MSG_PRE_VOTE_RESPONSE;
@@ -76,7 +76,7 @@ spec("native raft election core")
         response.granted = true;
         ready = test_ready(messages, 2U);
 
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_true(ready.hard_state_changed);
         check_equal(ready.term, 1U);
         check_equal(ready.voted_for, 1U);
@@ -96,9 +96,9 @@ spec("native raft election core")
         tr_raft_tick_t tick = {5U, 7U};
         tr_raft_message_t response;
 
-        check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
-        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         memset(&response, 0, sizeof(response));
         response.type = TR_RAFT_MSG_PRE_VOTE_RESPONSE;
@@ -107,13 +107,13 @@ spec("native raft election core")
         response.campaign_term = 1U;
         response.granted = true;
         ready = test_ready(messages, 2U);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         response.type = TR_RAFT_MSG_VOTE_RESPONSE;
         response.term = 1U;
         ready = test_ready(messages, 2U);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.role, TR_RAFT_LEADER);
         check_equal(ready.message_count, 2U);
         check_equal(ready.messages[0].type,
@@ -131,9 +131,9 @@ spec("native raft election core")
         tr_raft_tick_t tick = {5U, 7U};
         tr_raft_status_t status;
 
-        check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
-        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_ENOSPC);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_ENOSPC);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.role, TR_RAFT_FOLLOWER);
         check_equal(status.term, 0U);
         check_equal(status.election_elapsed_ticks, 0U);

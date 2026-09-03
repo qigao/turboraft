@@ -44,16 +44,16 @@ static inline size_t tbe_generated_strlen(const char *text) {
 #define TBE_GENERATED_MEMCPY tbe_generated_memcpy
 #define TBE_GENERATED_STRCMP tbe_generated_strcmp
 #define TBE_GENERATED_STRLEN tbe_generated_strlen
-#ifndef TURBO_UUID_H
-#define TURBO_UUID_H
-#define TURBO_UUID_SIZE 16U
-typedef struct turbo_uuid_s {
-    uint8_t bytes[TURBO_UUID_SIZE];
-} turbo_uuid_t;
+#ifndef SALTS_UUID_H
+#define SALTS_UUID_H
+#define SALTS_UUID_SIZE 16U
+typedef struct salts_uuid_s {
+    uint8_t bytes[SALTS_UUID_SIZE];
+} salts_uuid_t;
 #endif
 #else
 #include <string.h>
-#include "turbo_uuid.h"
+#include "salts_uuid.h"
 #define TBE_GENERATED_MEMCPY memcpy
 #define TBE_GENERATED_STRCMP strcmp
 #define TBE_GENERATED_STRLEN strlen

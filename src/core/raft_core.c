@@ -5,7 +5,7 @@
 #include "raft_membership_transition.h"
 #include "raft_peer_set.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <limits.h>
 #include <stdlib.h>
@@ -344,7 +344,7 @@ static int tr_core_sync_membership(tr_raft_core_t *core)
     int result = tr_core_build_peer_set(&core->membership_transition,
                                         &peers);
 
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     tr_core_refresh_peers(core, &peers);
@@ -353,7 +353,7 @@ static int tr_core_sync_membership(tr_raft_core_t *core)
     if (!core->self_is_voter && core->role == TR_RAFT_LEADER) {
         tr_become_follower(core, core->term);
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_core_replay_membership_log(tr_raft_core_t *core)
@@ -370,13 +370,13 @@ static int tr_core_replay_membership_log(tr_raft_core_t *core)
         }
         result = tr_raft_membership_transition_stage_entry(
             &core->membership_transition, entry);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
     }
     result = tr_raft_membership_transition_apply(
         &core->membership_transition, core->commit_index);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_core_sync_membership(core);
@@ -406,7 +406,7 @@ static int tr_core_rebuild_pending_transition(
         if (entry != NULL && tr_raft_conf_entry_is_configuration(entry)) {
             result = tr_raft_membership_transition_stage_entry(rebuilt,
                                                                entry);
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 return result;
             }
         }
@@ -419,11 +419,11 @@ static int tr_core_rebuild_pending_transition(
         }
         result = tr_raft_membership_transition_stage_entry(
             rebuilt, &incoming[incoming_index]);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static bool tr_log_is_up_to_date(const tr_raft_core_t *core,
@@ -452,13 +452,13 @@ static int tr_begin(tr_raft_core_t *core,
                     tr_raft_before_t *before)
 {
     if (core == NULL || ready == NULL || before == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (ready->message_capacity != 0U && ready->messages == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (core->in_call || core->ready_outstanding) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
 
     core->in_call = true;
@@ -466,7 +466,7 @@ static int tr_begin(tr_raft_core_t *core,
     before->term = core->term;
     before->voted_for = core->voted_for;
     tr_reset_ready(ready);
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_require_capacity(tr_raft_core_t *core,
@@ -474,11 +474,11 @@ static int tr_require_capacity(tr_raft_core_t *core,
                                size_t required)
 {
     if (required <= ready->message_capacity) {
-        return TURBO_OK;
+        return SALTS_OK;
     }
     core->in_call = false;
     tr_reset_ready(ready);
-    return TURBO_ENOSPC;
+    return SALTS_ENOSPC;
 }
 
 static int tr_finish(tr_raft_core_t *core,
@@ -508,7 +508,7 @@ static int tr_finish(tr_raft_core_t *core,
                               ready->read_state_ready ||
                               ready->snapshot_request_count != 0U;
     core->in_call = false;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static void tr_emit(tr_raft_core_t *core,
@@ -940,7 +940,7 @@ static int tr_step_heartbeat_request(tr_raft_core_t *core,
         tr_emit(core, ready, response_type, request->from, false);
         ready->messages[ready->message_count - 1U].reject_hint =
             tr_raft_log_last_index(&core->log) + 1U;
-        return TURBO_OK;
+        return SALTS_OK;
     }
 
     previous_matches = tr_raft_log_matches(
@@ -950,7 +950,7 @@ static int tr_step_heartbeat_request(tr_raft_core_t *core,
         result = tr_core_rebuild_pending_transition(
             core, request->previous_log_index, entries,
             request->entry_count, &rebuilt_transition);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
     }
@@ -961,7 +961,7 @@ static int tr_step_heartbeat_request(tr_raft_core_t *core,
                                    request->entry_count,
                                    core->commit_index,
                                    &reconcile);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     tr_become_follower(core, request->term);
@@ -973,8 +973,8 @@ static int tr_step_heartbeat_request(tr_raft_core_t *core,
 
         core->membership_transition = rebuilt_transition;
         result = tr_core_build_peer_set(&core->membership_transition, &peers);
-        if (result != TURBO_OK) {
-            return TURBO_EPROTO;
+        if (result != SALTS_OK) {
+            return SALTS_EPROTO;
         }
         tr_core_refresh_peers(core, &peers);
     }
@@ -989,11 +989,11 @@ static int tr_step_heartbeat_request(tr_raft_core_t *core,
             &core->membership_transition, candidate);
         result = tr_raft_membership_transition_apply(
             &core->membership_transition, core->commit_index);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
         result = tr_core_sync_membership(core);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
     }
@@ -1018,7 +1018,7 @@ static int tr_step_heartbeat_request(tr_raft_core_t *core,
         reconcile.reject_hint;
     ready->messages[ready->message_count - 1U].previous_log_index =
         request->previous_log_index;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_update_commit(tr_raft_core_t *core, tr_raft_ready_t *ready)
@@ -1040,20 +1040,20 @@ static int tr_update_commit(tr_raft_core_t *core, tr_raft_ready_t *ready)
             int result = tr_raft_membership_transition_apply(
                 &core->membership_transition, candidate);
 
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 return result;
             }
             result = tr_core_sync_membership(core);
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 return result;
             }
             ready->commit_changed = true;
             ready->commit_index = candidate;
-            return TURBO_OK;
+            return SALTS_OK;
         }
         --candidate;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_core_append_configuration(
@@ -1070,20 +1070,20 @@ static int tr_core_append_configuration(
 
     result = tr_raft_membership_transition_stage(
         &staged, configuration, next_index);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_core_build_peer_set(&staged, &peers);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_require_capacity(core, ready, peers.count - 1U);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_raft_log_append_configuration(
         &core->log, core->term, configuration, &entry);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     core->membership_transition = staged;
@@ -1095,11 +1095,11 @@ static int tr_core_append_configuration(
     ready->log_entries = entry;
     ready->log_entry_count = 1U;
     result = tr_update_commit(core, ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     tr_broadcast_replication(core, ready);
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_step_heartbeat_response(tr_raft_core_t *core,
@@ -1113,25 +1113,25 @@ static int tr_step_heartbeat_response(tr_raft_core_t *core,
 
     if (response->term > core->term) {
         tr_become_follower(core, response->term);
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (core->role != TR_RAFT_LEADER || response->term != core->term) {
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (response->granted && response->match_index > last_index) {
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (response->type == TR_RAFT_MSG_APPEND_RESPONSE) {
         inflight_index = tr_append_window_find(
             window, response->previous_log_index);
         if (inflight_index < 0) {
-            return TURBO_OK;
+            return SALTS_OK;
         }
         if (response->granted &&
             response->match_index !=
                 tr_append_window_at_const(
                     window, (size_t) inflight_index)->last_index) {
-            return TURBO_OK;
+            return SALTS_OK;
         }
     }
     if (tr_raft_membership_is_voter(tr_core_membership(core),
@@ -1148,7 +1148,7 @@ static int tr_step_heartbeat_response(tr_raft_core_t *core,
             }
             int result = tr_update_commit(core, ready);
 
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 return result;
             }
         }
@@ -1183,7 +1183,7 @@ static int tr_step_heartbeat_response(tr_raft_core_t *core,
                !response->granted) {
         tr_fill_peer_replication_window(core, ready, (size_t) peer_index);
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static void tr_step_timeout_now(tr_raft_core_t *core,
@@ -1271,7 +1271,7 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
     tr_raft_index_t initial_applied;
 
     if (config == NULL || out_core == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     *out_core = NULL;
     if (config->self_id == 0U || config->voters == NULL ||
@@ -1288,13 +1288,13 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
         config->initial_election_timeout_ticks > config->election_max_ticks ||
         config->max_inflight_append_requests >
             TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     for (index = 0; index < config->voter_count; ++index) {
         if (config->voters[index] == 0U ||
             (index != 0U && config->voters[index - 1U] >=
                               config->voters[index])) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
         self_count += config->voters[index] == config->self_id;
     }
@@ -1304,13 +1304,13 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
         if (config->learners[index] == 0U ||
             (index != 0U && config->learners[index - 1U] >=
                               config->learners[index])) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
         self_count += config->learners[index] == config->self_id;
         for (voter_index = 0U; voter_index < config->voter_count;
              ++voter_index) {
             if (config->learners[index] == config->voters[voter_index]) {
-                return TURBO_EINVAL;
+                return SALTS_EINVAL;
             }
         }
     }
@@ -1319,8 +1319,8 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
         const tr_raft_conf_t *configuration =
             config->initial_configuration;
 
-        if (tr_raft_conf_validate(configuration) != TURBO_OK) {
-            return TURBO_EINVAL;
+        if (tr_raft_conf_validate(configuration) != SALTS_OK) {
+            return SALTS_EINVAL;
         }
         self_count = 0U;
         for (index = 0U; index < configuration->member_count; ++index) {
@@ -1342,10 +1342,10 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
         }
     }
     if (self_count != 1U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (!initial_vote_is_voter) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (config->initial_vote != 0U) {
         bool self_is_voter = false;
@@ -1368,13 +1368,13 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
             }
         }
         if (!self_is_voter) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
     }
 
     core = (tr_raft_core_t *) calloc(1U, sizeof(*core));
     if (core == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     core->self_id = config->self_id;
     if (config->initial_configuration != NULL) {
@@ -1385,7 +1385,7 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
             &core->membership_transition, config->voters,
             config->voter_count, config->learners, config->learner_count);
     }
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         free(core);
         return result;
     }
@@ -1394,7 +1394,7 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
             tr_core_membership(core)};
 
         result = tr_raft_peer_set_build(memberships, 1U, &core->peers);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             free(core);
             return result;
         }
@@ -1410,7 +1410,7 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
                               max_log_entries,
                               config->initial_last_log_index,
                               config->initial_last_log_term);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         free(core);
         return result;
     }
@@ -1423,15 +1423,15 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
             config->initial_log_entry_count,
             0U,
             &reconcile);
-        if (result != TURBO_OK || !reconcile.matched) {
+        if (result != SALTS_OK || !reconcile.matched) {
             tr_raft_log_destroy(&core->log);
             free(core);
-            return result != TURBO_OK ? result : TURBO_EPROTO;
+            return result != SALTS_OK ? result : SALTS_EPROTO;
         }
     } else if (config->initial_log_entries != NULL) {
         tr_raft_log_destroy(&core->log);
         free(core);
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
 
     initial_commit = config->initial_commit_index;
@@ -1449,12 +1449,12 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
         initial_commit > tr_raft_log_last_index(&core->log)) {
         tr_raft_log_destroy(&core->log);
         free(core);
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     core->commit_index = initial_commit;
     core->applied_index = initial_applied;
     result = tr_core_replay_membership_log(core);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         tr_raft_log_destroy(&core->log);
         free(core);
         return result;
@@ -1471,7 +1471,7 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
         core->append_windows[index].probe = true;
     }
     *out_core = core;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_core_destroy(tr_raft_core_t *core)
@@ -1492,15 +1492,15 @@ int tr_raft_core_tick(tr_raft_core_t *core,
     int result;
 
     if (tick == NULL || tick->elapsed_ticks == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_begin(core, ready, &before);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (!tr_timeout_valid(core, tick->next_election_timeout_ticks)) {
         core->in_call = false;
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
 
     if (core->role == TR_RAFT_LEADER &&
@@ -1510,11 +1510,11 @@ int tr_raft_core_tick(tr_raft_core_t *core,
 
         result = tr_raft_membership_transition_final(
             &core->membership_transition, &final_membership);
-        if (result == TURBO_OK) {
+        if (result == SALTS_OK) {
             result = tr_core_append_configuration(
                 core, &final_membership, ready);
         }
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             core->in_call = false;
             tr_reset_ready(ready);
             return result;
@@ -1584,7 +1584,7 @@ int tr_raft_core_tick(tr_raft_core_t *core,
             core->heartbeat_elapsed_ticks + tick->elapsed_ticks >=
                 core->heartbeat_ticks) {
             result = tr_require_capacity(core, ready, peer_count);
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 return result;
             }
             core->heartbeat_elapsed_ticks = 0U;
@@ -1612,10 +1612,10 @@ int tr_raft_core_tick(tr_raft_core_t *core,
             core->election_timeout_ticks) {
         if (core->term == UINT64_MAX) {
             core->in_call = false;
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         result = tr_require_capacity(core, ready, peer_count);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
         core->election_elapsed_ticks = 0U;
@@ -1639,20 +1639,20 @@ int tr_raft_core_step(tr_raft_core_t *core,
 
     if (message == NULL || core == NULL || message->to != core->self_id ||
         message->from == core->self_id) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     peer_index = tr_peer_index(core, message->from);
     if (peer_index < 0) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     voter_index = tr_voter_index(core, message->from);
     if (voter_index < 0 &&
         message->type != TR_RAFT_MSG_HEARTBEAT_RESPONSE &&
         message->type != TR_RAFT_MSG_APPEND_RESPONSE) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_begin(core, ready, &before);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
 
@@ -1700,10 +1700,10 @@ int tr_raft_core_step(tr_raft_core_t *core,
         break;
     default:
         core->in_call = false;
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_require_capacity(core, ready, required);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
 
@@ -1726,10 +1726,10 @@ int tr_raft_core_step(tr_raft_core_t *core,
             (message->type == TR_RAFT_MSG_HEARTBEAT_REQUEST &&
              message->entry_count != 0U)) {
             core->in_call = false;
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
         result = tr_step_heartbeat_request(core, message, ready);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             core->in_call = false;
             tr_reset_ready(ready);
             return result;
@@ -1738,7 +1738,7 @@ int tr_raft_core_step(tr_raft_core_t *core,
     case TR_RAFT_MSG_HEARTBEAT_RESPONSE:
     case TR_RAFT_MSG_APPEND_RESPONSE:
         result = tr_step_heartbeat_response(core, message, ready, peer_index);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             core->in_call = false;
             tr_reset_ready(ready);
             return result;
@@ -1755,7 +1755,7 @@ int tr_raft_core_step(tr_raft_core_t *core,
         break;
     default:
         core->in_call = false;
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     return tr_finish(core, ready, &before);
 }
@@ -1773,23 +1773,23 @@ int tr_raft_core_propose(tr_raft_core_t *core,
     if (core == NULL || proposal == NULL || proposal->command_id == 0U ||
         proposal->data_length > TR_RAFT_MAX_ENTRY_BYTES ||
         (proposal->data_length != 0U && proposal->data == NULL)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_begin(core, ready, &before);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (core->role != TR_RAFT_LEADER) {
         core->in_call = false;
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (core->leadership_transfer_target != 0U) {
         core->in_call = false;
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     peer_count = tr_peer_count(core) - 1U;
     result = tr_require_capacity(core, ready, peer_count);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_raft_log_append_local(&core->log,
@@ -1798,7 +1798,7 @@ int tr_raft_core_propose(tr_raft_core_t *core,
                                       proposal->data,
                                       proposal->data_length,
                                       &entry);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         core->in_call = false;
         tr_reset_ready(ready);
         return result;
@@ -1811,7 +1811,7 @@ int tr_raft_core_propose(tr_raft_core_t *core,
     ready->log_entries = (const tr_raft_entry_t *) entry;
     ready->log_entry_count = 1U;
     result = tr_update_commit(core, ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         core->in_call = false;
         tr_reset_ready(ready);
         return result;
@@ -1830,29 +1830,29 @@ int tr_raft_core_change_membership(
     int result;
 
     if (core == NULL || change == NULL || change->transition_id == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_begin(core, ready, &before);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (core->role != TR_RAFT_LEADER) {
         core->in_call = false;
-        return TURBO_EPERM;
+        return SALTS_EPERM;
     }
     if (core->leadership_transfer_target != 0U ||
         core->pending_read_context_id != 0U) {
         core->in_call = false;
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     result = tr_raft_membership_transition_propose(
         &core->membership_transition, change->voters, change->voter_count,
         change->learners, change->learner_count, change->transition_id,
         &joint);
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_core_append_configuration(core, &joint, ready);
     }
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         core->in_call = false;
         tr_reset_ready(ready);
         return result;
@@ -1871,26 +1871,26 @@ int tr_raft_core_transfer_leadership(tr_raft_core_t *core,
 
     if (core == NULL || transferee_id == 0U ||
         transferee_id == core->self_id) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     transferee_index = tr_voter_index(core, transferee_id);
     if (transferee_index < 0) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_begin(core, ready, &before);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (core->role != TR_RAFT_LEADER) {
         core->in_call = false;
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (core->leadership_transfer_target != 0U) {
         core->in_call = false;
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     result = tr_require_capacity(core, ready, 1U);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
 
@@ -1917,25 +1917,25 @@ int tr_raft_core_read_index(tr_raft_core_t *core,
     int result;
 
     if (core == NULL || context_id == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_begin(core, ready, &before);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (core->role != TR_RAFT_LEADER) {
         core->in_call = false;
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (core->leadership_transfer_target != 0U ||
         core->pending_read_context_id != 0U ||
         !tr_has_committed_current_term(core)) {
         core->in_call = false;
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     result = tr_require_capacity(core, ready,
                                  tr_core_voter_count(core) - 1U);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
 
@@ -1961,7 +1961,7 @@ int tr_raft_core_poll(tr_raft_core_t *core, tr_raft_ready_t *ready)
     tr_raft_before_t before;
     int result = tr_begin(core, ready, &before);
 
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     tr_fill_replication_windows(core, ready);
@@ -1971,17 +1971,17 @@ int tr_raft_core_poll(tr_raft_core_t *core, tr_raft_ready_t *ready)
 int tr_raft_core_advance(tr_raft_core_t *core)
 {
     if (core == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (core->in_call || !core->ready_outstanding) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (core->pending_apply_index != 0U) {
         core->applied_index = core->pending_apply_index;
         core->pending_apply_index = 0U;
     }
     core->ready_outstanding = false;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_core_snapshot_point(const tr_raft_core_t *core,
@@ -1990,25 +1990,25 @@ int tr_raft_core_snapshot_point(const tr_raft_core_t *core,
     const tr_raft_log_entry_t *entry;
 
     if (core == NULL || out_point == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (core->in_call || core->ready_outstanding ||
         core->applied_index != core->commit_index) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     if (core->applied_index <= core->log.base_index) {
-        return TURBO_ENOENT;
+        return SALTS_ENOENT;
     }
     entry = tr_raft_log_get(&core->log, core->applied_index);
     if (entry == NULL) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
 
     memset(out_point, 0, sizeof(*out_point));
     out_point->index = core->applied_index;
     out_point->term = entry->term;
     out_point->configuration = *tr_core_membership(core);
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static bool tr_snapshot_configuration_equal(const tr_raft_conf_t *left,
@@ -2037,16 +2037,16 @@ int tr_raft_core_compact(tr_raft_core_t *core,
     int result;
 
     if (core == NULL || point == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_core_snapshot_point(core, &current);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (point->index != current.index || point->term != current.term ||
         !tr_snapshot_configuration_equal(&point->configuration,
                                          &current.configuration)) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     return tr_raft_log_compact(&core->log, point->index, point->term);
 }
@@ -2062,22 +2062,22 @@ int tr_raft_core_snapshot_completed(tr_raft_core_t *core,
 
     if (core == NULL || ready == NULL || peer_id == 0U ||
         peer_id == core->self_id || snapshot_index == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     peer_index = tr_peer_index(core, peer_id);
     if (peer_index < 0 || snapshot_index > core->log.base_index) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_begin(core, ready, &before);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (core->role != TR_RAFT_LEADER) {
         core->in_call = false;
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     result = tr_require_capacity(core, ready, 1U);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
 
@@ -2095,7 +2095,7 @@ int tr_raft_core_status(const tr_raft_core_t *core, tr_raft_status_t *status)
     size_t index;
 
     if (core == NULL || status == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     status->self_id = core->self_id;
     status->leader_id = core->leader_id;
@@ -2139,17 +2139,17 @@ int tr_raft_core_status(const tr_raft_core_t *core, tr_raft_status_t *status)
                 core->next_index[index] <= core->log.base_index;
         }
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_core_configuration(const tr_raft_core_t *core,
                                tr_raft_conf_t *out_configuration)
 {
     if (core == NULL || out_configuration == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     *out_configuration = *tr_core_membership(core);
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_core_progress(const tr_raft_core_t *core,
@@ -2158,7 +2158,7 @@ int tr_raft_core_progress(const tr_raft_core_t *core,
     size_t index;
 
     if (core == NULL || out_progress == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(out_progress, 0, sizeof(*out_progress));
     out_progress->peer_count = tr_peer_count(core);
@@ -2181,7 +2181,7 @@ int tr_raft_core_progress(const tr_raft_core_t *core,
             peer->node_id != core->self_id &&
             peer->next_index <= core->log.base_index;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_core_operation_status(const tr_raft_core_t *core,
@@ -2193,7 +2193,7 @@ int tr_raft_core_operation_status(const tr_raft_core_t *core,
     tr_raft_index_t last_index;
 
     if (core == NULL || out_status == NULL || term == 0U || index == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
 
     memset(out_status, 0, sizeof(*out_status));
@@ -2205,25 +2205,25 @@ int tr_raft_core_operation_status(const tr_raft_core_t *core,
 
     if (index < core->log.base_index) {
         out_status->state = TR_RAFT_OPERATION_EXPIRED;
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (index == core->log.base_index) {
         out_status->state = term == core->log.base_term
                                 ? TR_RAFT_OPERATION_APPLIED
                                 : TR_RAFT_OPERATION_LOST;
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (index > last_index) {
         if (term > core->term) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
         out_status->state = TR_RAFT_OPERATION_LOST;
-        return TURBO_OK;
+        return SALTS_OK;
     }
 
     entry = tr_raft_log_get(&core->log, index);
     if (entry == NULL) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (entry->term != term) {
         out_status->state = TR_RAFT_OPERATION_LOST;
@@ -2234,5 +2234,5 @@ int tr_raft_core_operation_status(const tr_raft_core_t *core,
     } else {
         out_status->state = TR_RAFT_OPERATION_PENDING;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }

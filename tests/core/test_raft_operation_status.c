@@ -1,7 +1,7 @@
 #include <turboraft/raft_core.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -48,40 +48,40 @@ spec("raft operation receipt status")
         entries[1].command_id = 11U;
         config = operation_test_config(voters, entries);
 
-        check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
 
         check_equal(tr_raft_core_operation_status(core, 3U, 7U, &status),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(status.state, TR_RAFT_OPERATION_PENDING);
         check_equal(status.commit_index, 6U);
         check_equal(status.applied_index, 5U);
 
         check_equal(tr_raft_core_operation_status(core, 3U, 6U, &status),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(status.state, TR_RAFT_OPERATION_COMMITTED);
 
         check_equal(tr_raft_core_operation_status(core, 2U, 5U, &status),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(status.state, TR_RAFT_OPERATION_APPLIED);
 
         check_equal(tr_raft_core_operation_status(core, 1U, 4U, &status),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(status.state, TR_RAFT_OPERATION_EXPIRED);
 
         check_equal(tr_raft_core_operation_status(core, 2U, 6U, &status),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(status.state, TR_RAFT_OPERATION_LOST);
 
         check_equal(tr_raft_core_operation_status(core, 3U, 8U, &status),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(status.state, TR_RAFT_OPERATION_LOST);
 
         check_equal(tr_raft_core_operation_status(core, 4U, 8U, &status),
-                     TURBO_EINVAL);
+                     SALTS_EINVAL);
         check_equal(tr_raft_core_operation_status(core, 0U, 1U, &status),
-                     TURBO_EINVAL);
+                     SALTS_EINVAL);
         check_equal(tr_raft_core_operation_status(core, 1U, 0U, &status),
-                     TURBO_EINVAL);
+                     SALTS_EINVAL);
 
         tr_raft_core_destroy(core);
     }

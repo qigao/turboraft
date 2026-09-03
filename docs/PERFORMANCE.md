@@ -13,7 +13,7 @@ cmake --build --preset win-release-user --target turboraft_benchmarks
 ```
 
 Run benchmarks only in a Release build on an otherwise idle host. Record CPU,
-storage device, filesystem, power mode, compiler, TurboUtils/TurboRaft revision,
+storage device, filesystem, power mode, compiler, Salts/TurboRaft revision,
 and filesystem version with every result. Compare repeated runs on the same host;
 cross-host numbers are not a regression signal.
 

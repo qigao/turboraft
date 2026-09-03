@@ -10,8 +10,8 @@ endif()
 project(
   TurboRaft
   VERSION 0.1.0
-  DESCRIPTION "Raft consensus library for the TurboNet ecosystem"
-  HOMEPAGE_URL "https://github.com/qigao/turbonet"
+  DESCRIPTION "Raft consensus library for the Salts ecosystem"
+  HOMEPAGE_URL "https://github.com/qigao/turboraft"
   LANGUAGES C)
 
 include(CMakePackageConfigHelpers)
@@ -38,7 +38,7 @@ set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "cmake")
 
 include(CMakeOptions.cmake)
 include(cmake/Sanitizers.cmake)
-include(cmake/CMakeUtils.cmake)
+include(cmake/CmakeUtils.cmake)
 add_subdirectory(tools)
 include(cmake/FindTools.cmake)
 
@@ -61,7 +61,8 @@ endif()
 
 include(CTest)
 
-foreach(_turboraft_required_root IN ITEMS TURBOUTILS_ROOT TURBOPARSER_ROOT)
+foreach(_turboraft_required_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT
+                                           FLOWMQ_ROOT)
   if(NOT DEFINED ENV{${_turboraft_required_root}} OR
      "$ENV{${_turboraft_required_root}}" STREQUAL "")
     message(FATAL_ERROR
@@ -73,30 +74,40 @@ foreach(_turboraft_required_root IN ITEMS TURBOUTILS_ROOT TURBOPARSER_ROOT)
   endif()
 endforeach()
 
-find_package(TurboUtils CONFIG REQUIRED
-             PATHS "$ENV{TURBOUTILS_ROOT}" NO_DEFAULT_PATH)
-find_package(TurboParser CONFIG REQUIRED
-             PATHS "$ENV{TURBOPARSER_ROOT}" NO_DEFAULT_PATH)
+find_package(Salts CONFIG REQUIRED
+             PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
+find_package(SaltsUtils CONFIG REQUIRED
+             PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
+find_package(FlowMQ CONFIG REQUIRED
+             PATHS "$ENV{FLOWMQ_ROOT}" NO_DEFAULT_PATH)
 find_package(OpenSSL REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 
+foreach(_turboraft_required_target IN ITEMS Salts::CNet Salts::CHTTP
+                                             Salts::CRPC FlowMQ::FlowMQ)
+  if(NOT TARGET ${_turboraft_required_target})
+    message(FATAL_ERROR
+            "Required target is unavailable: ${_turboraft_required_target}")
+  endif()
+endforeach()
+
 if(CMAKE_CROSSCOMPILING)
-  set(_turboraft_tbe_root_name TURBOPARSER_HOST_ROOT)
+  set(_turboraft_tbe_root_name SALTS_UTILS_HOST_ROOT)
 else()
-  set(_turboraft_tbe_root_name TURBOPARSER_ROOT)
+  set(_turboraft_tbe_root_name SALTS_UTILS_ROOT)
 endif()
 if(NOT DEFINED ENV{${_turboraft_tbe_root_name}} OR
    "$ENV{${_turboraft_tbe_root_name}}" STREQUAL "" OR
    NOT IS_DIRECTORY "$ENV{${_turboraft_tbe_root_name}}")
   message(FATAL_ERROR
-          "${_turboraft_tbe_root_name} must name the TurboParser host install prefix")
+          "${_turboraft_tbe_root_name} must name the SaltsUtils host install prefix")
 endif()
 file(REAL_PATH "$ENV{${_turboraft_tbe_root_name}}" _turboraft_tbe_root_real)
 unset(TURBORAFT_TBE_COMPILER CACHE)
 unset(TURBORAFT_TBE_COMPILER)
 find_program(TURBORAFT_TBE_COMPILER NAMES tbe_compiler tbe_compiler.exe
              PATHS "${_turboraft_tbe_root_real}/bin" NO_DEFAULT_PATH
-             DOC "TurboParser TBE schema compiler")
+             DOC "SaltsUtils TBE schema compiler")
 if(NOT TURBORAFT_TBE_COMPILER)
   message(
     FATAL_ERROR "tbe_compiler is required to generate the TurboRaft wire codec")
@@ -171,8 +182,8 @@ target_include_directories(
 
 target_link_libraries(
   turboraft_core
-  PUBLIC TurboUtils::Core
-  PRIVATE TurboUtils::STL TurboParser::DataBind)
+  PUBLIC Salts::Core
+  PRIVATE Salts::CSTL Salts::DataBind)
 
 add_library(turboraft_service STATIC src/service/raft_service.c)
 add_library(TurboRaft::Service ALIAS turboraft_service)
@@ -240,7 +251,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(turboraft_wal_storage
                       PUBLIC TurboRaft::Core
-                      PRIVATE TurboUtils::Core xxHash::xxhash)
+                      PRIVATE Salts::Core xxHash::xxhash)
 
 add_library(turboraft_snapshot_coordinator STATIC
             src/service/raft_snapshot_coordinator.c)
@@ -264,81 +275,51 @@ target_link_libraries(turboraft_service_wal_reload
                       PUBLIC TurboRaft::Service TurboRaft::WalStorage)
 
 find_package(Threads REQUIRED)
-foreach(_turboraft_optional_root IN ITEMS
-        TURBONET_ROOT TURBOHTTP_ROOT FLOWMQ_ROOT)
-  if(DEFINED ENV{${_turboraft_optional_root}} AND
-     NOT "$ENV{${_turboraft_optional_root}}" STREQUAL "" AND
-     NOT IS_DIRECTORY "$ENV{${_turboraft_optional_root}}")
-    message(FATAL_ERROR
-            "${_turboraft_optional_root} is not a directory: $ENV{${_turboraft_optional_root}}")
-  endif()
-endforeach()
-if(DEFINED ENV{TURBONET_ROOT} AND NOT "$ENV{TURBONET_ROOT}" STREQUAL "")
-  find_package(TurboNet CONFIG QUIET
-               PATHS "$ENV{TURBONET_ROOT}" NO_DEFAULT_PATH)
-endif()
-if(DEFINED ENV{TURBOHTTP_ROOT} AND NOT "$ENV{TURBOHTTP_ROOT}" STREQUAL "")
-  find_package(TurboHttp CONFIG QUIET
-               PATHS "$ENV{TURBOHTTP_ROOT}" NO_DEFAULT_PATH)
-endif()
-if(DEFINED ENV{FLOWMQ_ROOT} AND NOT "$ENV{FLOWMQ_ROOT}" STREQUAL "")
-  find_package(FlowMQ CONFIG QUIET
-               PATHS "$ENV{FLOWMQ_ROOT}" NO_DEFAULT_PATH)
-endif()
 
-if(TurboNet_FOUND)
-  add_library(
-    turboraft_coronet STATIC
-    src/transport/raft_coronet_transport.c
-    src/transport/raft_coronet_handshake.c
-    src/transport/raft_coronet_connector.c
-    src/transport/raft_coronet_dial_scheduler.c
-    src/transport/raft_coronet_inbound_service.c
-    src/transport/raft_coronet_identity_registry.c
-    src/transport/raft_coronet_peer_service.c
-    src/transport/raft_peer_handshake.c)
-  add_library(TurboRaft::CoroNet ALIAS turboraft_coronet)
-  set_target_properties(turboraft_coronet PROPERTIES EXPORT_NAME CoroNet)
+if(TARGET Salts::CNet)
+  add_library(turboraft_cnet STATIC
+              src/transport/raft_cnet_peer.c
+              src/transport/raft_transport.c
+              src/transport/raft_peer_handshake.c)
+  add_library(TurboRaft::CNet ALIAS turboraft_cnet)
+  set_target_properties(turboraft_cnet PROPERTIES EXPORT_NAME CNet)
   target_include_directories(
-    turboraft_coronet
+    turboraft_cnet
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
   target_link_libraries(
-    turboraft_coronet
-    PUBLIC TurboRaft::Core TurboNet::CoroNet
-    PRIVATE TurboUtils::STL TurboRaft::SnapshotReceiver)
+    turboraft_cnet
+    PUBLIC TurboRaft::Core Salts::CNet
+    PRIVATE Salts::CSTL)
 
-  add_library(turboraft_snapshot_peer STATIC src/service/raft_snapshot_peer.c)
+  add_library(turboraft_snapshot_peer STATIC
+              src/service/raft_snapshot_peer.c)
   target_include_directories(turboraft_snapshot_peer
                              PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/service)
-  target_link_libraries(
-    turboraft_snapshot_peer PUBLIC turboraft_snapshot_coordinator
-                                   TurboRaft::CoroNet)
+  target_link_libraries(turboraft_snapshot_peer
+                        PUBLIC TurboRaft::CNet
+                               turboraft_snapshot_coordinator)
 
-  add_library(
-    turboraft_snapshot_manager STATIC
-    src/service/raft_snapshot_manager.c src/service/raft_snapshot_peer.c
-    src/service/raft_snapshot_coordinator.c)
+  add_library(turboraft_snapshot_manager STATIC
+              src/service/raft_snapshot_manager.c
+              src/service/raft_snapshot_peer.c
+              src/service/raft_snapshot_coordinator.c)
   add_library(TurboRaft::SnapshotManager ALIAS turboraft_snapshot_manager)
-  set_target_properties(turboraft_snapshot_manager PROPERTIES EXPORT_NAME
-                                                              SnapshotManager)
+  set_target_properties(turboraft_snapshot_manager
+                        PROPERTIES EXPORT_NAME SnapshotManager)
   target_include_directories(
     turboraft_snapshot_manager
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/service)
-  target_link_libraries(
-    turboraft_snapshot_manager
-    PUBLIC TurboRaft::CoroNet TurboRaft::SnapshotSender
-    PRIVATE TurboRaft::SnapshotReceiver)
+  target_link_libraries(turboraft_snapshot_manager
+                        PUBLIC TurboRaft::CNet TurboRaft::SnapshotSender)
+
 else()
-  message(
-    STATUS
-    "TurboNet not found; CoroNet transport, snapshot manager, and service "
-    "owner adapters are disabled")
+  message(FATAL_ERROR "Required target is unavailable: Salts::CNet")
 endif()
 
-if(TurboNet_FOUND AND TARGET FlowMQ::FlowMQ)
+if(TARGET Salts::CNet AND TARGET FlowMQ::FlowMQ)
   add_library(turboraft_flowmq STATIC
               src/transport/raft_flowmq_peer_service.c)
   add_library(TurboRaft::FlowMQ ALIAS turboraft_flowmq)
@@ -349,17 +330,16 @@ if(TurboNet_FOUND AND TARGET FlowMQ::FlowMQ)
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
   target_link_libraries(
     turboraft_flowmq
-    PUBLIC TurboRaft::CoroNet FlowMQ::FlowMQ
-    PRIVATE TurboUtils::Platform TurboUtils::STL)
+    PUBLIC TurboRaft::CNet FlowMQ::FlowMQ
+    PRIVATE Salts::Core Salts::CSTL)
 else()
-  message(STATUS "FlowMQ::FlowMQ not found; FlowMQ peer transport is disabled")
+  message(FATAL_ERROR "Required target is unavailable: FlowMQ::FlowMQ")
 endif()
 
-if(TurboNet_FOUND AND TurboHttp_FOUND)
+if(TARGET Salts::CNet AND TARGET Salts::CHTTP AND TARGET Salts::CRPC)
   add_library(
   turboraft_control_plane STATIC
-  src/control/raft_control_audit.c src/control/raft_control_owner_bridge.c
-  src/control/raft_control_operation.c src/control/raft_control_plane.c)
+  src/control/raft_control_audit.c src/control/raft_control_plane.c)
 add_library(TurboRaft::ControlPlane ALIAS turboraft_control_plane)
 set_target_properties(turboraft_control_plane PROPERTIES EXPORT_NAME
                                                          ControlPlane)
@@ -369,50 +349,22 @@ target_include_directories(
          $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(
   turboraft_control_plane
-  PUBLIC TurboRaft::Service
-  PRIVATE TurboHttp::Iris TurboParser::Parser)
+  PUBLIC TurboRaft::Service Salts::CHTTP Salts::CRPC)
 
 if(BUILD_TESTS)
   add_executable(turboraft_control_plane_tests
                  tests/control/test_raft_control_plane.c)
   target_link_libraries(
     turboraft_control_plane_tests
-    PRIVATE TurboRaft::ControlPlane TurboHttp::Iris TurboUtils::TinyTest)
-  add_custom_command(
-    TARGET turboraft_control_plane_tests
-    POST_BUILD
-    COMMAND
-      ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:TurboHttp::Iris>
-      $<TARGET_FILE_DIR:turboraft_control_plane_tests>)
+    PRIVATE TurboRaft::ControlPlane Salts::CHTTP Salts::CRPC Salts::TinyTest)
   add_test(NAME turboraft.control_plane COMMAND turboraft_control_plane_tests)
   cmake_config_target(turboraft_control_plane_tests
                       NO_INSTALL
                       FOLDER "tests/control")
 
-  add_executable(turboraft_control_plane_http_tests
-                 tests/control/test_raft_control_plane_http.c)
-  target_link_libraries(
-    turboraft_control_plane_http_tests
-    PRIVATE TurboRaft::ControlPlane TurboHttp::Iris TurboHttp::TurboHttp
-            TurboUtils::Platform TurboUtils::TinyTest)
-  add_custom_command(
-    TARGET turboraft_control_plane_http_tests
-    POST_BUILD
-    COMMAND
-      ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:TurboHttp::Iris>
-      $<TARGET_FILE:TurboHttp::TurboHttp>
-      $<TARGET_FILE_DIR:turboraft_control_plane_http_tests>)
-  add_test(NAME turboraft.control_plane_http
-           COMMAND turboraft_control_plane_http_tests)
-  cmake_config_target(turboraft_control_plane_http_tests
-                      NO_INSTALL
-                      FOLDER "tests/control")
   endif()
 else()
-  message(
-    STATUS
-    "TurboNet/TurboHttp not found together; the TurboRaft control plane is "
-    "disabled")
+  message(FATAL_ERROR "Required Salts CNet/CHTTP/CRPC targets are unavailable")
 endif()
 
 set(TURBORAFT_TEXT_SYNTAX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/text_syntax")
@@ -479,7 +431,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/text_syntax"
           "${CMAKE_CURRENT_BINARY_DIR}")
-target_link_libraries(turboraft_text_syntax PUBLIC TurboUtils::Core)
+target_link_libraries(turboraft_text_syntax PUBLIC Salts::Core)
 
 add_library(turboraft_text_query_service STATIC
             src/text_syntax/text_query_service.c)
@@ -493,15 +445,15 @@ target_include_directories(
 target_link_libraries(turboraft_text_query_service
                       PUBLIC TurboRaft::TextSyntax TurboRaft::Service)
 
-if(TurboHttp_FOUND)
+if(TARGET Salts::CHTTP AND TARGET Salts::CRPC)
   add_executable(turboraft_console tools/turboraft_console.c)
   target_link_libraries(turboraft_console
-                        PRIVATE TurboRaft::TextSyntax TurboHttp::TurboHttp)
+                        PRIVATE TurboRaft::TextSyntax Salts::CHTTP Salts::CRPC)
   cmake_config_target(turboraft_console
                       NO_INSTALL
                       FOLDER "TurboRaft/tools")
 else()
-  message(STATUS "TurboHttp not found; turboraft_console is disabled")
+  message(FATAL_ERROR "Required Salts CHTTP/CRPC targets are unavailable")
 endif()
 
 add_library(turboraft_text_protocol_debug STATIC
@@ -530,60 +482,22 @@ target_link_libraries(turboraft_replay_driver PUBLIC TurboRaft::Core)
 add_executable(turboraft_repl tools/turboraft_repl.c)
 target_link_libraries(
   turboraft_repl
-  PRIVATE TurboRaft::TextSyntax TurboRaft::ReplayDriver TurboParser::Parser)
+  PRIVATE TurboRaft::TextSyntax TurboRaft::ReplayDriver)
 cmake_config_target(turboraft_repl
                     NO_INSTALL
                     FOLDER "TurboRaft/tools")
 
 add_subdirectory(tests)
 
-if(TurboNet_FOUND)
-  add_library(turboraft_service_owner STATIC src/service/raft_service_owner.c)
-  add_library(TurboRaft::ServiceOwner ALIAS turboraft_service_owner)
-  set_target_properties(turboraft_service_owner PROPERTIES EXPORT_NAME
-                                                           ServiceOwner)
-  target_include_directories(
-    turboraft_service_owner
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-           $<INSTALL_INTERFACE:include>)
-  target_link_libraries(turboraft_service_owner PUBLIC TurboRaft::Service
-                                                       TurboNet::CoroNet)
-  if(BUILD_TESTS AND TARGET turboraft_service_tests)
-    target_link_libraries(turboraft_service_tests
-                          PRIVATE TurboRaft::ServiceOwner)
-    target_compile_definitions(turboraft_service_tests
-                               PRIVATE TURBORAFT_HAS_SERVICE_OWNER=1)
-  endif()
-endif()
-if(TurboNet_FOUND AND TurboHttp_FOUND)
-  target_link_libraries(turboraft_control_plane
-                        PUBLIC TurboRaft::ServiceOwner)
-  target_compile_definitions(turboraft_control_plane
-                             PRIVATE TURBORAFT_HAS_SERVICE_OWNER=1)
-  if(BUILD_TESTS)
-    add_executable(turboraft_control_owner_bridge_tests
-                   tests/control/test_raft_control_owner_bridge.c)
-    target_link_libraries(
-      turboraft_control_owner_bridge_tests PRIVATE TurboRaft::ControlPlane
-                                                     TurboUtils::Platform
-                                                     TurboUtils::TinyTest)
-    target_compile_definitions(turboraft_control_owner_bridge_tests
-                               PRIVATE TURBORAFT_HAS_SERVICE_OWNER=1)
-    add_test(NAME turboraft.control_owner_bridge
-             COMMAND turboraft_control_owner_bridge_tests)
-    cmake_config_target(turboraft_control_owner_bridge_tests
-                        NO_INSTALL
-                        FOLDER "tests/control")
-  endif()
-endif()
-
 set(TURBORAFT_INSTALL_TARGETS
     turboraft_core turboraft_service turboraft_snapshot_receiver
     turboraft_data_stream turboraft_wal_storage
     turboraft_snapshot_sender)
-if(TARGET turboraft_coronet)
-  list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_coronet
-       turboraft_snapshot_manager turboraft_service_owner)
+if(TARGET turboraft_cnet)
+  list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_cnet)
+endif()
+if(TARGET turboraft_snapshot_manager)
+  list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_snapshot_manager)
 endif()
 if(TARGET turboraft_flowmq)
   list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_flowmq)
@@ -595,9 +509,9 @@ list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_text_syntax
      turboraft_text_query_service turboraft_text_protocol_debug
      turboraft_replay_driver)
 
-set(TURBORAFT_HAVE_CORONET OFF)
-if(TARGET turboraft_coronet)
-  set(TURBORAFT_HAVE_CORONET ON)
+set(TURBORAFT_HAVE_CNET OFF)
+if(TARGET turboraft_cnet)
+  set(TURBORAFT_HAVE_CNET ON)
 endif()
 set(TURBORAFT_HAVE_CONTROL_PLANE OFF)
 if(TARGET turboraft_control_plane)

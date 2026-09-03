@@ -1,6 +1,6 @@
 #include "raft_snapshot_installer.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdlib.h>
 
@@ -28,17 +28,17 @@ int tr_raft_snapshot_installer_create(
 
     if (config == NULL || out_installer == NULL || config->storage == NULL ||
         config->restore_application == NULL || config->reload_runtime == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     *out_installer = NULL;
     installer = (tr_raft_snapshot_installer_t *) calloc(
         1U, sizeof(*installer));
     if (installer == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     installer->config = *config;
     *out_installer = installer;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_snapshot_installer_destroy(
@@ -64,17 +64,17 @@ int tr_raft_snapshot_installer_install(
         snapshot_index == 0U ||
         snapshot_term == 0U || snapshot_term > leader_term ||
         (size > 0U && data == NULL)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (installer->status.faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
 
     installer->status.stage = TR_RAFT_SNAPSHOT_INSTALL_DURABLE;
     result = tr_raft_wal_storage_install_snapshot(
         installer->config.storage, leader_term, snapshot_index,
         snapshot_term, configuration, data, size);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_snapshot_installer_fail(
             installer, TR_RAFT_SNAPSHOT_INSTALL_DURABLE, result);
     }
@@ -84,7 +84,7 @@ int tr_raft_snapshot_installer_install(
     result = installer->config.restore_application(
         installer->config.application_context, snapshot_index,
         snapshot_term, data, size);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_snapshot_installer_fail(
             installer, TR_RAFT_SNAPSHOT_INSTALL_APPLICATION, result);
     }
@@ -93,14 +93,14 @@ int tr_raft_snapshot_installer_install(
     installer->status.stage = TR_RAFT_SNAPSHOT_INSTALL_RUNTIME;
     result = installer->config.reload_runtime(
         installer->config.runtime_context, snapshot_index, snapshot_term);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_snapshot_installer_fail(
             installer, TR_RAFT_SNAPSHOT_INSTALL_RUNTIME, result);
     }
     installer->status.active_index = snapshot_index;
     installer->status.stage = TR_RAFT_SNAPSHOT_INSTALL_COMPLETE;
-    installer->status.cause = TURBO_OK;
-    return TURBO_OK;
+    installer->status.cause = SALTS_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_snapshot_installer_get_status(
@@ -108,8 +108,8 @@ int tr_raft_snapshot_installer_get_status(
     tr_raft_snapshot_installer_status_t *out_status)
 {
     if (installer == NULL || out_status == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     *out_status = installer->status;
-    return TURBO_OK;
+    return SALTS_OK;
 }

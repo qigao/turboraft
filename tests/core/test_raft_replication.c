@@ -1,7 +1,7 @@
 #include <turboraft/raft_core.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -39,7 +39,7 @@ static tr_raft_core_t *replication_core_with_window(size_t window)
     config.initial_election_timeout_ticks = 5U;
     config.max_log_entries = 128U;
     config.max_inflight_append_requests = window;
-    check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
+    check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
     return core;
 }
 
@@ -55,8 +55,8 @@ static void replication_elect(tr_raft_core_t *core)
     tr_raft_tick_t tick = {5U, 7U};
     tr_raft_message_t response;
 
-    check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
-    check_equal(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
+    check_equal(tr_raft_core_advance(core), SALTS_OK);
     memset(&response, 0, sizeof(response));
     response.type = TR_RAFT_MSG_PRE_VOTE_RESPONSE;
     response.from = 2U;
@@ -64,14 +64,14 @@ static void replication_elect(tr_raft_core_t *core)
     response.campaign_term = 1U;
     response.granted = true;
     ready = replication_ready(messages);
-    check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
-    check_equal(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+    check_equal(tr_raft_core_advance(core), SALTS_OK);
     response.type = TR_RAFT_MSG_VOTE_RESPONSE;
     response.term = 1U;
     ready = replication_ready(messages);
-    check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+    check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
     check_equal(ready.role, TR_RAFT_LEADER);
-    check_equal(tr_raft_core_advance(core), TURBO_OK);
+    check_equal(tr_raft_core_advance(core), SALTS_OK);
 }
 
 spec("native raft replication")
@@ -96,14 +96,14 @@ spec("native raft replication")
         request.entry.data_length = 3U;
         memcpy(request.entry.data, "set", 3U);
 
-        check_equal(tr_raft_core_step(core, &request, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &request, &ready), SALTS_OK);
         check_true(ready.hard_state_changed);
         check_true(ready.log_changed);
         check_equal(ready.log_entry_count, 1U);
         check_equal(ready.message_count, 1U);
         check_equal(ready.messages[0].type, TR_RAFT_MSG_APPEND_RESPONSE);
         check_true(ready.messages[0].granted);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.last_log_index, 1U);
         tr_raft_core_destroy(core);
     }
@@ -119,11 +119,11 @@ spec("native raft replication")
 
         replication_elect(core);
         ready = replication_ready(messages);
-        check_equal(tr_raft_core_propose(core, &proposal, &ready), TURBO_OK);
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
         check_true(ready.log_changed);
         check_false(ready.commit_changed);
         check_equal(messages[0].type, TR_RAFT_MSG_APPEND_REQUEST);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         memset(&response, 0, sizeof(response));
         response.type = TR_RAFT_MSG_APPEND_RESPONSE;
@@ -133,10 +133,10 @@ spec("native raft replication")
         response.granted = true;
         response.match_index = 1U;
         ready = replication_ready(messages);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_true(ready.commit_changed);
         check_equal(ready.commit_index, 1U);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.commit_index, 1U);
         tr_raft_core_destroy(core);
     }
@@ -156,11 +156,11 @@ spec("native raft replication")
         request.term = 1U;
         request.previous_log_index = 4U;
         request.previous_log_term = 1U;
-        check_equal(tr_raft_core_step(core, &request, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &request, &ready), SALTS_OK);
         check_false(ready.messages[0].granted);
         check_equal(ready.messages[0].reject_hint, 1U);
         check_false(ready.log_changed);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.last_log_index, 0U);
         tr_raft_core_destroy(core);
     }
@@ -187,11 +187,11 @@ spec("native raft replication")
             request.entries[index].data_length = 1U;
             request.entries[index].data[0] = (uint8_t) ('a' + index);
         }
-        check_equal(tr_raft_core_step(core, &request, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &request, &ready), SALTS_OK);
         check(ready.log_changed);
         check_equal(ready.log_entry_count, 3U);
         check_equal(ready.messages[0].match_index, 3U);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.last_log_index, 3U);
         tr_raft_core_destroy(core);
     }
@@ -216,22 +216,22 @@ spec("native raft replication")
             proposal.data_length = 1U;
             ready = replication_ready(messages);
             check_equal(tr_raft_core_propose(core, &proposal, &ready),
-                         TURBO_OK);
+                         SALTS_OK);
             if (index == 1U) {
                 check_equal(ready.message_count, 2U);
             } else {
                 check_equal(ready.message_count, 0U);
             }
-            check_equal(tr_raft_core_advance(core), TURBO_OK);
+            check_equal(tr_raft_core_advance(core), SALTS_OK);
         }
 
         ready = replication_ready(messages);
-        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
         check_equal(ready.message_count, 2U);
         check_equal(ready.messages[0].entry_count,
                       TR_RAFT_MAX_APPEND_ENTRIES);
         check_equal(ready.messages[0].entries[7].index, 8U);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         memset(&response, 0, sizeof(response));
         response.type = TR_RAFT_MSG_APPEND_RESPONSE;
@@ -242,12 +242,12 @@ spec("native raft replication")
         response.previous_log_index = 0U;
         response.match_index = 8U;
         ready = replication_ready(messages);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 1U);
         check_equal(ready.messages[0].entry_count, 2U);
         check_equal(ready.messages[0].entries[0].index, 9U);
         check_equal(ready.messages[0].entries[1].index, 10U);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.commit_index, 8U);
         check_equal(status.inflight_append_count, 2U);
         tr_raft_core_destroy(core);
@@ -272,8 +272,8 @@ spec("native raft replication")
             proposal.data_length = 1U;
             ready = replication_ready_capacity(messages, 8U);
             check_equal(tr_raft_core_propose(core, &proposal, &ready),
-                         TURBO_OK);
-            check_equal(tr_raft_core_advance(core), TURBO_OK);
+                         SALTS_OK);
+            check_equal(tr_raft_core_advance(core), SALTS_OK);
         }
 
         memset(&response, 0, sizeof(response));
@@ -285,26 +285,26 @@ spec("native raft replication")
         response.previous_log_index = 0U;
         response.match_index = 1U;
         ready = replication_ready_capacity(messages, 2U);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 2U);
         check_equal(ready.messages[0].previous_log_index, 1U);
         check_equal(ready.messages[0].entries[7].index, 9U);
         check_equal(ready.messages[1].previous_log_index, 9U);
         check_equal(ready.messages[1].entries[7].index, 17U);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         ready = replication_ready_capacity(messages, 8U);
-        check_equal(tr_raft_core_poll(core, &ready), TURBO_OK);
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
         check_equal(ready.message_count, 2U);
         check_equal(ready.messages[0].previous_log_index, 17U);
         check_equal(ready.messages[0].entries[7].index, 25U);
         check_equal(ready.messages[1].previous_log_index, 25U);
         check_equal(ready.messages[1].entries[7].index, 33U);
-        check_equal(tr_raft_core_progress(core, &progress), TURBO_OK);
+        check_equal(tr_raft_core_progress(core, &progress), SALTS_OK);
         check_equal(progress.peers[1].inflight_append_count, 4U);
         check_equal(progress.peers[1].max_inflight_append_requests, 4U);
         check_false(progress.peers[1].append_probe);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
         tr_raft_core_destroy(core);
     }
 
@@ -327,8 +327,8 @@ spec("native raft replication")
             proposal.data_length = 1U;
             ready = replication_ready_capacity(messages, 8U);
             check_equal(tr_raft_core_propose(core, &proposal, &ready),
-                         TURBO_OK);
-            check_equal(tr_raft_core_advance(core), TURBO_OK);
+                         SALTS_OK);
+            check_equal(tr_raft_core_advance(core), SALTS_OK);
         }
 
         memset(&response, 0, sizeof(response));
@@ -340,53 +340,53 @@ spec("native raft replication")
         response.previous_log_index = 0U;
         response.match_index = 1U;
         ready = replication_ready_capacity(messages, 8U);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 4U);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         response.previous_log_index = 9U;
         response.match_index = 17U;
         ready = replication_ready_capacity(messages, 8U);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 1U);
         check_equal(ready.messages[0].previous_log_index, 33U);
         check_equal(ready.messages[0].entries[0].index, 34U);
-        check_equal(tr_raft_core_progress(core, &progress), TURBO_OK);
+        check_equal(tr_raft_core_progress(core, &progress), SALTS_OK);
         check_equal(progress.peers[1].match_index, 17U);
         check_equal(progress.peers[1].inflight_append_count, 3U);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         response.granted = false;
         response.previous_log_index = 17U;
         response.match_index = 0U;
         response.reject_hint = 10U;
         ready = replication_ready_capacity(messages, 8U);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 1U);
         check_equal(ready.messages[0].previous_log_index, 17U);
         check_equal(ready.messages[0].entry_count,
                       TR_RAFT_MAX_APPEND_ENTRIES);
-        check_equal(tr_raft_core_progress(core, &progress), TURBO_OK);
+        check_equal(tr_raft_core_progress(core, &progress), SALTS_OK);
         check_equal(progress.peers[1].inflight_append_count, 1U);
         check_true(progress.peers[1].append_probe);
         check_equal(progress.peers[1].next_index, 26U);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         response.previous_log_index = 9U;
         response.reject_hint = 1U;
         ready = replication_ready_capacity(messages, 8U);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 0U);
-        check_equal(tr_raft_core_progress(core, &progress), TURBO_OK);
+        check_equal(tr_raft_core_progress(core, &progress), SALTS_OK);
         check_equal(progress.peers[1].next_index, 26U);
         check_equal(progress.peers[1].inflight_append_count, 1U);
 
         response.granted = true;
         response.match_index = 25U;
         ready = replication_ready_capacity(messages, 8U);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 0U);
-        check_equal(tr_raft_core_progress(core, &progress), TURBO_OK);
+        check_equal(tr_raft_core_progress(core, &progress), SALTS_OK);
         check_equal(progress.peers[1].match_index, 17U);
         check_equal(progress.peers[1].next_index, 26U);
         check_equal(progress.peers[1].inflight_append_count, 1U);
@@ -408,7 +408,7 @@ spec("native raft replication")
         config.initial_election_timeout_ticks = 5U;
         config.max_inflight_append_requests =
             TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS + 1U;
-        check_equal(tr_raft_core_create(&config, &core), TURBO_EINVAL);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_EINVAL);
         check_null(core);
     }
 
@@ -432,8 +432,8 @@ spec("native raft replication")
             proposal.data_length = 1U;
             ready = replication_ready_capacity(messages, 8U);
             check_equal(tr_raft_core_propose(core, &proposal, &ready),
-                         TURBO_OK);
-            check_equal(tr_raft_core_advance(core), TURBO_OK);
+                         SALTS_OK);
+            check_equal(tr_raft_core_advance(core), SALTS_OK);
         }
         memset(&response, 0, sizeof(response));
         response.type = TR_RAFT_MSG_APPEND_RESPONSE;
@@ -444,17 +444,17 @@ spec("native raft replication")
         response.previous_log_index = 0U;
         response.match_index = 1U;
         ready = replication_ready_capacity(messages, 8U);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 3U);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         ready = replication_ready_capacity(messages, 8U);
-        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
         check_equal(ready.message_count, 2U);
         check_equal(ready.messages[0].previous_log_index, 1U);
         check_equal(ready.messages[0].entry_count,
                       TR_RAFT_MAX_APPEND_ENTRIES);
-        check_equal(tr_raft_core_progress(core, &progress), TURBO_OK);
+        check_equal(tr_raft_core_progress(core, &progress), SALTS_OK);
         check_equal(progress.peers[1].inflight_append_count, 1U);
         check_true(progress.peers[1].append_probe);
         check_equal(progress.peers[1].match_index, 1U);

@@ -1,7 +1,7 @@
 #include <turboraft/raft_snapshot_sender.h>
 
 #include <openssl/sha.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -60,33 +60,31 @@ int tr_raft_snapshot_sender_create(
         config->peer_id == 0U || config->self_id == config->peer_id ||
         config->max_snapshot_bytes == 0U ||
         config->max_snapshot_bytes > TR_RAFT_WIRE_MAX_SNAPSHOT_BYTES) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
-    chunk_size = config->chunk_size == 0U
-                     ? TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES
-                     : config->chunk_size;
-    inflight = config->max_inflight_chunks == 0U
-                   ? 1U
-                   : config->max_inflight_chunks;
-    if (chunk_size > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES ||
+    chunk_size = config->chunk_size;
+    inflight = config->max_inflight_chunks;
+    if (chunk_size == 0U ||
+        chunk_size > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES ||
         chunk_size % TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES != 0U ||
+        inflight == 0U ||
         inflight > TR_RAFT_SNAPSHOT_MAX_INFLIGHT_CHUNKS ||
         chunk_size > SIZE_MAX / inflight ||
         chunk_size * inflight >
             TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES *
                 TR_RAFT_SNAPSHOT_MAX_INFLIGHT_CHUNKS) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
 
     sender = (tr_raft_snapshot_sender_t *)calloc(1U, sizeof(*sender));
     if (sender == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     sender->config = *config;
     sender->chunk_size = chunk_size;
     sender->max_inflight_chunks = inflight;
     *out_sender = sender;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_snapshot_sender_destroy(tr_raft_snapshot_sender_t *sender)
@@ -117,19 +115,19 @@ int tr_raft_snapshot_sender_begin(
     uint8_t *copy = NULL;
 
     if (sender == NULL || configuration == NULL ||
-        tr_raft_conf_validate(configuration) != TURBO_OK ||
+        tr_raft_conf_validate(configuration) != SALTS_OK ||
         leader_term == 0U || snapshot_index == 0U ||
         snapshot_term == 0U || snapshot_term > leader_term ||
         size > sender->config.max_snapshot_bytes || (size > 0U && data == NULL)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (sender->active && !sender->complete) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     if (size > 0U) {
         copy = (uint8_t *)malloc(size);
         if (copy == NULL) {
-            return TURBO_ENOMEM;
+            return SALTS_ENOMEM;
         }
         memcpy(copy, data, size);
     }
@@ -143,7 +141,7 @@ int tr_raft_snapshot_sender_begin(
     sender->configuration = *configuration;
     SHA256(size > 0U ? sender->data : (const uint8_t *)"", size, sender->digest);
     sender->active = true;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_snapshot_sender_next_chunk(
@@ -155,20 +153,20 @@ int tr_raft_snapshot_sender_next_chunk(
     tr_snapshot_claim_t *claim;
 
     if (sender == NULL || out_chunk == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (!sender->active || sender->complete) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     if (sender->claim_count >= sender->max_inflight_chunks) {
         if (sender->max_inflight_chunks != 1U) {
-            return TURBO_EBUSY;
+            return SALTS_EBUSY;
         }
         sender->next_offset = sender->claims[0].offset;
         sender->claim_count = 0U;
     }
     if (sender->next_offset == sender->size && sender->claim_count != 0U) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
 
     remaining = sender->size - (size_t)sender->next_offset;
@@ -194,7 +192,7 @@ int tr_raft_snapshot_sender_next_chunk(
     claim->offset = sender->next_offset;
     claim->length = length;
     sender->next_offset += length;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_snapshot_sender_cancel_chunk(
@@ -204,30 +202,30 @@ int tr_raft_snapshot_sender_cancel_chunk(
     tr_snapshot_claim_t *claim;
 
     if (sender == NULL || sender->claim_count == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     claim = &sender->claims[sender->claim_count - 1U];
     if (claim->offset != snapshot_offset) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     sender->next_offset = claim->offset;
     memset(claim, 0, sizeof(*claim));
     --sender->claim_count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_snapshot_sender_prepare_resume(tr_raft_snapshot_sender_t *sender)
 {
     if (sender == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (!sender->active || sender->complete) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     sender->next_offset = sender->acknowledged_offset;
     sender->claim_count = 0U;
     memset(sender->claims, 0, sizeof(sender->claims));
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_snapshot_sender_acknowledge(
@@ -238,40 +236,40 @@ int tr_raft_snapshot_sender_acknowledge(
     bool boundary = false;
 
     if (sender == NULL || ack == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (!sender->active) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     if (ack->from != sender->config.peer_id || ack->to != sender->config.self_id ||
         ack->term != sender->leader_term ||
         ack->snapshot_index != sender->snapshot_index ||
         ack->snapshot_size != sender->size ||
         memcmp(ack->snapshot_digest, sender->digest, sizeof(sender->digest)) != 0) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (sender->complete) {
         return ack->accepted && ack->next_offset == sender->size
-                   ? TURBO_OK
-                   : TURBO_EPROTO;
+                   ? SALTS_OK
+                   : SALTS_EPROTO;
     }
     if (ack->next_offset > sender->next_offset ||
         (ack->next_offset != sender->size &&
          ack->next_offset % sender->chunk_size != 0U)) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (!ack->accepted) {
         if (ack->next_offset > sender->acknowledged_offset) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         sender->acknowledged_offset = ack->next_offset;
         sender->next_offset = ack->next_offset;
         sender->claim_count = 0U;
         memset(sender->claims, 0, sizeof(sender->claims));
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (ack->next_offset < sender->acknowledged_offset) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     boundary = ack->next_offset == sender->acknowledged_offset;
     for (released = 0U; released < sender->claim_count; ++released) {
@@ -282,7 +280,7 @@ int tr_raft_snapshot_sender_acknowledge(
         }
     }
     if (!boundary) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     sender->acknowledged_offset = ack->next_offset;
     released = 0U;
@@ -299,7 +297,7 @@ int tr_raft_snapshot_sender_acknowledge(
                released * sizeof(sender->claims[0]));
     }
     sender->complete = ack->next_offset == sender->size;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_snapshot_sender_get_status(
@@ -307,7 +305,7 @@ int tr_raft_snapshot_sender_get_status(
     tr_raft_snapshot_sender_status_t *out_status)
 {
     if (sender == NULL || out_status == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(out_status, 0, sizeof(*out_status));
     out_status->active = sender->active;
@@ -320,5 +318,5 @@ int tr_raft_snapshot_sender_get_status(
     out_status->next_offset = sender->next_offset;
     out_status->inflight_chunks = sender->claim_count;
     out_status->max_inflight_chunks = sender->max_inflight_chunks;
-    return TURBO_OK;
+    return SALTS_OK;
 }

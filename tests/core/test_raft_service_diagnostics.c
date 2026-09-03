@@ -1,7 +1,7 @@
 #include <turboraft/raft_service.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -14,7 +14,7 @@ typedef struct diagnostic_state {
 static int diagnostic_ok(void *context)
 {
     (void) context;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int diagnostic_hard_state(void *context,
@@ -24,14 +24,14 @@ static int diagnostic_hard_state(void *context,
     (void) context;
     (void) term;
     (void) vote;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int diagnostic_index(void *context, tr_raft_index_t index)
 {
     (void) context;
     (void) index;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int diagnostic_append(void *context,
@@ -39,7 +39,7 @@ static int diagnostic_append(void *context,
                              size_t count)
 {
     (void) context;
-    return entries != NULL && count != 0U ? TURBO_OK : TURBO_EINVAL;
+    return entries != NULL && count != 0U ? SALTS_OK : SALTS_EINVAL;
 }
 
 static int diagnostic_apply(void *context,
@@ -47,14 +47,14 @@ static int diagnostic_apply(void *context,
                             size_t count)
 {
     (void) context;
-    return entries != NULL && count != 0U ? TURBO_OK : TURBO_EINVAL;
+    return entries != NULL && count != 0U ? SALTS_OK : SALTS_EINVAL;
 }
 
 static int diagnostic_enqueue(void *context,
                               const tr_raft_message_t *message)
 {
     (void) context;
-    return message != NULL ? TURBO_OK : TURBO_EINVAL;
+    return message != NULL ? SALTS_OK : SALTS_EINVAL;
 }
 
 static int diagnostic_snapshot_create(void *context,
@@ -67,12 +67,12 @@ static int diagnostic_snapshot_create(void *context,
 
     if (state == NULL || index == 0U || output == NULL || capacity < 1U ||
         out_size == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     state->snapshot_create_count++;
     output[0] = 0x5aU;
     *out_size = 1U;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int diagnostic_snapshot_store(void *context,
@@ -87,11 +87,11 @@ static int diagnostic_snapshot_store(void *context,
     if (state == NULL || index == 0U || term == 0U ||
         configuration == NULL || data == NULL || size != 1U ||
         data[0] != 0x5aU) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     state->snapshot_store_count++;
     state->stored_index = index;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static void diagnostic_configure(tr_raft_service_config_t *config,
@@ -141,33 +141,33 @@ spec("raft service diagnostics and manual snapshots")
 
         memset(&state, 0, sizeof(state));
         diagnostic_configure(&config, &state);
-        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
         check_equal(tr_raft_service_configuration(service, &configuration),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(configuration.member_count, 1U);
         check_equal(configuration.members[0].node_id, 1U);
         check_equal(configuration.members[0].roles,
                      TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER);
-        check_equal(tr_raft_service_progress(service, &progress), TURBO_OK);
+        check_equal(tr_raft_service_progress(service, &progress), SALTS_OK);
         check_equal(progress.peer_count, 1U);
         check_equal(progress.peers[0].node_id, 1U);
         check(progress.peers[0].recent_active);
         check_equal(tr_raft_service_trigger_snapshot(service),
-                     TURBO_ENOENT);
+                     SALTS_ENOENT);
 
-        check_equal(tr_raft_service_tick(service, &tick), TURBO_OK);
+        check_equal(tr_raft_service_tick(service, &tick), SALTS_OK);
         proposal.command_id = 11U;
         proposal.data = command;
         proposal.data_length = sizeof(command);
-        check_equal(tr_raft_service_propose(service, &proposal), TURBO_OK);
-        check_equal(tr_raft_service_trigger_snapshot(service), TURBO_OK);
+        check_equal(tr_raft_service_propose(service, &proposal), SALTS_OK);
+        check_equal(tr_raft_service_trigger_snapshot(service), SALTS_OK);
         check_equal(state.snapshot_create_count, 1U);
         check_equal(state.snapshot_store_count, 1U);
         check_equal(state.stored_index, 1U);
-        check_equal(tr_raft_service_status(service, &status), TURBO_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
         check_equal(status.core.log_base_index, 1U);
         check_equal(tr_raft_service_trigger_snapshot(service),
-                     TURBO_ENOENT);
+                     SALTS_ENOENT);
 
         tr_raft_service_destroy(service);
     }
@@ -181,9 +181,9 @@ spec("raft service diagnostics and manual snapshots")
         memset(&state, 0, sizeof(state));
         diagnostic_configure(&config, &state);
         memset(&config.snapshot_policy, 0, sizeof(config.snapshot_policy));
-        check_equal(tr_raft_service_create(&config, &service), TURBO_OK);
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
         check_equal(tr_raft_service_trigger_snapshot(service),
-                     TURBO_EPROTONOSUPPORT);
+                     SALTS_EPROTONOSUPPORT);
         tr_raft_service_destroy(service);
     }
 }

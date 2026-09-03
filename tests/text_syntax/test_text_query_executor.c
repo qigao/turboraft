@@ -73,7 +73,7 @@ suite("text query executor") {
 
     check_equal(tr_text_query_execute(
                      &plan, &tr_text_query_executor_test_ops, &state),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(state.calls, 3);
     check_equal(state.status_calls, 1);
     check_equal(state.members_calls, 1);
@@ -89,13 +89,13 @@ suite("text query executor") {
     plan.command_count = 1u;
     plan.commands[0].kind = TR_TEXT_QUERY_SHOW_PROGRESS;
 
-    check_equal(tr_text_query_execute(&plan, &ops, NULL), TURBO_ENOTSUP);
+    check_equal(tr_text_query_execute(&plan, &ops, NULL), SALTS_ENOTSUP);
   }
 
   it("stops after the first callback error") {
     tr_text_query_plan_t plan = {0};
     tr_text_query_executor_test_state_t state = {
-        .status_result = TURBO_EIO};
+        .status_result = SALTS_EIO};
 
     plan.command_count = 2u;
     plan.commands[0].kind = TR_TEXT_QUERY_SHOW_STATUS;
@@ -103,7 +103,7 @@ suite("text query executor") {
 
     check_equal(tr_text_query_execute(
                      &plan, &tr_text_query_executor_test_ops, &state),
-                 TURBO_EIO);
+                 SALTS_EIO);
     check_equal(state.calls, 1);
     check_equal(state.status_calls, 1);
     check_equal(state.members_calls, 0);
@@ -117,7 +117,7 @@ suite("text query executor") {
 
     check_equal(tr_text_query_execute(
                      &plan, &tr_text_query_executor_test_ops, &state),
-                 TURBO_EINVAL);
+                 SALTS_EINVAL);
     check_equal(state.calls, 0);
   }
 }

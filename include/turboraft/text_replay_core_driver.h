@@ -18,7 +18,7 @@ extern "C" {
  * The driver owns a fixed set of cores and a simulated message network. It
  * executes every tr_text_replay_action_t, including the fault-injection and
  * expectation actions that the generic tr_text_replay_execute() adapter
- * leaves unimplemented (they return TURBO_ENOTSUP there).
+ * leaves unimplemented (they return SALTS_ENOTSUP there).
  *
  * Semantics:
  * - NODE validates that the referenced node exists in the driver; nodes are
@@ -35,23 +35,23 @@ extern "C" {
  *   "append_request"). DELAY_NEXT holds the message for the given number of
  *   ticks; DUPLICATE_NEXT enqueues the message twice. Up to
  *   TR_REPLAY_DRIVER_MAX_FILTERS filters may be pending; adding more fails
- *   with TURBO_ENOSPC.
+ *   with SALTS_ENOSPC.
  * - PARTITION removes the directed link from->to; HEAL restores it. Messages
  *   on a partitioned link are dropped at delivery time.
  * - SUBMIT proposes an entry on the target node (which must be the leader)
  *   with command_id = request_id and data = the decoded payload, and stores a
  *   (term, index) receipt keyed by request_id. Duplicate request ids fail
- *   with TURBO_EALREADY.
+ *   with SALTS_EALREADY.
  * - POLL checks the stored receipt against the operation state. The driver
  *   advances time internally (ticking all nodes) up to timeout_ticks until
- *   the target is reached; TURBO_ETIMEDOUT is returned if it is not. This is
+ *   the target is reached; SALTS_ETIMEDOUT is returned if it is not. This is
  *   a driver-specific behavior: the generic tr_text_replay_execute() adapter
  *   never advances time.
  * - EXPECT_ROLE and EXPECT_COMMIT_INDEX assert on the node's core status;
- *   a failed expectation returns TURBO_EPROTO.
+ *   a failed expectation returns SALTS_EPROTO.
  *
  * All queues and delivery loops are bounded; exceeding a bound fails fast
- * with TURBO_ENOSPC or TURBO_EPROTO.
+ * with SALTS_ENOSPC or SALTS_EPROTO.
  */
 
 #define TR_REPLAY_DRIVER_MAX_NODES TR_RAFT_MAX_MEMBERS

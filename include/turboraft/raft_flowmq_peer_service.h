@@ -1,7 +1,7 @@
 #ifndef TURBORAFT_RAFT_FLOWMQ_PEER_SERVICE_H
 #define TURBORAFT_RAFT_FLOWMQ_PEER_SERVICE_H
 
-#include <turboraft/raft_coronet_transport.h>
+#include <turboraft/raft_transport.h>
 
 #include <flowmq.h>
 
@@ -11,126 +11,113 @@ extern "C" {
 
 #define TR_RAFT_FLOWMQ_MAX_IDENTITY_SIZE 255U
 #define TR_RAFT_FLOWMQ_MAX_OUTBOUND_QUEUE_CAPACITY 65536U
-#define TR_RAFT_FLOWMQ_DEFAULT_SEND_BATCH_ITEMS 4U
-#define TR_RAFT_FLOWMQ_MAX_SEND_BATCH_ITEMS 256U
-#define TR_RAFT_FLOWMQ_DEFAULT_STREAM_RECV_BUFFER_BYTES (256U * 1024U)
-#define TR_RAFT_FLOWMQ_MIN_INBOUND_QUEUE_BYTES (512U * 1024U)
-#define TR_RAFT_FLOWMQ_MAX_INBOUND_QUEUE_BYTES (64U * 1024U * 1024U)
-#define TR_RAFT_FLOWMQ_DEFAULT_INFLIGHT_DATA_BYTES (4U * 1024U * 1024U)
-#define TR_RAFT_FLOWMQ_MAX_INFLIGHT_DATA_BYTES (64U * 1024U * 1024U)
+#define TR_RAFT_FLOWMQ_RECOMMENDED_SEND_BATCH_ITEMS 16U
+#define TR_RAFT_FLOWMQ_RECOMMENDED_RECEIVE_BATCH_ITEMS 64U
+#define TR_RAFT_FLOWMQ_RECOMMENDED_INFLIGHT_DATA_BYTES (4U * 1024U * 1024U)
 
 typedef struct tr_raft_flowmq_peer_service tr_raft_flowmq_peer_service_t;
 
-/** One directed DEALER connection to a remote node's ROUTER endpoint. */
+typedef struct tr_raft_flowmq_tls_config {
+    const char *ca_file;
+    const char *cert_file;
+    const char *key_file;
+    const char *key_password;
+    const char *server_name;
+    int require_client_certificate;
+} tr_raft_flowmq_tls_config_t;
+
 typedef struct tr_raft_flowmq_peer_config {
-  tr_raft_node_id_t node_id;
-  /** FMQ identity expected on this peer's inbound DEALER. */
-  const char *peer_identity;
-  /** DEALER/CONNECT endpoint. TurboRaft owns its context and callbacks. */
-  flowmq_connect_endpoint_config_t endpoint;
+    tr_raft_node_id_t node_id;
+    /** Required completed negotiation for this exact peer. */
+    const tr_raft_handshake_result_t *handshake;
+    /** Exact ROUTER identity presented by this peer. */
+    const char *identity;
+    /** FlowMQ endpoint URI, for example tcp://127.0.0.1:9002. */
+    const char *endpoint;
+    tr_raft_flowmq_tls_config_t tls;
 } tr_raft_flowmq_peer_config_t;
 
 typedef struct tr_raft_flowmq_peer_service_config {
-  tr_raft_handshake_config_t handshake;
-  /** ROUTER/BIND TLS or WSS endpoint. TurboRaft owns its context and callbacks. */
-  flowmq_router_endpoint_config_t router_endpoint;
-  const tr_raft_flowmq_peer_config_t *peers;
-  size_t peer_count;
-  size_t outbound_queue_capacity;
-  /** Zero selects the four-frame/256 KiB throughput-oriented default. */
-  size_t max_send_batch_items;
-  /** Zero derives the bound from max_send_batch_items and max frame size. */
-  size_t max_send_batch_bytes;
-  /** Per-peer retained DATA_CHUNK payload budget; zero selects 4 MiB. */
-  size_t max_inflight_data_bytes;
-  /** Power-of-two byte capacity between I/O callbacks and step(). */
-  size_t inbound_queue_capacity_bytes;
-  tr_raft_coronet_message_handler_fn on_message;
-  void *message_context;
-  tr_raft_coronet_snapshot_handler_fn on_snapshot;
-  void *snapshot_context;
+    tr_raft_handshake_config_t protocol;
+    const char *bind_endpoint;
+    const char *local_identity;
+    tr_raft_flowmq_tls_config_t tls;
+    const tr_raft_flowmq_peer_config_t *peers;
+    size_t peer_count;
+    /** All capacity, batch, HWM, and reconnect fields are required. */
+    size_t outbound_queue_capacity;
+    size_t max_send_batch_items;
+    size_t max_receive_batch_items;
+    size_t max_inflight_data_bytes;
+    size_t send_hwm_messages;
+    size_t receive_hwm_messages;
+    size_t send_hwm_bytes;
+    size_t receive_hwm_bytes;
+    uint32_t reconnect_initial_ms;
+    uint32_t reconnect_max_ms;
+    uint32_t heartbeat_interval_ms;
+    uint32_t heartbeat_timeout_ms;
+    tr_raft_transport_message_handler_fn on_message;
+    void *message_context;
+    tr_raft_transport_payload_handler_fn on_payload;
+    void *payload_context;
 } tr_raft_flowmq_peer_service_config_t;
 
 typedef struct tr_raft_flowmq_peer_service_step_result {
-  size_t peer_count;
-  size_t control_frames_sent;
-  size_t payload_frames_sent;
-  size_t payload_batches_sent;
-  size_t blocked_peer_count;
-  size_t failed_peer_count;
-  int first_error;
+    size_t received_frames;
+    size_t sent_frames;
+    size_t blocked_peer_count;
+    size_t failed_peer_count;
+    int first_error;
 } tr_raft_flowmq_peer_service_step_result_t;
 
 typedef struct tr_raft_flowmq_peer_service_status {
-  size_t peer_count;
-  size_t outbound_queue_capacity;
-  size_t max_send_batch_items;
-  size_t max_send_batch_bytes;
-  size_t max_inflight_data_bytes;
-  size_t queued_data_bytes;
-  size_t inbound_queue_capacity_bytes;
-  size_t queued_inbound_bytes;
-  size_t queued_payload_count;
-  size_t handshake_complete_count;
-  uint32_t callback_depth;
-  int started;
-  int stopping;
-  int step_active;
-  int last_error;
+    size_t peer_count;
+    size_t queued_payload_count;
+    size_t queued_data_bytes;
+    size_t outbound_queue_capacity;
+    size_t max_inflight_data_bytes;
+    uint64_t frames_sent;
+    uint64_t frames_received;
+    int started;
+    int stopping;
+    int step_active;
+    int last_error;
 } tr_raft_flowmq_peer_service_status_t;
 
 /**
- * Creates one ROUTER and one DEALER per peer. Each FlowMQ endpoint owns its
- * CoroNet execution context; the service owns their complete lifecycle.
- * Only TLS/WSS endpoints are accepted. URI schemes select the FlowMQ transport;
- * no transport fallback is performed.
- *
- * Public lifecycle, enqueue, step, and status calls are serialized on one
- * control thread. Endpoint callback fields and context fields must be zero;
- * TurboRaft installs private callbacks and owned CoroNet contexts. Independent
- * FlowMQ I/O contexts serialize ingress through a
- * producer mutex and copy frames into one bounded SPSC queue; Raft callbacks
- * run from step() on the control thread.
+ * Creates a caller-driven service with one ROUTER and one DEALER per peer.
+ * No worker thread is created. Every lifecycle, enqueue, and step call belongs
+ * to one owner thread. FlowMQ copies a frame before a successful send returns.
  */
-int tr_raft_flowmq_peer_service_create(const tr_raft_flowmq_peer_service_config_t *config,
-                                       tr_raft_flowmq_peer_service_t **out_service);
+int tr_raft_flowmq_peer_service_create(
+    const tr_raft_flowmq_peer_service_config_t *config,
+    tr_raft_flowmq_peer_service_t **out_service);
 
-/**
- * start() synchronously makes the local ROUTER ready, then starts one bounded
- * connector thread per peer. A remote peer being offline does not fail local
- * startup; each connector retries with endpoint.reconnect_initial_ms. Zero
- * disables retry after the first connection failure.
- */
+/** Binds the ROUTER and admits asynchronous DEALER connects. */
 int tr_raft_flowmq_peer_service_start(tr_raft_flowmq_peer_service_t *service);
 
-/**
- * Drains copied inbound frames, drives pending Raft HELLO/ACK control frames,
- * and sends one configured bounded payload batch per ready peer. Transient disconnection
- * keeps queue ownership in this service. Inbound saturation fails fast with
- * TURBO_ENOSPC because an authentication or protocol event may have been lost.
- */
-int tr_raft_flowmq_peer_service_step(tr_raft_flowmq_peer_service_t *service,
-                                     tr_raft_flowmq_peer_service_step_result_t *out_result);
+/** Drives I/O and dispatches bounded receive/send batches. */
+int tr_raft_flowmq_peer_service_step(
+    tr_raft_flowmq_peer_service_t *service,
+    tr_raft_flowmq_peer_service_step_result_t *out_result);
 
-/**
- * Rejects new work, requests connector shutdown, joins every connector, then
- * stops DEALER and ROUTER endpoints. A connector currently inside FlowMQ start
- * may delay shutdown by at most the endpoint connection timeout.
- */
+/** Closes sockets in DEALER-before-ROUTER order and terminates the context. */
 int tr_raft_flowmq_peer_service_stop(tr_raft_flowmq_peer_service_t *service);
 
-/** Requires stop completion and no active callback or step. */
+/** Requires stop after start; releases queued payloads and service storage. */
 int tr_raft_flowmq_peer_service_destroy(tr_raft_flowmq_peer_service_t *service);
 
-/** Runtime transport adapter; copies one Raft message into its peer FIFO. */
-int tr_raft_flowmq_peer_service_enqueue(void *context, const tr_raft_message_t *message);
+/** Runtime adapter. Copies one message into the destination peer FIFO. */
+int tr_raft_flowmq_peer_service_enqueue(void *context,
+                                        const tr_raft_message_t *message);
+int tr_raft_flowmq_peer_service_enqueue_payload(
+    tr_raft_flowmq_peer_service_t *service,
+    const tr_raft_transport_payload_t *payload);
 
-/** Copies one tagged Raft/snapshot payload into its peer FIFO. */
-int tr_raft_flowmq_peer_service_enqueue_payload(tr_raft_flowmq_peer_service_t *service,
-                                                const tr_raft_coronet_payload_t *payload);
-
-int tr_raft_flowmq_peer_service_get_status(const tr_raft_flowmq_peer_service_t *service,
-                                           tr_raft_flowmq_peer_service_status_t *out_status);
+int tr_raft_flowmq_peer_service_get_status(
+    const tr_raft_flowmq_peer_service_t *service,
+    tr_raft_flowmq_peer_service_status_t *out_status);
 
 #ifdef __cplusplus
 }

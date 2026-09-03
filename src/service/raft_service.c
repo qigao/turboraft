@@ -1,6 +1,6 @@
 #include <turboraft/raft_service.h>
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -64,15 +64,15 @@ static int tr_service_snapshot_policy_validate(
                                  : config->core.max_log_entries;
 
     if (tr_service_snapshot_policy_disabled(policy)) {
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (policy->applied_entry_threshold == 0U ||
         policy->applied_entry_threshold > max_log_entries ||
         policy->max_snapshot_bytes == 0U || policy->create == NULL ||
         policy->store == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_service_snapshot(tr_raft_service_t *service, bool force)
@@ -83,44 +83,44 @@ static int tr_service_snapshot(tr_raft_service_t *service, bool force)
     int result;
 
     if (service->snapshot_policy.applied_entry_threshold == 0U) {
-        return force ? TURBO_EPROTONOSUPPORT : TURBO_OK;
+        return force ? SALTS_EPROTONOSUPPORT : SALTS_OK;
     }
     result = tr_raft_core_status(service->core, &status);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
     if (status.applied_index == status.log_base_index) {
-        return force ? TURBO_ENOENT : TURBO_OK;
+        return force ? SALTS_ENOENT : SALTS_OK;
     }
     if (!force && status.applied_index - status.log_base_index <
         service->snapshot_policy.applied_entry_threshold) {
-        return TURBO_OK;
+        return SALTS_OK;
     }
     result = tr_raft_core_snapshot_point(service->core, &point);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
     result = service->snapshot_policy.create(
         service->snapshot_policy.create_context, point.index,
         service->snapshot_buffer, service->snapshot_policy.max_snapshot_bytes,
         &snapshot_size);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
     if (snapshot_size > service->snapshot_policy.max_snapshot_bytes) {
-        return tr_service_fault(service, TURBO_ENOSPC);
+        return tr_service_fault(service, SALTS_ENOSPC);
     }
     result = service->snapshot_policy.store(
         service->snapshot_policy.store_context, point.index, point.term,
         &point.configuration, service->snapshot_buffer, snapshot_size);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
     result = tr_raft_core_compact(service->core, &point);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_service_process_ready(
@@ -130,11 +130,11 @@ static int tr_service_process_ready(
     int result;
 
     if (!tr_service_ready_has_effects(ready)) {
-        return TURBO_OK;
+        return SALTS_OK;
     }
     result = tr_raft_runtime_process(
         &service->runtime, ready, &service->last_runtime_result);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
     if (ready->read_state_ready) {
@@ -167,16 +167,16 @@ int tr_raft_service_create(
     int result;
 
     if (config == NULL || out_service == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_service_snapshot_policy_validate(config);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     *out_service = NULL;
     service = (tr_raft_service_t *) calloc(1U, sizeof(*service));
     if (service == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     service->storage = config->storage;
     service->transport = config->transport;
@@ -187,25 +187,25 @@ int tr_raft_service_create(
             service->snapshot_policy.max_snapshot_bytes);
         if (service->snapshot_buffer == NULL) {
             free(service);
-            return TURBO_ENOMEM;
+            return SALTS_ENOMEM;
         }
     }
     result = tr_raft_core_create(&config->core, &service->core);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         free(service->snapshot_buffer);
         free(service);
         return result;
     }
     result = tr_service_runtime_init(service, service->core,
                                      &service->runtime);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         tr_raft_core_destroy(service->core);
         free(service->snapshot_buffer);
         free(service);
         return result;
     }
     *out_service = service;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_service_destroy(tr_raft_service_t *service)
@@ -226,14 +226,14 @@ int tr_raft_service_tick(
     int result;
 
     if (service == NULL || tick == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (service->faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_tick(service->core, tick, &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_service_process_ready(service, &ready);
@@ -247,14 +247,14 @@ int tr_raft_service_step(
     int result;
 
     if (service == NULL || message == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (service->faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_step(service->core, message, &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_service_process_ready(service, &ready);
@@ -268,14 +268,14 @@ int tr_raft_service_propose(
     int result;
 
     if (service == NULL || proposal == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (service->faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_propose(service->core, proposal, &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_service_process_ready(service, &ready);
@@ -290,14 +290,14 @@ int tr_raft_service_propose_with_receipt(
     int result;
 
     if (service == NULL || proposal == NULL || out_receipt == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_service_propose(service, proposal);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_raft_core_status(service->core, &status);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_raft_core_operation_status(service->core, status.term,
@@ -313,15 +313,15 @@ int tr_raft_service_transfer_leadership(
     int result;
 
     if (service == NULL || transferee_id == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (service->faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_transfer_leadership(
         service->core, transferee_id, &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_service_process_ready(service, &ready);
@@ -335,14 +335,14 @@ int tr_raft_service_change_membership(
     int result;
 
     if (service == NULL || change == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (service->faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_change_membership(service->core, change, &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_service_process_ready(service, &ready);
@@ -357,14 +357,14 @@ int tr_raft_service_change_membership_with_receipt(
     int result;
 
     if (service == NULL || change == NULL || out_receipt == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_service_change_membership(service, change);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_raft_core_status(service->core, &status);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_raft_core_operation_status(service->core, status.term,
@@ -379,17 +379,17 @@ int tr_raft_service_read_index(tr_raft_service_t *service,
     int result;
 
     if (service == NULL || context_id == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (service->faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (service->read_state_available) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_read_index(service->core, context_id, &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_service_process_ready(service, &ready);
@@ -402,25 +402,25 @@ int tr_raft_service_take_read_state(tr_raft_service_t *service,
     int result;
 
     if (service == NULL || out_read_state == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (service->faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (!service->read_state_available) {
-        return TURBO_ENOENT;
+        return SALTS_ENOENT;
     }
     result = tr_raft_core_status(service->core, &status);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
     if (status.applied_index < service->read_state.index) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     *out_read_state = service->read_state;
     memset(&service->read_state, 0, sizeof(service->read_state));
     service->read_state_available = false;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_service_poll(tr_raft_service_t *service)
@@ -429,14 +429,14 @@ int tr_raft_service_poll(tr_raft_service_t *service)
     int result;
 
     if (service == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (service->faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_poll(service->core, &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_service_process_ready(service, &ready);
@@ -445,10 +445,10 @@ int tr_raft_service_poll(tr_raft_service_t *service)
 int tr_raft_service_trigger_snapshot(tr_raft_service_t *service)
 {
     if (service == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (service->faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     return tr_service_snapshot(service, true);
 }
@@ -461,15 +461,15 @@ int tr_raft_service_snapshot_completed(tr_raft_service_t *service,
     int result;
 
     if (service == NULL || peer_id == 0U || snapshot_index == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (service->faulted) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_snapshot_completed(service->core, peer_id,
                                              snapshot_index, &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_service_process_ready(service, &ready);
@@ -493,22 +493,22 @@ int tr_raft_service_reload(
     int result;
 
     if (service == NULL || recovery_config == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_core_status(service->core, &current);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
     if (!service->faulted && current.ready_outstanding) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     result = tr_raft_core_create(recovery_config, &replacement);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
     result = tr_service_runtime_init(service, replacement,
                                      &replacement_runtime);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         tr_raft_core_destroy(replacement);
         return tr_service_fault(service, result);
     }
@@ -521,8 +521,8 @@ int tr_raft_service_reload(
     memset(&service->read_state, 0, sizeof(service->read_state));
     service->read_state_available = false;
     service->faulted = false;
-    service->cause = TURBO_OK;
-    return TURBO_OK;
+    service->cause = SALTS_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_service_status(
@@ -532,7 +532,7 @@ int tr_raft_service_status(
     int result;
 
     if (service == NULL || out_status == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(out_status, 0, sizeof(*out_status));
     out_status->faulted = service->faulted;
@@ -548,7 +548,7 @@ int tr_raft_service_configuration(
     tr_raft_conf_t *out_configuration)
 {
     return service == NULL || out_configuration == NULL
-               ? TURBO_EINVAL
+               ? SALTS_EINVAL
                : tr_raft_core_configuration(service->core,
                                             out_configuration);
 }
@@ -558,7 +558,7 @@ int tr_raft_service_progress(
     tr_raft_progress_view_t *out_progress)
 {
     return service == NULL || out_progress == NULL
-               ? TURBO_EINVAL
+               ? SALTS_EINVAL
                : tr_raft_core_progress(service->core, out_progress);
 }
 
@@ -569,7 +569,7 @@ int tr_raft_service_operation_status(
     tr_raft_operation_status_t *out_status)
 {
     if (service == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     return tr_raft_core_operation_status(service->core, term, index,
                                          out_status);

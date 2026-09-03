@@ -3,7 +3,7 @@
 #include <turboraft/raft_snapshot_receiver.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -34,17 +34,17 @@ static int snapshot_capture_emit(
         (snapshot_emit_capture_t *) context;
 
     if (capture == NULL || chunk == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (capture->fail_next) {
         capture->fail_next = false;
-        return TURBO_EPIPE;
+        return SALTS_EPIPE;
     }
     if (capture->count >= sizeof(capture->chunks) / sizeof(capture->chunks[0])) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
     capture->chunks[capture->count++] = *chunk;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int snapshot_capture_install(
@@ -62,12 +62,12 @@ static int snapshot_capture_install(
     if (capture == NULL || leader_term != 7U || snapshot_index != 9U ||
         snapshot_term != 6U || configuration == NULL || data == NULL ||
         size != sizeof(capture->data)) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     memcpy(capture->data, data, size);
     capture->size = size;
     ++capture->count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 spec("raft snapshot coordinator")
@@ -96,6 +96,9 @@ spec("raft snapshot coordinator")
         coordinator_config.self_id = 1U;
         coordinator_config.peer_id = 2U;
         coordinator_config.max_snapshot_bytes = 1024U;
+        coordinator_config.chunk_size =
+            TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+        coordinator_config.max_inflight_chunks = 1U;
         coordinator_config.emit = snapshot_capture_emit;
         coordinator_config.emit_context = &emitted;
         receiver_config.self_id = 2U;
@@ -104,27 +107,27 @@ spec("raft snapshot coordinator")
         receiver_config.install_context = &installed;
 
         check_equal(tr_raft_snapshot_coordinator_create(
-                         &coordinator_config, &coordinator), TURBO_OK);
+                         &coordinator_config, &coordinator), SALTS_OK);
         check_equal(tr_raft_snapshot_receiver_create(
-                         &receiver_config, &receiver), TURBO_OK);
+                         &receiver_config, &receiver), SALTS_OK);
         check_equal(tr_raft_snapshot_coordinator_begin(
                          coordinator, 7U, 9U, 6U,
                          &coordinator_configuration,
-                         snapshot, sizeof(snapshot)), TURBO_OK);
+                         snapshot, sizeof(snapshot)), SALTS_OK);
         check_equal(emitted.count, 1U);
         check_equal(emitted.chunks[0].snapshot_offset, 0U);
         check_equal(emitted.chunks[0].data_length, 512U);
 
         check_equal(tr_raft_snapshot_receiver_handle(
                          receiver, &emitted.chunks[0], &receive_result),
-                     TURBO_OK);
+                     SALTS_OK);
         check(!receive_result.installed);
         emitted.fail_next = true;
         check_equal(tr_raft_snapshot_coordinator_handle_ack(
-                         coordinator, &receive_result.ack), TURBO_EPIPE);
+                         coordinator, &receive_result.ack), SALTS_EPIPE);
         check_equal(emitted.count, 1U);
         check_equal(tr_raft_snapshot_coordinator_resume(coordinator),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(emitted.count, 2U);
         check_equal(emitted.chunks[1].snapshot_offset, 512U);
         check_equal(emitted.chunks[1].data_length, 88U);
@@ -132,14 +135,14 @@ spec("raft snapshot coordinator")
 
         check_equal(tr_raft_snapshot_receiver_handle(
                          receiver, &emitted.chunks[1], &receive_result),
-                     TURBO_OK);
+                     SALTS_OK);
         check(receive_result.installed);
         check_equal(tr_raft_snapshot_coordinator_handle_ack(
-                         coordinator, &receive_result.ack), TURBO_OK);
+                         coordinator, &receive_result.ack), SALTS_OK);
         check_equal(tr_raft_snapshot_coordinator_handle_ack(
-                         coordinator, &receive_result.ack), TURBO_OK);
+                         coordinator, &receive_result.ack), SALTS_OK);
         check_equal(tr_raft_snapshot_coordinator_get_status(
-                         coordinator, &status), TURBO_OK);
+                         coordinator, &status), SALTS_OK);
         check(status.complete);
         check_equal(status.acknowledged_offset, sizeof(snapshot));
         check_equal(installed.count, 1U);
@@ -170,15 +173,16 @@ spec("raft snapshot coordinator")
         config.peer_id = 2U;
         config.max_snapshot_bytes = SNAPSHOT_BYTES;
         config.chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
-        config.max_inflight_chunks = TR_RAFT_SNAPSHOT_DEFAULT_INFLIGHT_CHUNKS;
+        config.max_inflight_chunks =
+            TR_RAFT_SNAPSHOT_RECOMMENDED_INFLIGHT_CHUNKS;
         config.emit = snapshot_capture_emit;
         config.emit_context = &emitted;
         check_equal(tr_raft_snapshot_coordinator_create(&config, &coordinator),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_snapshot_coordinator_begin(
                          coordinator, 7U, 9U, 6U,
                          &coordinator_configuration, snapshot,
-                         SNAPSHOT_BYTES), TURBO_OK);
+                         SNAPSHOT_BYTES), SALTS_OK);
         check_equal(emitted.count, 4U);
 
         memset(&ack, 0, sizeof(ack));
@@ -192,7 +196,7 @@ spec("raft snapshot coordinator")
         memcpy(ack.snapshot_digest, emitted.chunks[0].snapshot_digest,
                sizeof(ack.snapshot_digest));
         check_equal(tr_raft_snapshot_coordinator_handle_ack(coordinator, &ack),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(emitted.count, 5U);
         check_equal(emitted.chunks[4].snapshot_offset,
                       4U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);

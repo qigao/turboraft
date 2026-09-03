@@ -1,7 +1,7 @@
 #include "raft_membership_transition.h"
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 spec("raft membership transition")
 {
@@ -14,24 +14,24 @@ spec("raft membership transition")
 
         check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 3U, NULL, 0U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_transition_propose(
                          &transition, target_voters, 3U, NULL, 0U, 71U,
                          &joint),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_transition_stage(
                          &transition, &joint, 10U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_transition_commit_limit(
                           &transition, 12U),
                       10U);
         check_equal(tr_raft_membership_transition_apply(&transition, 9U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(
             tr_raft_membership_transition_committed(&transition)->phase,
             TR_RAFT_CONF_FINAL);
         check_equal(tr_raft_membership_transition_apply(&transition, 10U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(
             tr_raft_membership_transition_committed(&transition)->phase,
             TR_RAFT_CONF_JOINT);
@@ -49,26 +49,26 @@ spec("raft membership transition")
 
         check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 3U, NULL, 0U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_transition_propose(
                          &transition, target_voters, 2U, target_learners, 1U,
                          72U, &joint),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_final(&joint, &final_membership),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_transition_stage(
                          &transition, &joint, 20U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_transition_stage(
                          &transition, &final_membership, 21U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(transition.pending_count, 2U);
         check_equal(tr_raft_membership_transition_stage(
                          &transition, &final_membership, 22U),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
         check_equal(transition.pending_count, 2U);
         check_equal(tr_raft_membership_transition_apply(&transition, 21U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(transition.pending_count, 0U);
         check_equal(
             tr_raft_membership_transition_committed(&transition)->phase,
@@ -91,7 +91,7 @@ spec("raft membership transition")
 
         check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 3U, NULL, 0U),
-                     TURBO_OK);
+                     SALTS_OK);
         joint.phase = TR_RAFT_CONF_JOINT;
         joint.transition_id = 73U;
         joint.member_count = 3U;
@@ -104,7 +104,7 @@ spec("raft membership transition")
         joint.members[2].roles = TR_RAFT_CONF_OLD_VOTER;
         check_equal(tr_raft_membership_transition_stage(
                          &transition, &joint, 30U),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
     }
 
     it("rejects a conflicting final entry")
@@ -117,20 +117,20 @@ spec("raft membership transition")
 
         check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 3U, NULL, 0U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_transition_propose(
                          &transition, target_voters, 3U, NULL, 0U, 74U,
                          &joint),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_final(&joint, &final_membership),
-                     TURBO_OK);
+                     SALTS_OK);
         final_membership.transition_id = 75U;
         check_equal(tr_raft_membership_transition_stage(
                          &transition, &joint, 40U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_transition_stage(
                          &transition, &final_membership, 41U),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
     }
 
     it("rejects a corrupted pending count before reading pending arrays")
@@ -140,10 +140,10 @@ spec("raft membership transition")
 
         check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 1U, NULL, 0U),
-                     TURBO_OK);
+                     SALTS_OK);
         transition.pending_count = TR_RAFT_MEMBERSHIP_MAX_PENDING + 1U;
         check_equal(tr_raft_membership_transition_stage(
                          &transition, &transition.committed, 1U),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
     }
 }

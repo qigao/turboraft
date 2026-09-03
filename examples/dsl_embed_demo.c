@@ -36,7 +36,7 @@ static int demo_query_status(void *context,
     (void)context;
     (void)command;
     printf("    status -> (would call raft.status)\n");
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int demo_query_members(void *context,
@@ -48,7 +48,7 @@ static int demo_query_members(void *context,
                ? "voter"
                : command->role == TR_TEXT_QUERY_ROLE_LEARNER ? "learner"
                                                              : "any");
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int demo_query_progress(void *context,
@@ -57,7 +57,7 @@ static int demo_query_progress(void *context,
     (void)context;
     printf("    progress -> node=%llu\n",
            (unsigned long long)command->node_id);
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int demo_query_example(void)
@@ -78,7 +78,7 @@ static int demo_query_example(void)
     printf("== Query DSL ==\n");
     result = tr_text_query_parse(text, strlen(text), NULL, &plan,
                                  &diagnostic);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         printf("  parse failed at %zu:%zu: %s\n", diagnostic.line,
                diagnostic.column,
                diagnostic.message == NULL ? "invalid input"
@@ -108,7 +108,7 @@ static tr_raft_node_id_t demo_find_leader(tr_replay_driver_t *driver)
     for (index = 1u; index <= DEMO_NODE_COUNT; ++index) {
         tr_raft_status_t status;
 
-        if (tr_replay_driver_status(driver, index, &status) == TURBO_OK &&
+        if (tr_replay_driver_status(driver, index, &status) == SALTS_OK &&
             status.role == TR_RAFT_LEADER) {
             return index;
         }
@@ -148,22 +148,22 @@ static int demo_replay_example(void)
     driver_config.nodes = nodes;
     driver_config.node_count = DEMO_NODE_COUNT;
     result = tr_replay_driver_create(&driver_config, &driver);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         printf("  driver create failed: %d\n", result);
         return result;
     }
 
     result = tr_text_replay_parse(setup_text, strlen(setup_text), NULL,
                                   &plan, &diagnostic);
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_replay_driver_run(driver, &plan);
     }
     leader = demo_find_leader(driver);
-    if (result != TURBO_OK || leader == 0u) {
+    if (result != SALTS_OK || leader == 0u) {
         printf("  setup failed: result=%d leader=%llu\n", result,
                (unsigned long long)leader);
         tr_replay_driver_destroy(driver);
-        return result == TURBO_OK ? TURBO_EPROTO : result;
+        return result == SALTS_OK ? SALTS_EPROTO : result;
     }
     printf("  leader elected: node %llu\n", (unsigned long long)leader);
 
@@ -176,7 +176,7 @@ static int demo_replay_example(void)
     action.payload_hex.data = "0x0102a0ff";
     action.payload_hex.len = 10u;
     result = tr_replay_driver_step(driver, &action);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         printf("  submit failed: %d\n", result);
         tr_replay_driver_destroy(driver);
         return result;
@@ -191,8 +191,8 @@ static int demo_replay_example(void)
     action.timeout_ticks = 40u;
     result = tr_replay_driver_step(driver, &action);
     printf("  poll applied -> %s (%d)\n",
-           result == TURBO_OK ? "ok" : "failed", result);
-    if (result != TURBO_OK) {
+           result == SALTS_OK ? "ok" : "failed", result);
+    if (result != SALTS_OK) {
         tr_replay_driver_destroy(driver);
         return result;
     }
@@ -201,7 +201,7 @@ static int demo_replay_example(void)
     action.kind = TR_TEXT_REPLAY_TICK;
     action.value = 5u;
     result = tr_replay_driver_step(driver, &action);
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         for (index = 0u; index < DEMO_NODE_COUNT; ++index) {
             tr_text_replay_action_t expect = demo_action();
 
@@ -212,8 +212,8 @@ static int demo_replay_example(void)
             result = tr_replay_driver_step(driver, &expect);
             printf("  expect node %llu commit >= 1 -> %s\n",
                    (unsigned long long)voters[index],
-                   result == TURBO_OK ? "ok" : "failed");
-            if (result != TURBO_OK) {
+                   result == SALTS_OK ? "ok" : "failed");
+            if (result != SALTS_OK) {
                 break;
             }
         }
@@ -223,7 +223,7 @@ static int demo_replay_example(void)
         tr_raft_status_t status;
 
         if (tr_replay_driver_status(driver, voters[index], &status) ==
-            TURBO_OK) {
+            SALTS_OK) {
             printf("  node %llu role=%d term=%llu leader=%llu commit=%llu "
                    "applied=%llu last_log=%llu\n",
                    (unsigned long long)status.self_id, (int)status.role,
@@ -248,12 +248,12 @@ int main(void)
 {
     int result = demo_query_example();
 
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         fprintf(stderr, "query demo failed: %d\n", result);
         return 1;
     }
     result = demo_replay_example();
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         fprintf(stderr, "replay demo failed: %d\n", result);
         return 1;
     }

@@ -1,7 +1,7 @@
 #include <turboraft/raft_snapshot_receiver.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -33,10 +33,10 @@ static int snapshot_stream_begin(void *context, tr_raft_term_t leader_term,
 
     if (capture == NULL || leader_term != 5U || snapshot_index != 9U ||
         snapshot_term != 4U || configuration == NULL || snapshot_size != 6U) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     capture->begun = 1;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int snapshot_stream_write(void *context, uint64_t offset,
@@ -46,11 +46,11 @@ static int snapshot_stream_write(void *context, uint64_t offset,
 
     if (capture == NULL || data == NULL || offset != capture->size ||
         size > sizeof(capture->data) - capture->size) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     memcpy(capture->data + capture->size, data, size);
     capture->size += size;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int snapshot_stream_commit(void *context)
@@ -58,10 +58,10 @@ static int snapshot_stream_commit(void *context)
     snapshot_stream_capture_t *capture = context;
 
     if (capture == NULL || capture->size != 6U) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     capture->committed = 1;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static void snapshot_stream_abort(void *context)
@@ -85,7 +85,7 @@ static int snapshot_capture_install(void *context,
         (snapshot_install_capture_t *) context;
 
     if (configuration == NULL || size > sizeof(capture->data)) {
-        return TURBO_ERANGE;
+        return SALTS_ERANGE;
     }
     capture->calls++;
     capture->leader_term = leader_term;
@@ -96,7 +96,7 @@ static int snapshot_capture_install(void *context,
     if (size != 0U) {
         memcpy(capture->data, data, size);
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static tr_raft_snapshot_chunk_t snapshot_final_chunk(void)
@@ -146,10 +146,10 @@ spec("raft snapshot receiver")
         config.install = snapshot_capture_install;
         config.install_context = &capture;
         check_equal(tr_raft_snapshot_receiver_create(&config, &receiver),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
                                                        &result),
-                     TURBO_OK);
+                     SALTS_OK);
         check(result.installed);
         check(result.ack.accepted);
         check_equal(result.ack.next_offset, 3U);
@@ -160,7 +160,7 @@ spec("raft snapshot receiver")
         check_equal(capture.data, "abc", 3U);
         check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
                                                        &result),
-                     TURBO_OK);
+                     SALTS_OK);
         check(!result.installed);
         check(result.ack.accepted);
         check_equal(result.ack.next_offset, 3U);
@@ -184,10 +184,10 @@ spec("raft snapshot receiver")
         config.install_context = &capture;
         chunk.snapshot_digest[0] ^= 0xffU;
         check_equal(tr_raft_snapshot_receiver_create(&config, &receiver),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
                                                        &result),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
         check(!result.installed);
         check(!result.ack.accepted);
         check_equal(capture.calls, 0);
@@ -217,7 +217,7 @@ spec("raft snapshot receiver")
         config.stream.abort = snapshot_stream_abort;
         config.stream.context = &capture;
         check_equal(tr_raft_snapshot_receiver_create(&config, &receiver),
-                     TURBO_OK);
+                     SALTS_OK);
 
         memset(&chunk, 0, sizeof(chunk));
         chunk.from = 1U;
@@ -236,14 +236,14 @@ spec("raft snapshot receiver")
         chunk.data = (const uint8_t *)"abc";
         chunk.data_length = 3U;
         check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
-                                                       &result), TURBO_OK);
+                                                       &result), SALTS_OK);
         check(!result.installed);
         chunk.snapshot_offset = 3U;
         chunk.has_configuration = false;
         chunk.data = (const uint8_t *)"def";
         chunk.done = true;
         check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
-                                                       &result), TURBO_OK);
+                                                       &result), SALTS_OK);
         check(result.installed);
         check(capture.begun);
         check(capture.committed);

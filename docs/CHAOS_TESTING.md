@@ -25,6 +25,6 @@ ctest --preset win-release-user -R turboraft.multiprocess_chaos --output-on-fail
 ```
 
 This runner validates process isolation, WAL restart, Service durability
-ordering, and deterministic network faults. It does not replace the CoroNet
+ordering, and deterministic network faults. It does not replace the CNet/FlowMQ
 mTLS tests: the parent deliberately owns routing so every fault decision is
 reproducible and independent of operating-system packet timing.

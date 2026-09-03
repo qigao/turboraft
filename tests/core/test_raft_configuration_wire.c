@@ -3,7 +3,7 @@
 #include <turboraft/raft_wire_codec.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -32,7 +32,7 @@ static void configuration_wire_fixture(tr_raft_conf_t *configuration,
     message->entry_count = 1U;
     check_equal(tr_raft_conf_entry_encode(configuration, 9U, 7U,
                                            &message->entry),
-                 TURBO_OK);
+                 SALTS_OK);
 }
 
 spec("raft configuration wire compatibility")
@@ -52,18 +52,18 @@ spec("raft configuration wire compatibility")
         memset(&metadata, 0, sizeof(metadata));
         metadata.message_id = 7001U;
         configuration_wire_fixture(&configuration, &message);
-        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
         check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_wire_decode(codec, frame, frame_length,
                                          &decoded_metadata, &decoded),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(decoded_metadata.message_id, 7001U);
         check_equal(decoded.entry.command_id, 0U);
         check_equal(tr_raft_conf_entry_decode(&decoded.entry,
                                                &decoded_configuration),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(decoded_configuration.phase, TR_RAFT_CONF_JOINT);
         check_equal(decoded_configuration.transition_id, 1001U);
         tr_raft_wire_codec_destroy(codec);
@@ -82,15 +82,15 @@ spec("raft configuration wire compatibility")
 
         memset(&metadata, 0, sizeof(metadata));
         configuration_wire_fixture(&configuration, &message);
-        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
         check_equal(tr_raft_wire_encode_version(
                          codec, 2U, &metadata, &message, frame, sizeof(frame),
                          &frame_length),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(frame[5], 2U);
         check_equal(tr_raft_wire_decode(codec, frame, frame_length,
                                          &decoded_metadata, &decoded),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(decoded.entry.command_id, 0U);
         check_equal(decoded.entry.data, message.entry.data,
                      message.entry.data_length);
@@ -109,17 +109,17 @@ spec("raft configuration wire compatibility")
         memset(&metadata, 0, sizeof(metadata));
         configuration_wire_fixture(&configuration, &message);
         message.entry.data[0] = 'X';
-        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
         check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
-                     TURBO_EINVAL);
+                     SALTS_EINVAL);
 
         memset(&message.entry, 0, sizeof(message.entry));
         message.entry.index = 9U;
         message.entry.term = 7U;
         check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
-                     TURBO_EINVAL);
+                     SALTS_EINVAL);
         tr_raft_wire_codec_destroy(codec);
     }
 }

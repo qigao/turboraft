@@ -2,7 +2,7 @@
 #include "raft_membership_transition.h"
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 spec("raft configuration log")
 {
@@ -18,24 +18,24 @@ spec("raft configuration log")
 
         check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 3U, NULL, 0U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_transition_propose(
                          &transition, target_voters, 3U, NULL, 0U, 81U,
                          &joint),
-                     TURBO_OK);
-        check_equal(tr_raft_log_init(&log, 4U, 0U, 0U), TURBO_OK);
+                     SALTS_OK);
+        check_equal(tr_raft_log_init(&log, 4U, 0U, 0U), SALTS_OK);
         check_equal(tr_raft_log_append_configuration(
                          &log, 5U, &joint, &entry),
-                     TURBO_OK);
+                     SALTS_OK);
         check_not_null(entry);
         check_equal(entry->index, 1U);
         check_equal(entry->term, 5U);
         check_equal(entry->command_id, 0U);
-        check_equal(tr_raft_conf_entry_decode(entry, &decoded), TURBO_OK);
+        check_equal(tr_raft_conf_entry_decode(entry, &decoded), SALTS_OK);
         check_equal(decoded.transition_id, 81U);
         check_equal(tr_raft_membership_transition_stage_entry(
                          &transition, entry),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(transition.pending_count, 1U);
         tr_raft_log_destroy(&log);
     }
@@ -44,10 +44,10 @@ spec("raft configuration log")
     {
         tr_raft_log_t log;
 
-        check_equal(tr_raft_log_init(&log, 2U, 0U, 0U), TURBO_OK);
+        check_equal(tr_raft_log_init(&log, 2U, 0U, 0U), SALTS_OK);
         check_equal(tr_raft_log_append_local(
                          &log, 1U, 0U, "x", 1U, NULL),
-                     TURBO_EINVAL);
+                     SALTS_EINVAL);
         check_equal(tr_raft_log_count(&log), 0U);
         tr_raft_log_destroy(&log);
     }
@@ -62,18 +62,18 @@ spec("raft configuration log")
 
         check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 1U, NULL, 0U),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_transition_propose(
                          &transition, target_voters, 2U, NULL, 0U, 82U,
                          &joint),
-                     TURBO_OK);
-        check_equal(tr_raft_log_init(&log, 1U, 0U, 0U), TURBO_OK);
+                     SALTS_OK);
+        check_equal(tr_raft_log_init(&log, 1U, 0U, 0U), SALTS_OK);
         check_equal(tr_raft_log_append_local(
                          &log, 1U, 1U, NULL, 0U, NULL),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_log_append_configuration(
                          &log, 1U, &joint, NULL),
-                     TURBO_ENOSPC);
+                     SALTS_ENOSPC);
         check_equal(tr_raft_log_count(&log), 1U);
         tr_raft_log_destroy(&log);
     }

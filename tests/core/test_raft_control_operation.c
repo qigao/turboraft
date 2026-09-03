@@ -1,7 +1,7 @@
 #include "raft_control_operation.h"
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -32,7 +32,7 @@ spec("raft control operation JSON")
             status.state = states[index];
             check_equal(tr_control_operation_status_json(
                              &status, json, sizeof(json), &json_size),
-                         TURBO_OK);
+                         SALTS_OK);
             check_equal(json_size, strlen(json));
             check_not_null(strstr(json, names[index]));
             check_not_null(strstr(json, "\"term\":12"));
@@ -52,12 +52,12 @@ spec("raft control operation JSON")
         status.index = 1U;
         check_equal(tr_control_operation_status_json(
                          &status, json, sizeof(json), &json_size),
-                     TURBO_ENOSPC);
+                     SALTS_ENOSPC);
         check_equal(json_size, 99U);
 
         status.state = (tr_raft_operation_state_t)99;
         check_equal(tr_control_operation_status_json(
                          &status, json, sizeof(json), &json_size),
-                     TURBO_EINVAL);
+                     SALTS_EINVAL);
     }
 }

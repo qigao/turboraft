@@ -36,13 +36,13 @@ statement ::= SHOW PROGRESS FOR NODE INTEGER(N) SEMICOLON. {
 }
 
 %syntax_error {
-  tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+  tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                              TR_TEXT_DIAGNOSTIC_SYNTAX,
                              "query syntax error");
 }
 
 %parse_failure {
-  tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+  tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                              TR_TEXT_DIAGNOSTIC_SYNTAX,
                              "query parse failure");
 }

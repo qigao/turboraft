@@ -44,12 +44,12 @@ static int tr_text_replay_test_submit(
   state->submit_sequence = action->sequence;
   state->payload_size = payload_size;
   memcpy(state->payload, payload, payload_size);
-  if (state->submit_result != TURBO_OK) {
+  if (state->submit_result != SALTS_OK) {
     return state->submit_result;
   }
   out_receipt->term = 11u;
   out_receipt->index = 100u + (uint64_t)state->submit_calls;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int tr_text_replay_test_poll(
@@ -74,7 +74,7 @@ static int tr_text_replay_test_tick(void *context, uint64_t ticks)
       (tr_text_replay_executor_test_state_t *)context;
   state->tick_calls++;
   state->tick_total += ticks;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static const tr_text_replay_executor_ops_t tr_text_replay_test_ops = {
@@ -95,7 +95,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_query_parse(input, strlen(input), NULL, &plan,
                                      &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(plan.command_count, 4u);
     check_equal(plan.commands[0].kind, TR_TEXT_QUERY_SHOW_STATUS);
     check_equal(plan.commands[1].kind, TR_TEXT_QUERY_SHOW_MEMBERS);
@@ -120,7 +120,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_protocol_debug_parse(input, strlen(input), NULL,
                                                &plan, &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(plan.frame_count, 1u);
     check_equal(plan.frames[0].version, 3u);
     check_equal(plan.frames[0].from, 1u);
@@ -144,7 +144,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_protocol_debug_parse(input, strlen(input), NULL,
                                                &plan, &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(plan.frame_count, 1u);
     check_equal(plan.frames[0].payload_hex.len, 0u);
   }
@@ -163,7 +163,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_protocol_debug_parse(input, strlen(input), NULL,
                                                &plan, &diagnostic),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
     check_equal(plan.frame_count, 0u);
   }
@@ -182,7 +182,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_protocol_debug_parse(input, strlen(input), NULL,
                                                &plan, &diagnostic),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
     check_equal(plan.frame_count, 0u);
   }
@@ -194,7 +194,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_query_parse(input, strlen(input), NULL, &plan,
                                      &diagnostic),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SYNTAX);
     check_equal(plan.command_count, 0u);
   }
@@ -211,7 +211,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_protocol_debug_parse(input, strlen(input), NULL,
                                                &plan, &diagnostic),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
     check_equal(plan.frame_count, 0u);
   }
@@ -224,7 +224,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_query_parse(input, strlen(input), &options, &plan,
                                      &diagnostic),
-                 TURBO_ENOSPC);
+                 SALTS_ENOSPC);
     check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
     check_equal(plan.command_count, 0u);
   }
@@ -237,7 +237,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_query_parse(input, strlen(input), &options, &plan,
                                      &diagnostic),
-                 TURBO_ENOSPC);
+                 SALTS_ENOSPC);
     check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
     check_equal(plan.command_count, 0u);
   }
@@ -257,7 +257,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(plan.action_count, 7u);
     check_equal(plan.actions[3].kind, TR_TEXT_REPLAY_SEND);
     check_equal(plan.actions[3].node_id, 1u);
@@ -266,7 +266,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_replay_parse("tick ;", 6u, NULL, &plan,
                                       &diagnostic),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SYNTAX);
     check_equal(diagnostic.line, 1u);
     check_equal(diagnostic.column, 6u);
@@ -283,7 +283,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(plan.action_count, 4u);
 
     check_equal(plan.actions[0].kind, TR_TEXT_REPLAY_PARTITION);
@@ -314,7 +314,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(plan.action_count, 2u);
 
     check_equal(plan.actions[0].kind, TR_TEXT_REPLAY_SUBMIT);
@@ -340,7 +340,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_SEMANTIC);
     check_equal(plan.action_count, 0u);
   }
@@ -357,10 +357,10 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
                                         &state),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(state.submit_calls, 1);
     check_equal(state.submit_request_id, 3u);
     check_equal(state.submit_node_id, 1u);
@@ -390,19 +390,19 @@ spec("TurboRaft text syntax") {
     check_equal(tr_text_replay_parse(duplicate_input,
                                       strlen(duplicate_input), NULL, &plan,
                                       &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
                                         &state),
-                 TURBO_EALREADY);
+                 SALTS_EALREADY);
     check_equal(state.submit_calls, 1);
 
     memset(&state, 0, sizeof(state));
     check_equal(tr_text_replay_parse(unknown_input, strlen(unknown_input),
                                       NULL, &plan, &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
                                         &state),
-                 TURBO_ENOENT);
+                 SALTS_ENOENT);
     check_equal(state.poll_calls, 0);
   }
 
@@ -413,14 +413,14 @@ spec("TurboRaft text syntax") {
     tr_text_replay_plan_t plan;
     tr_text_diagnostic_t diagnostic;
     tr_text_replay_executor_test_state_t state = {
-        .submit_result = TURBO_EIO};
+        .submit_result = SALTS_EIO};
 
     check_equal(tr_text_replay_parse(input, strlen(input), NULL, &plan,
                                       &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
                                         &state),
-                 TURBO_EIO);
+                 SALTS_EIO);
     check_equal(state.submit_calls, 1);
     check_equal(state.tick_calls, 0);
   }
@@ -449,7 +449,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_replay_execute(&plan, &tr_text_replay_test_ops,
                                         &state),
-                 TURBO_ENOSPC);
+                 SALTS_ENOSPC);
     check_equal(state.submit_calls, 0);
   }
 
@@ -475,7 +475,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_replay_parse(input, offset, NULL, &plan,
                                       &diagnostic),
-                 TURBO_ENOSPC);
+                 SALTS_ENOSPC);
     check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
     check_equal(plan.action_count, 0u);
   }
@@ -502,7 +502,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_replay_parse(input, offset, NULL, &plan,
                                       &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(plan.action_count, 1u);
     check_equal(plan.actions[0].payload_hex.len,
                   2u + PAYLOAD_BYTES * 2u);
@@ -535,7 +535,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_protocol_debug_parse(input, offset, NULL, &plan,
                                               &diagnostic),
-                 TURBO_ENOSPC);
+                 SALTS_ENOSPC);
     check_equal(diagnostic.kind, TR_TEXT_DIAGNOSTIC_LIMIT);
     check_equal(plan.frame_count, 0u);
   }
@@ -567,7 +567,7 @@ spec("TurboRaft text syntax") {
 
     check_equal(tr_text_protocol_debug_parse(input, offset, NULL, &plan,
                                               &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(plan.frame_count, 1u);
     check_equal(plan.frames[0].payload_hex.len,
                   2u + PAYLOAD_BYTES * 2u);

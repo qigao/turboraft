@@ -8,14 +8,14 @@ suite("text query service") {
     tr_text_query_service_sink_t sink = {0};
 
     check_equal(
-        tr_text_query_execute_service(NULL, &plan, &sink, NULL), TURBO_EINVAL);
+        tr_text_query_execute_service(NULL, &plan, &sink, NULL), SALTS_EINVAL);
     check_equal(
         tr_text_query_execute_service((tr_raft_service_t *)1, NULL, &sink, NULL),
-        TURBO_EINVAL);
+        SALTS_EINVAL);
     check_equal(
         tr_text_query_execute_service(
             (tr_raft_service_t *)1, &plan, NULL, NULL),
-        TURBO_EINVAL);
+        SALTS_EINVAL);
   }
 
   it("requires all result sink callbacks") {
@@ -25,6 +25,6 @@ suite("text query service") {
     check_equal(
         tr_text_query_execute_service(
             (tr_raft_service_t *)1, &plan, &sink, NULL),
-        TURBO_ENOTSUP);
+        SALTS_ENOTSUP);
   }
 }

@@ -2,7 +2,7 @@
 #include "raft_peer_set.h"
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -20,13 +20,13 @@ spec("raft peer set")
 
         check_equal(tr_raft_membership_stable(
                          voters, 2U, learners, 1U, &stable),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_joint(
                          &stable, target_voters, 2U, NULL, 0U, 91U, &joint),
-                     TURBO_OK);
+                     SALTS_OK);
         sources[0] = &stable;
         sources[1] = &joint;
-        check_equal(tr_raft_peer_set_build(sources, 2U, &peers), TURBO_OK);
+        check_equal(tr_raft_peer_set_build(sources, 2U, &peers), SALTS_OK);
         check_equal(peers.count, 4U);
         check_equal(peers.node_ids[0], 1U);
         check_equal(peers.node_ids[1], 2U);
@@ -51,15 +51,15 @@ spec("raft peer set")
         }
         check_equal(tr_raft_membership_stable(
                          first_voters, TR_RAFT_MAX_MEMBERS, NULL, 0U, &first),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_stable(
                          second_voters, TR_RAFT_MAX_MEMBERS, NULL, 0U,
                          &second),
-                     TURBO_OK);
+                     SALTS_OK);
         sources[0] = &first;
         sources[1] = &second;
         check_equal(tr_raft_peer_set_build(sources, 2U, &peers),
-                     TURBO_ENOSPC);
+                     SALTS_ENOSPC);
         check_equal(peers.count, 0U);
     }
 
@@ -77,7 +77,7 @@ spec("raft peer set")
         check_equal(tr_raft_membership_transition_init(
                          &transition, voters, 1U, learners,
                          TR_RAFT_MAX_MEMBERS - 1U),
-                     TURBO_OK);
+                     SALTS_OK);
         memset(&joint, 0, sizeof(joint));
         joint.phase = TR_RAFT_CONF_JOINT;
         joint.transition_id = 92U;
@@ -92,6 +92,6 @@ spec("raft peer set")
         }
         check_equal(tr_raft_membership_transition_stage(
                          &transition, &joint, 5U),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
     }
 }

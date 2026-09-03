@@ -26,7 +26,7 @@ tr_raft_control_audit_t *audit = NULL;
 config.sink = write_audit;
 config.context = writer;
 config.required = 1U;
-if (tr_raft_control_audit_create(&config, &audit) != TURBO_OK) {
+if (tr_raft_control_audit_create(&config, &audit) != SALTS_OK) {
     return STARTUP_AUDIT_ERROR;
 }
 
@@ -51,8 +51,8 @@ before destroying the audit handle.
 - `reserved`: must be zero-initialized for forward compatibility.
 
 Use `TR_RAFT_CONTROL_AUDIT_CONFIG_INIT` rather than positional initialization.
-Creation returns `TURBO_EINVAL` for an invalid version, size, required value, or
-a required configuration without a sink, and `TURBO_ENOMEM` if the opaque
+Creation returns `SALTS_EINVAL` for an invalid version, size, required value, or
+a required configuration without a sink, and `SALTS_ENOMEM` if the opaque
 adapter cannot be allocated.
 
 ## Emission

@@ -1,14 +1,14 @@
-#include "raft_snapshot_manager.h"
+#include <turboraft/raft_snapshot_manager.h>
 
 #include <turboraft/raft_snapshot_receiver.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
 typedef struct runtime_manager_capture {
-    tr_raft_coronet_payload_t payloads[4];
+    tr_raft_transport_payload_t payloads[4];
     size_t payload_count;
     size_t provider_count;
     size_t install_count;
@@ -19,17 +19,17 @@ typedef struct runtime_manager_capture {
 
 static int runtime_manager_enqueue(
     void *context,
-    const tr_raft_coronet_payload_t *payload)
+    const tr_raft_transport_payload_t *payload)
 {
     runtime_manager_capture_t *capture =
         (runtime_manager_capture_t *) context;
 
     if (capture == NULL || payload == NULL ||
         capture->payload_count >= 4U) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
     capture->payloads[capture->payload_count++] = *payload;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int runtime_manager_provider(
@@ -48,7 +48,7 @@ static int runtime_manager_provider(
     if (capture == NULL || out_point == NULL || buffer == NULL ||
         out_size == NULL || required_index != 10U || required_term != 7U ||
         capacity < sizeof(snapshot)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(out_point, 0, sizeof(*out_point));
     out_point->index = required_index;
@@ -65,7 +65,7 @@ static int runtime_manager_provider(
     memcpy(buffer, snapshot, sizeof(snapshot));
     *out_size = sizeof(snapshot);
     ++capture->provider_count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int runtime_manager_install(
@@ -85,10 +85,10 @@ static int runtime_manager_install(
         snapshot_term != 7U || configuration == NULL ||
         configuration->member_count != 2U || size != sizeof(expected) ||
         memcmp(data, expected, sizeof(expected)) != 0) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     ++capture->install_count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int runtime_manager_complete(void *context,
@@ -99,12 +99,12 @@ static int runtime_manager_complete(void *context,
         (runtime_manager_capture_t *) context;
 
     if (capture == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     ++capture->complete_count;
     capture->completed_peer = peer_id;
     capture->completed_index = snapshot_index;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 spec("snapshot manager runtime bridge")
@@ -119,7 +119,7 @@ spec("snapshot manager runtime bridge")
         tr_raft_snapshot_receiver_t *receiver = NULL;
         tr_raft_snapshot_request_t request;
         tr_raft_snapshot_receive_result_t receive_result;
-        tr_raft_coronet_payload_t ack_payload;
+        tr_raft_transport_payload_t ack_payload;
 
         memset(&capture, 0, sizeof(capture));
         memset(&manager_config, 0, sizeof(manager_config));
@@ -127,6 +127,9 @@ spec("snapshot manager runtime bridge")
         manager_config.peer_node_ids = peers;
         manager_config.peer_count = 1U;
         manager_config.max_snapshot_bytes = 1024U;
+        manager_config.snapshot_chunk_size =
+            TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+        manager_config.snapshot_max_inflight_chunks = 1U;
         manager_config.enqueue = runtime_manager_enqueue;
         manager_config.enqueue_context = &capture;
         manager_config.provider = runtime_manager_provider;
@@ -134,7 +137,7 @@ spec("snapshot manager runtime bridge")
         manager_config.complete = runtime_manager_complete;
         manager_config.complete_context = &capture;
         check_equal(tr_raft_snapshot_manager_create(&manager_config,
-                                                     &manager), TURBO_OK);
+                                                     &manager), SALTS_OK);
 
         memset(&request, 0, sizeof(request));
         request.peer_id = 2U;
@@ -143,10 +146,10 @@ spec("snapshot manager runtime bridge")
         request.snapshot_term = 7U;
         check_equal(tr_raft_snapshot_manager_enqueue_request(manager,
                                                               &request),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_snapshot_manager_enqueue_request(manager,
                                                               &request),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(capture.provider_count, 1U);
         check_equal(capture.payload_count, 1U);
 
@@ -156,17 +159,17 @@ spec("snapshot manager runtime bridge")
         receiver_config.install = runtime_manager_install;
         receiver_config.install_context = &capture;
         check_equal(tr_raft_snapshot_receiver_create(&receiver_config,
-                                                      &receiver), TURBO_OK);
+                                                      &receiver), SALTS_OK);
         check_equal(tr_raft_snapshot_receiver_handle(
                          receiver,
                          &capture.payloads[0].data.snapshot_chunk,
-                         &receive_result), TURBO_OK);
+                         &receive_result), SALTS_OK);
         memset(&ack_payload, 0, sizeof(ack_payload));
         ack_payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
         ack_payload.data.snapshot_ack = receive_result.ack;
         check_equal(tr_raft_snapshot_manager_handle_payload(manager,
                                                              &ack_payload),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(capture.install_count, 1U);
         check_equal(capture.complete_count, 1U);
         check_equal(capture.completed_peer, 2U);

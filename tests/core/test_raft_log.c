@@ -1,7 +1,7 @@
 #include "raft_log.h"
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -28,10 +28,10 @@ spec("bounded raft log")
         tr_raft_log_t log;
         const tr_raft_log_entry_t *entry = NULL;
 
-        check_equal(tr_raft_log_init(&log, 4U, 0U, 0U), TURBO_OK);
+        check_equal(tr_raft_log_init(&log, 4U, 0U, 0U), SALTS_OK);
         check_equal(tr_raft_log_append_local(&log, 1U, 7U, "one", 3U,
                                               &entry),
-                     TURBO_OK);
+                     SALTS_OK);
         check_not_null(entry);
         check_equal(entry->index, 1U);
         check_equal(entry->term, 1U);
@@ -49,14 +49,14 @@ spec("bounded raft log")
 
         entries[0] = test_entry(1U, 1U, 1U, "a");
         entries[1] = test_entry(2U, 1U, 2U, "b");
-        check_equal(tr_raft_log_init(&log, 4U, 0U, 0U), TURBO_OK);
+        check_equal(tr_raft_log_init(&log, 4U, 0U, 0U), SALTS_OK);
         check_equal(tr_raft_log_reconcile(&log, 0U, 0U, entries, 2U, 0U,
                                             &result),
-                     TURBO_OK);
+                     SALTS_OK);
         check_true(result.matched);
         check_equal(tr_raft_log_reconcile(&log, 2U, 2U, NULL, 0U, 0U,
                                             &result),
-                     TURBO_OK);
+                     SALTS_OK);
         check_false(result.matched);
         check_equal(result.reject_hint, 1U);
         check_equal(tr_raft_log_count(&log), 2U);
@@ -77,13 +77,13 @@ spec("bounded raft log")
         replacement[0] = test_entry(3U, 3U, 4U, "new");
         replacement[1] = test_entry(4U, 3U, 5U, "tail");
 
-        check_equal(tr_raft_log_init(&log, 5U, 0U, 0U), TURBO_OK);
+        check_equal(tr_raft_log_init(&log, 5U, 0U, 0U), SALTS_OK);
         check_equal(tr_raft_log_reconcile(&log, 0U, 0U, original, 3U, 0U,
                                             &result),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_log_reconcile(&log, 2U, 1U, replacement, 2U, 0U,
                                             &result),
-                     TURBO_OK);
+                     SALTS_OK);
         check_true(result.changed);
         check_equal(result.truncate_from, 3U);
         check_equal(result.append_from, 3U);
@@ -102,13 +102,13 @@ spec("bounded raft log")
         tr_raft_log_entry_t divergent = test_entry(1U, 1U, 1U, "b");
         tr_raft_log_reconcile_result_t result;
 
-        check_equal(tr_raft_log_init(&log, 2U, 0U, 0U), TURBO_OK);
+        check_equal(tr_raft_log_init(&log, 2U, 0U, 0U), SALTS_OK);
         check_equal(tr_raft_log_reconcile(&log, 0U, 0U, &first, 1U, 0U,
                                             &result),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_log_reconcile(&log, 0U, 0U, &divergent, 1U, 0U,
                                             &result),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
         check_equal(tr_raft_log_count(&log), 1U);
         check_equal(tr_raft_log_get(&log, 1U)->data, "a", 1U);
         tr_raft_log_destroy(&log);
@@ -123,18 +123,18 @@ spec("bounded raft log")
         entries[0] = test_entry(1U, 1U, 1U, "a");
         entries[1] = test_entry(2U, 1U, 2U, "b");
         entries[2] = test_entry(3U, 2U, 3U, "c");
-        check_equal(tr_raft_log_init(&log, 3U, 0U, 0U), TURBO_OK);
+        check_equal(tr_raft_log_init(&log, 3U, 0U, 0U), SALTS_OK);
         check_equal(tr_raft_log_reconcile(&log, 0U, 0U, entries, 3U, 0U,
-                                            &result), TURBO_OK);
+                                            &result), SALTS_OK);
 
-        check_equal(tr_raft_log_compact(&log, 2U, 1U), TURBO_OK);
+        check_equal(tr_raft_log_compact(&log, 2U, 1U), SALTS_OK);
         check_equal(log.base_index, 2U);
         check_equal(log.base_term, 1U);
         check_equal(tr_raft_log_count(&log), 1U);
         check_null(tr_raft_log_get(&log, 2U));
         check_equal(tr_raft_log_get(&log, 3U)->term, 2U);
         check_equal(tr_raft_log_append_local(&log, 2U, 4U, "d", 1U, NULL),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_log_last_index(&log), 4U);
         tr_raft_log_destroy(&log);
     }
@@ -143,10 +143,10 @@ spec("bounded raft log")
     {
         tr_raft_log_t log;
 
-        check_equal(tr_raft_log_init(&log, 2U, 0U, 0U), TURBO_OK);
+        check_equal(tr_raft_log_init(&log, 2U, 0U, 0U), SALTS_OK);
         check_equal(tr_raft_log_append_local(&log, 1U, 1U, "a", 1U, NULL),
-                     TURBO_OK);
-        check_equal(tr_raft_log_compact(&log, 1U, 2U), TURBO_EPROTO);
+                     SALTS_OK);
+        check_equal(tr_raft_log_compact(&log, 1U, 2U), SALTS_EPROTO);
         check_equal(log.base_index, 0U);
         check_equal(tr_raft_log_count(&log), 1U);
         tr_raft_log_destroy(&log);
@@ -156,6 +156,6 @@ spec("bounded raft log")
     {
         check_equal(tr_raft_log_append_local(
                          NULL, 1U, 1U, "a", 1U, NULL),
-                     TURBO_EINVAL);
+                     SALTS_EINVAL);
     }
 }

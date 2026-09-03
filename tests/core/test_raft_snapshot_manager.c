@@ -1,9 +1,9 @@
-#include "raft_snapshot_manager.h"
+#include <turboraft/raft_snapshot_manager.h>
 
 #include <turboraft/raft_snapshot_receiver.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -16,7 +16,7 @@ static const tr_raft_conf_t manager_configuration = {
 };
 
 typedef struct manager_payload_capture {
-    tr_raft_coronet_payload_t payloads[3];
+    tr_raft_transport_payload_t payloads[3];
     size_t count;
 } manager_payload_capture_t;
 
@@ -28,7 +28,7 @@ typedef struct manager_install_capture {
 
 static int manager_enqueue(
     void *context,
-    const tr_raft_coronet_payload_t *payload)
+    const tr_raft_transport_payload_t *payload)
 {
     manager_payload_capture_t *capture =
         (manager_payload_capture_t *) context;
@@ -36,10 +36,10 @@ static int manager_enqueue(
     if (capture == NULL || payload == NULL ||
         capture->count >= sizeof(capture->payloads) /
                               sizeof(capture->payloads[0])) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
     capture->payloads[capture->count++] = *payload;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int manager_install(
@@ -59,24 +59,24 @@ static int manager_install(
     (void) snapshot_term;
     if (capture == NULL || data == NULL || size != capture->expected_size ||
         memcmp(data, capture->expected, size) != 0) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     ++capture->count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int manager_receive_and_ack(
     tr_raft_snapshot_manager_t *manager,
     tr_raft_snapshot_receiver_t *receiver,
-    const tr_raft_coronet_payload_t *chunk_payload)
+    const tr_raft_transport_payload_t *chunk_payload)
 {
     tr_raft_snapshot_receive_result_t result;
-    tr_raft_coronet_payload_t ack_payload;
+    tr_raft_transport_payload_t ack_payload;
     int status;
 
     status = tr_raft_snapshot_receiver_handle(
         receiver, &chunk_payload->data.snapshot_chunk, &result);
-    if (status != TURBO_OK) {
+    if (status != SALTS_OK) {
         return status;
     }
     memset(&ack_payload, 0, sizeof(ack_payload));
@@ -120,53 +120,56 @@ spec("raft snapshot manager")
         manager_config.peer_node_ids = peer_ids;
         manager_config.peer_count = sizeof(peer_ids) / sizeof(peer_ids[0]);
         manager_config.max_snapshot_bytes = 1024U;
+        manager_config.snapshot_chunk_size =
+            TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+        manager_config.snapshot_max_inflight_chunks = 1U;
         manager_config.enqueue = manager_enqueue;
         manager_config.enqueue_context = &payloads;
         check_equal(tr_raft_snapshot_manager_create(&manager_config, &manager),
-                     TURBO_OK);
+                     SALTS_OK);
 
         receiver_config.self_id = 2U;
         receiver_config.max_snapshot_bytes = 1024U;
         receiver_config.install = manager_install;
         receiver_config.install_context = &installed_two;
         check_equal(tr_raft_snapshot_receiver_create(
-                         &receiver_config, &receiver_two), TURBO_OK);
+                         &receiver_config, &receiver_two), SALTS_OK);
         receiver_config.self_id = 3U;
         receiver_config.install_context = &installed_three;
         check_equal(tr_raft_snapshot_receiver_create(
-                         &receiver_config, &receiver_three), TURBO_OK);
+                         &receiver_config, &receiver_three), SALTS_OK);
 
         check_equal(tr_raft_snapshot_manager_begin(
                          manager, 3U, 7U, 10U, 7U,
                          &manager_configuration,
-                         snapshot_three, sizeof(snapshot_three)), TURBO_OK);
+                         snapshot_three, sizeof(snapshot_three)), SALTS_OK);
         check_equal(tr_raft_snapshot_manager_begin(
                          manager, 2U, 7U, 9U, 6U,
                          &manager_configuration,
-                         snapshot_two, sizeof(snapshot_two)), TURBO_OK);
+                         snapshot_two, sizeof(snapshot_two)), SALTS_OK);
         check_equal(payloads.count, 2U);
         check_equal(payloads.payloads[0].data.snapshot_chunk.to, 3U);
         check_equal(payloads.payloads[1].data.snapshot_chunk.to, 2U);
 
         check_equal(manager_receive_and_ack(
                          manager, receiver_three, &payloads.payloads[0]),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(manager_receive_and_ack(
                          manager, receiver_two, &payloads.payloads[1]),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(payloads.count, 3U);
         check_equal(payloads.payloads[2].data.snapshot_chunk.to, 2U);
         check_equal(payloads.payloads[2].data.snapshot_chunk.snapshot_offset,
                       512U);
         check_equal(manager_receive_and_ack(
                          manager, receiver_two, &payloads.payloads[2]),
-                     TURBO_OK);
+                     SALTS_OK);
 
         check_equal(tr_raft_snapshot_manager_get_status(manager, 2U, &status),
-                     TURBO_OK);
+                     SALTS_OK);
         check(status.complete);
         check_equal(tr_raft_snapshot_manager_get_status(manager, 3U, &status),
-                     TURBO_OK);
+                     SALTS_OK);
         check(status.complete);
         check_equal(installed_two.count, 1U);
         check_equal(installed_three.count, 1U);

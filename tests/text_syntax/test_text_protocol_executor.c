@@ -63,7 +63,7 @@ static int tr_text_protocol_executor_hex_encode(
 
   if (output == NULL ||
       output_capacity < input_length * 2u + 3u) {
-    return TURBO_ENOSPC;
+    return SALTS_ENOSPC;
   }
   output[0] = '0';
   output[1] = 'x';
@@ -72,7 +72,7 @@ static int tr_text_protocol_executor_hex_encode(
     output[3u + index * 2u] = digits[input[index] & 0x0fu];
   }
   output[input_length * 2u + 2u] = '\0';
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int tr_text_protocol_executor_make_raft_frame(
@@ -94,7 +94,7 @@ static int tr_text_protocol_executor_make_raft_frame(
   message.term = 9u;
 
   result = tr_raft_wire_codec_create(&codec);
-  if (result != TURBO_OK) {
+  if (result != SALTS_OK) {
     return result;
   }
   result = tr_raft_wire_encode(
@@ -151,12 +151,12 @@ static int tr_text_protocol_executor_make_snapshot_frames(
          sizeof(ack.snapshot_digest));
 
   result = tr_raft_wire_codec_create(&codec);
-  if (result != TURBO_OK) {
+  if (result != SALTS_OK) {
     return result;
   }
   result = tr_raft_wire_encode_snapshot_chunk(
       codec, &metadata, &chunk, chunk_output, chunk_capacity, chunk_length);
-  if (result == TURBO_OK) {
+  if (result == SALTS_OK) {
     result = tr_raft_wire_encode_snapshot_ack(
         codec, &metadata, &ack, ack_output, ack_capacity, ack_length);
   }
@@ -196,10 +196,10 @@ spec("TurboRaft text protocol executor") {
 
     check_equal(tr_text_protocol_executor_make_raft_frame(
                      wire_frame, sizeof(wire_frame), &frame_length),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_text_protocol_executor_hex_encode(
                      wire_frame, frame_length, payload, sizeof(payload)),
-                 TURBO_OK);
+                 SALTS_OK);
     input_length = snprintf(
         input, sizeof(input),
         "frame version 3 kind raft { from = 1; to = 2; term = 9; "
@@ -209,10 +209,10 @@ spec("TurboRaft text protocol executor") {
     check((size_t)input_length < sizeof(input));
     check_equal(tr_text_protocol_debug_parse(
                      input, (size_t)input_length, NULL, &plan, &diagnostic),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(state.calls, 1);
     check_equal(state.payload_kind, TR_RAFT_WIRE_PAYLOAD_RAFT);
     check_equal(state.message_type, TR_RAFT_MSG_TIMEOUT_NOW);
@@ -234,14 +234,14 @@ spec("TurboRaft text protocol executor") {
     check_equal(tr_text_protocol_executor_make_snapshot_frames(
                      chunk_frame, sizeof(chunk_frame), &chunk_length,
                      ack_frame, sizeof(ack_frame), &ack_length),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_text_protocol_executor_hex_encode(
                      chunk_frame, chunk_length, chunk_payload,
                      sizeof(chunk_payload)),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_text_protocol_executor_hex_encode(
                      ack_frame, ack_length, ack_payload, sizeof(ack_payload)),
-                 TURBO_OK);
+                 SALTS_OK);
     tr_text_protocol_executor_set_frame(
         &plan.frames[0], TR_RAFT_WIRE_SNAPSHOT_VERSION,
         "snapshot_chunk", "snapshot_chunk",
@@ -257,7 +257,7 @@ spec("TurboRaft text protocol executor") {
 
     check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(state.calls, 2);
     check_equal(state.payload_kind, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK);
     check_equal(state.from, 2u);
@@ -276,7 +276,7 @@ spec("TurboRaft text protocol executor") {
 
     check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
-                 TURBO_EINVAL);
+                 SALTS_EINVAL);
     check_equal(state.calls, 0);
   }
 
@@ -303,7 +303,7 @@ spec("TurboRaft text protocol executor") {
 
     check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
-                 TURBO_ENOSPC);
+                 SALTS_ENOSPC);
     check_equal(state.calls, 0);
   }
 
@@ -316,17 +316,17 @@ spec("TurboRaft text protocol executor") {
 
     check_equal(tr_text_protocol_executor_make_raft_frame(
                      wire_frame, sizeof(wire_frame), &frame_length),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_text_protocol_executor_hex_encode(
                      wire_frame, frame_length, payload, sizeof(payload)),
-                 TURBO_OK);
+                 SALTS_OK);
     tr_text_protocol_executor_set_frame(
         &plan.frames[0], 3u, "raft", "append_request", payload);
     plan.frame_count = 1u;
 
     check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
-                 TURBO_EPROTO);
+                 SALTS_EPROTO);
     check_equal(state.calls, 0);
   }
 
@@ -335,22 +335,22 @@ spec("TurboRaft text protocol executor") {
     static char payload[TR_RAFT_WIRE_MAX_FRAME_SIZE * 2u + 3u];
     tr_text_protocol_debug_plan_t plan = {0};
     tr_text_protocol_executor_test_state_t state = {
-        .result = TURBO_EBUSY};
+        .result = SALTS_EBUSY};
     size_t frame_length = 0u;
 
     check_equal(tr_text_protocol_executor_make_raft_frame(
                      wire_frame, sizeof(wire_frame), &frame_length),
-                 TURBO_OK);
+                 SALTS_OK);
     check_equal(tr_text_protocol_executor_hex_encode(
                      wire_frame, frame_length, payload, sizeof(payload)),
-                 TURBO_OK);
+                 SALTS_OK);
     tr_text_protocol_executor_set_frame(
         &plan.frames[0], 3u, "raft", "timeout_now", payload);
     plan.frame_count = 1u;
 
     check_equal(tr_text_protocol_debug_execute(
                      &plan, &tr_text_protocol_executor_test_ops, &state),
-                 TURBO_EBUSY);
+                 SALTS_EBUSY);
     check_equal(state.calls, 1);
   }
 }

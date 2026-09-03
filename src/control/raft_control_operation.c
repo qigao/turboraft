@@ -1,6 +1,6 @@
 #include "raft_control_operation.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -35,11 +35,11 @@ int tr_control_operation_status_json(
 
     if (status == NULL || buffer == NULL || capacity == 0U ||
         out_size == NULL || status->term == 0U || status->index == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     state = tr_control_operation_state_name(status->state);
     if (state == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
 
     written = snprintf(
@@ -50,8 +50,8 @@ int tr_control_operation_status_json(
         state, (uint64_t)status->term, (uint64_t)status->index,
         (uint64_t)status->commit_index, (uint64_t)status->applied_index);
     if (written < 0 || (size_t)written >= capacity) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
     *out_size = (size_t)written;
-    return TURBO_OK;
+    return SALTS_OK;
 }

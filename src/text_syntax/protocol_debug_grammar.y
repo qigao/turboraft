@@ -49,13 +49,13 @@ frame_field ::= PAYLOAD ASSIGN HEX_LITERAL(P) SEMICOLON. {
 }
 
 %syntax_error {
-  tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+  tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                              TR_TEXT_DIAGNOSTIC_SYNTAX,
                              "protocol debug syntax error");
 }
 
 %parse_failure {
-  tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+  tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                              TR_TEXT_DIAGNOSTIC_SYNTAX,
                              "protocol debug parse failure");
 }

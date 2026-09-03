@@ -104,8 +104,8 @@ again:
     number {
       tr_text_token_set(token, lexer, start, YYCURSOR);
       if (tr_text_parse_uint64(token->text.data, token->text.len,
-                               &token->number) != TURBO_OK) {
-        tr_text_lexer_set_error(lexer, TURBO_ERANGE,
+                               &token->number) != SALTS_OK) {
+        tr_text_lexer_set_error(lexer, SALTS_ERANGE,
                                 "integer literal out of range");
         lexer->cursor = YYCURSOR;
         return -1;
@@ -122,7 +122,7 @@ again:
     }
     * {
       tr_text_token_set(token, lexer, start, YYCURSOR);
-      tr_text_lexer_set_error(lexer, TURBO_EPROTO,
+      tr_text_lexer_set_error(lexer, SALTS_EPROTO,
                               "invalid protocol debug character");
       lexer->cursor = YYCURSOR;
       tr_text_lexer_advance(lexer, start, YYCURSOR);

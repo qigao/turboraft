@@ -2,7 +2,7 @@
 
 这些模型是 TurboRaft Core、membership transition、Ready 处理协议和
 snapshot metadata 的有限状态抽象。模型之间通过显式契约组合，不把
-CoroNet、TLS、wire bytes 或应用 snapshot payload 放进同一个状态空间。
+CNet/FlowMQ、TLS、wire bytes 或应用 snapshot payload 放进同一个状态空间。
 
 ## 模型边界
 

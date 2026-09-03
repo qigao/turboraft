@@ -11,9 +11,9 @@ snapshot payload without depending on a database.
   `begin -> mutations -> commit|rollback`.
 - A transaction is encoded into one preallocated bounded buffer. It never
   crosses a segment and `commit` performs one sequential write followed by
-  `turbo_fs_fsync`.
+  `salts_fs_fsync`.
 - Segment and transaction capacities are fixed at open. Capacity exhaustion
-  returns `TURBO_ENOSPC`; there is no unbounded allocation or in-memory
+  returns `SALTS_ENOSPC`; there is no unbounded allocation or in-memory
   fallback.
 - Every transaction frame contains its transaction id, predecessor id,
   payload length, and XXH3 checksum. Recovery requires consecutive segment and

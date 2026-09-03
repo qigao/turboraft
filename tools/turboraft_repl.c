@@ -1,5 +1,3 @@
-#include <turbo_parser.h>
-
 #include <turboraft/text_replay_core_driver.h>
 #include <turboraft/text_syntax.h>
 
@@ -24,7 +22,7 @@ typedef struct repl_state {
     size_t node_count;
 } repl_state_t;
 
-/* Positional argument outputs, populated by turbo_cmd before dispatch. */
+/* Parsed command arguments, borrowed from the current token buffer. */
 static char *v_arg1;
 static char *v_arg2;
 static char *v_arg3;
@@ -56,9 +54,8 @@ static const char repl_help[] =
     "  exit | quit                 leave the REPL\n"
     "\n"
     "Batch modes: turboraft_repl --nodes N --script FILE, or pipe lines to stdin.\n"
-    "Note: turbo_cmd (cmd_arger) terminates the process on a malformed option or\n"
-    "bad value; the REPL pre-validates command names, counts, and integer values\n"
-    "to avoid that path. Use `run <file>` for fully robust batch execution.\n";
+    "Arguments are validated before dispatch. Use `run <file>` for robust "
+    "batch execution.\n";
 
 static int repl_stoi64(const char *text, int64_t *out)
 {
@@ -268,13 +265,13 @@ static int repl_pre_validate(const char *command,
 static void repl_print_error(int result)
 {
     fprintf(stderr, "error: result=%d (%s)\n", result,
-            result == TURBO_ETIMEDOUT ? "timed out"
-            : result == TURBO_EPROTO  ? "protocol/expectation failure"
-            : result == TURBO_ENOENT  ? "not found"
-            : result == TURBO_EALREADY ? "already exists"
-            : result == TURBO_ENOSPC  ? "capacity exceeded"
-            : result == TURBO_ERANGE  ? "out of range"
-            : result == TURBO_EINVAL  ? "invalid argument"
+            result == SALTS_ETIMEDOUT ? "timed out"
+            : result == SALTS_EPROTO  ? "protocol/expectation failure"
+            : result == SALTS_ENOENT  ? "not found"
+            : result == SALTS_EALREADY ? "already exists"
+            : result == SALTS_ENOSPC  ? "capacity exceeded"
+            : result == SALTS_ERANGE  ? "out of range"
+            : result == SALTS_EINVAL  ? "invalid argument"
                                       : "error");
 }
 
@@ -386,7 +383,7 @@ static int repl_dispatch(repl_state_t *state, const char *command)
         return 1;
     }
     result = tr_replay_driver_step(driver, &action);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         repl_print_error(result);
         return 1;
     }
@@ -415,9 +412,9 @@ static int repl_print_status(repl_state_t *state, int64_t node)
     }
     result = tr_replay_driver_status(driver, (tr_raft_node_id_t)node,
                                      &status);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         fprintf(stderr, "node %lld: %s\n", (long long)node,
-                result == TURBO_ENOENT ? "not found" : "error");
+                result == SALTS_ENOENT ? "not found" : "error");
         return 1;
     }
     printf("node %llu role=%d term=%llu leader=%llu commit=%llu "
@@ -453,7 +450,7 @@ static int repl_run_script(repl_state_t *state, const char *path)
     script_buffer[length] = '\0';
     result = tr_text_replay_parse(script_buffer, length, NULL, &plan,
                                   &diagnostic);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         fprintf(stderr, "script parse failed at %zu:%zu: %s\n",
                 diagnostic.line, diagnostic.column,
                 diagnostic.message == NULL ? "invalid input"
@@ -465,82 +462,11 @@ static int repl_run_script(repl_state_t *state, const char *path)
         return 1;
     }
     result = tr_replay_driver_run(state->driver, &plan);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         repl_print_error(result);
         return 1;
     }
     return 0;
-}
-
-static turbo_cmd_parser_t *repl_build_parser(void)
-{
-    turbo_cmd_parser_t *parser = turbo_cmd_create("turboraft_repl", "0.1.0");
-    turbo_cmd_subcommand_t *sub;
-
-    if (parser == NULL) {
-        return NULL;
-    }
-    sub = turbo_cmd_add_subcommand(parser, "cluster",
-                                   "create an n-node cluster");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "nodes", "node count");
-    sub = turbo_cmd_add_subcommand(parser, "node", "validate a node");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "id", "node id");
-    sub = turbo_cmd_add_subcommand(parser, "tick", "advance all nodes");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "ticks", "tick count");
-    sub = turbo_cmd_add_subcommand(parser, "send",
-                                   "inject heartbeat from->to");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "from", "source node");
-    turbo_cmd_sub_add_required_string(sub, &v_arg2, "to", "target node");
-    sub = turbo_cmd_add_subcommand(parser, "drop", "drop next message kind");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "message",
-                                      "message kind name");
-    sub = turbo_cmd_add_subcommand(parser, "delay",
-                                   "delay next message kind");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "message",
-                                      "message kind name");
-    turbo_cmd_sub_add_required_string(sub, &v_arg2, "ticks",
-                                      "delay in ticks");
-    sub = turbo_cmd_add_subcommand(parser, "duplicate",
-                                   "duplicate next message kind");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "message",
-                                      "message kind name");
-    sub = turbo_cmd_add_subcommand(parser, "partition",
-                                   "cut directed link a->b");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "a", "node a");
-    turbo_cmd_sub_add_required_string(sub, &v_arg2, "b", "node b");
-    sub = turbo_cmd_add_subcommand(parser, "heal",
-                                   "restore directed link a->b");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "a", "node a");
-    turbo_cmd_sub_add_required_string(sub, &v_arg2, "b", "node b");
-    sub = turbo_cmd_add_subcommand(parser, "submit", "propose an entry");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "request",
-                                      "request id");
-    turbo_cmd_sub_add_required_string(sub, &v_arg2, "node", "node id");
-    turbo_cmd_sub_add_required_string(sub, &v_arg3, "client",
-                                      "client id");
-    turbo_cmd_sub_add_required_string(sub, &v_arg4, "sequence",
-                                      "sequence");
-    turbo_cmd_sub_add_required_string(sub, &v_arg5, "payload",
-                                      "payload hex");
-    sub = turbo_cmd_add_subcommand(parser, "poll",
-                                   "poll a submitted operation");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "request",
-                                      "request id");
-    turbo_cmd_sub_add_required_string(sub, &v_arg2, "target",
-                                      "accepted|committed|applied");
-    turbo_cmd_sub_add_required_string(sub, &v_arg3, "timeout",
-                                      "timeout ticks");
-    sub = turbo_cmd_add_subcommand(parser, "expect", "assert node state");
-    turbo_cmd_sub_add_integer(sub, &v_node, "node", "n", "node id");
-    turbo_cmd_sub_add_string(sub, &v_erole, "role", "r", "expected role");
-    turbo_cmd_sub_add_string(sub, &v_commit, "commit", "c",
-                             "expected commit index");
-    sub = turbo_cmd_add_subcommand(parser, "status", "print node state");
-    turbo_cmd_sub_add_integer(sub, &v_node, "node", "n",
-                              "node id (default all)");
-    sub = turbo_cmd_add_subcommand(parser, "run", "run a replay script");
-    turbo_cmd_sub_add_required_string(sub, &v_arg1, "file", "script path");
-    return parser;
 }
 
 static int repl_build_driver(repl_state_t *state, size_t count)
@@ -574,7 +500,7 @@ static int repl_build_driver(repl_state_t *state, size_t count)
     config.nodes = nodes;
     config.node_count = count;
     result = tr_replay_driver_create(&config, &driver);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         fprintf(stderr, "driver create failed: %d\n", result);
         return 1;
     }
@@ -598,12 +524,9 @@ static void repl_zero_outputs(void)
     v_commit = NULL;
 }
 
-static int repl_handle_line(repl_state_t *state,
-                            turbo_cmd_parser_t *parser,
-                            char *line)
+static int repl_handle_line(repl_state_t *state, char *line)
 {
     char tokens[REPL_MAX_ARGS][REPL_MAX_ARG_BYTES];
-    char *argv[REPL_MAX_ARGS + 1u];
     const char *command;
     int token_count = 0;
     int index;
@@ -633,12 +556,27 @@ static int repl_handle_line(repl_state_t *state,
         return 0;
     }
     repl_zero_outputs();
-    argv[0] = (char *)"turboraft_repl";
-    for (index = 0; index < token_count; ++index) {
-        argv[index + 1] = tokens[index];
-    }
-    if (turbo_cmd_parse_subcommand(parser, token_count + 1, argv, false) < 0) {
-        return 0;
+    if (strcmp(command, "expect") == 0 || strcmp(command, "status") == 0) {
+        for (index = 1; index + 1 < token_count; index += 2) {
+            if (strcmp(tokens[index], "--node") == 0 ||
+                strcmp(tokens[index], "-n") == 0) {
+                if (repl_stoi64(tokens[index + 1], &v_node) != 0) {
+                    return 0;
+                }
+            } else if (strcmp(tokens[index], "--role") == 0 ||
+                       strcmp(tokens[index], "-r") == 0) {
+                v_erole = tokens[index + 1];
+            } else if (strcmp(tokens[index], "--commit") == 0 ||
+                       strcmp(tokens[index], "-c") == 0) {
+                v_commit = tokens[index + 1];
+            }
+        }
+    } else {
+        v_arg1 = token_count > 1 ? tokens[1] : NULL;
+        v_arg2 = token_count > 2 ? tokens[2] : NULL;
+        v_arg3 = token_count > 3 ? tokens[3] : NULL;
+        v_arg4 = token_count > 4 ? tokens[4] : NULL;
+        v_arg5 = token_count > 5 ? tokens[5] : NULL;
     }
     if (strcmp(command, "cluster") == 0) {
         int64_t count;
@@ -659,7 +597,7 @@ static int repl_handle_line(repl_state_t *state,
 
             action.kind = TR_TEXT_REPLAY_NODE;
             action.node_id = (uint64_t)id;
-            return tr_replay_driver_step(state->driver, &action) == TURBO_OK
+            return tr_replay_driver_step(state->driver, &action) == SALTS_OK
                        ? 0
                        : 1;
         }
@@ -693,7 +631,7 @@ static int repl_handle_line(repl_state_t *state,
         {
             int result = tr_replay_driver_step(state->driver, &action);
 
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 repl_print_error(result);
                 return 1;
             }
@@ -711,24 +649,29 @@ static int repl_handle_line(repl_state_t *state,
 
 int main(int argc, char **argv)
 {
-    turbo_cmd_parser_t *startup;
-    turbo_cmd_parser_t *parser;
     int64_t nodes = 3;
-    char *script = NULL;
+    const char *script = NULL;
     repl_state_t state;
     int interactive;
 
     memset(&state, 0, sizeof(state));
-    startup = turbo_cmd_create("turboraft_repl", "0.1.0");
-    if (startup == NULL) {
-        return 2;
+    for (int index = 1; index < argc; ++index) {
+        if (strcmp(argv[index], "--nodes") == 0 && index + 1 < argc) {
+            if (repl_stoi64(argv[++index], &nodes) != 0) {
+                fprintf(stderr, "invalid --nodes value\n");
+                return 2;
+            }
+        } else if (strcmp(argv[index], "--script") == 0 && index + 1 < argc) {
+            script = argv[++index];
+        } else if (strcmp(argv[index], "--help") == 0 ||
+                   strcmp(argv[index], "-h") == 0) {
+            fputs(repl_help, stdout);
+            return 0;
+        } else {
+            fprintf(stderr, "unknown or incomplete option: %s\n", argv[index]);
+            return 2;
+        }
     }
-    turbo_cmd_add_integer(startup, &nodes, "nodes", NULL,
-                          "number of nodes in the cluster");
-    turbo_cmd_add_string(startup, &script, "script", NULL,
-                         "replay DSL script file to run at startup");
-    turbo_cmd_parse(startup, argc, argv, true);
-    turbo_cmd_destroy(startup);
     if (nodes < 1 || nodes > TR_REPLAY_DRIVER_MAX_NODES) {
         fprintf(stderr, "--nodes must be in [1, %u]\n",
                 TR_REPLAY_DRIVER_MAX_NODES);
@@ -737,13 +680,7 @@ int main(int argc, char **argv)
     if (repl_build_driver(&state, (size_t)nodes) != 0) {
         return 1;
     }
-    parser = repl_build_parser();
-    if (parser == NULL) {
-        tr_replay_driver_destroy(state.driver);
-        return 2;
-    }
     if (script != NULL && repl_run_script(&state, script) != 0) {
-        turbo_cmd_destroy(parser);
         tr_replay_driver_destroy(state.driver);
         return 1;
     }
@@ -758,11 +695,10 @@ int main(int argc, char **argv)
         if (fgets(line, sizeof(line), stdin) == NULL) {
             break;
         }
-        if (repl_handle_line(&state, parser, line) < 0) {
+        if (repl_handle_line(&state, line) < 0) {
             break; /* exit/quit */
         }
     }
-    turbo_cmd_destroy(parser);
     tr_replay_driver_destroy(state.driver);
     return 0;
 }

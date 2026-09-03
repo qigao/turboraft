@@ -4,7 +4,7 @@
 #include <turboraft/raft_wal_storage.h>
 #include <turboraft/raft_wire_codec.h>
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,11 +41,11 @@ static int tr_chaos_stdio_read(void *output, size_t size)
     while (total < size) {
         size_t count = fread(bytes + total, 1U, size - total, stdin);
         if (count == 0U) {
-            return feof(stdin) ? TURBO_EOF : TURBO_EPROTO;
+            return feof(stdin) ? SALTS_EOF : SALTS_EPROTO;
         }
         total += count;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_chaos_stdio_write(const void *input, size_t size)
@@ -56,11 +56,11 @@ static int tr_chaos_stdio_write(const void *input, size_t size)
     while (total < size) {
         size_t count = fwrite(bytes + total, 1U, size - total, stdout);
         if (count == 0U) {
-            return TURBO_EPIPE;
+            return SALTS_EPIPE;
         }
         total += count;
     }
-    return fflush(stdout) == 0 ? TURBO_OK : TURBO_EPIPE;
+    return fflush(stdout) == 0 ? SALTS_OK : SALTS_EPIPE;
 }
 
 static void tr_chaos_fill_cluster(tr_raft_cluster_id_t *cluster)
@@ -101,7 +101,7 @@ static int tr_chaos_apply(void *context,
     size_t index;
 
     if (node == NULL || (entries == NULL && entry_count != 0U)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     for (index = 0U; index < entry_count; ++index) {
         tr_chaos_hash_u64(&node->applied_hash, entries[index].index);
@@ -113,7 +113,7 @@ static int tr_chaos_apply(void *context,
             node->user_apply_count++;
         }
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_chaos_enqueue(void *context, const tr_raft_message_t *message)
@@ -126,7 +126,7 @@ static int tr_chaos_enqueue(void *context, const tr_raft_message_t *message)
 
     if (node == NULL || message == NULL ||
         node->outbound_size + 4U >= TR_CHAOS_MAX_RESPONSE_BYTES) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
     remaining = TR_CHAOS_MAX_RESPONSE_BYTES - node->outbound_size - 4U;
     memset(&metadata, 0, sizeof(metadata));
@@ -135,15 +135,15 @@ static int tr_chaos_enqueue(void *context, const tr_raft_message_t *message)
     result = tr_raft_wire_encode(
         node->codec, &metadata, message,
         node->outbound + node->outbound_size + 4U, remaining, &frame_size);
-    if (result != TURBO_OK || frame_size > UINT32_MAX) {
-        return result != TURBO_OK ? result : TURBO_EPROTO;
+    if (result != SALTS_OK || frame_size > UINT32_MAX) {
+        return result != SALTS_OK ? result : SALTS_EPROTO;
     }
     tr_chaos_put_u32(node->outbound + node->outbound_size,
                      (uint32_t) frame_size);
     node->outbound_size += 4U + frame_size;
     node->outbound_count++;
     node->next_message_id++;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_chaos_node_open(tr_chaos_node_t *node,
@@ -168,10 +168,10 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
     tr_chaos_fill_cluster(&node->cluster_id);
     node->outbound = (uint8_t *) malloc(TR_CHAOS_MAX_RESPONSE_BYTES);
     if (node->outbound == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     result = tr_raft_wire_codec_create(&node->codec);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         free(node->outbound);
         node->outbound = NULL;
         return result;
@@ -185,13 +185,13 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
     storage_config.create_if_missing = true;
     storage_config.max_snapshot_bytes = 1024U * 1024U;
     result = tr_raft_wal_storage_open(&storage_config, &node->storage);
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_raft_wal_storage_bind(node->storage, &storage_adapter);
     }
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_raft_wal_storage_load(node->storage, &recovery);
     }
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         if (node->storage != NULL) {
             tr_raft_wal_storage_close(node->storage);
         }
@@ -227,10 +227,10 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
     service_config.state_machine.apply_batch = tr_chaos_apply;
     result = tr_raft_service_create(&service_config, &node->service);
     tr_raft_wal_recovery_destroy(&recovery);
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_raft_service_poll(node->service);
     }
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         if (node->service != NULL) {
             tr_raft_service_destroy(node->service);
         }
@@ -270,7 +270,7 @@ static int tr_chaos_execute(tr_chaos_node_t *node,
                 tr_chaos_get_u32(payload + 4U);
             return tr_raft_service_tick(node->service, &tick);
         }
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     case TR_CHAOS_COMMAND_STEP:
         if (payload_size != 0U) {
             tr_raft_wire_metadata_t metadata;
@@ -279,15 +279,15 @@ static int tr_chaos_execute(tr_chaos_node_t *node,
                                              payload_size, &metadata,
                                              &message);
 
-            if (result != TURBO_OK ||
+            if (result != SALTS_OK ||
                 memcmp(metadata.cluster_id.bytes, node->cluster_id.bytes,
                        sizeof(node->cluster_id.bytes)) != 0 ||
                 message.to != node->node_id) {
-                return TURBO_EPROTO;
+                return SALTS_EPROTO;
             }
             return tr_raft_service_step(node->service, &message);
         }
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     case TR_CHAOS_COMMAND_PROPOSE:
         if (payload_size >= 12U &&
             tr_chaos_get_u32(payload + 8U) == payload_size - 12U) {
@@ -298,12 +298,12 @@ static int tr_chaos_execute(tr_chaos_node_t *node,
             proposal.data = payload + 12U;
             return tr_raft_service_propose(node->service, &proposal);
         }
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     case TR_CHAOS_COMMAND_STATUS:
     case TR_CHAOS_COMMAND_STOP:
-        return payload_size == 0U ? TURBO_OK : TURBO_EINVAL;
+        return payload_size == 0U ? SALTS_OK : SALTS_EINVAL;
     default:
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
 }
 
@@ -315,7 +315,7 @@ static int tr_chaos_respond(tr_chaos_node_t *node,
     uint8_t header[TR_CHAOS_RESPONSE_HEADER_SIZE];
     int result = tr_raft_service_status(node->service, &status);
 
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     memset(header, 0, sizeof(header));
@@ -338,7 +338,7 @@ static int tr_chaos_respond(tr_chaos_node_t *node,
     tr_chaos_put_u64(header + 80U, status.core.applied_index);
     tr_chaos_put_u64(header + 88U, node->applied_hash);
     result = tr_chaos_stdio_write(header, sizeof(header));
-    if (result == TURBO_OK && node->outbound_size != 0U) {
+    if (result == SALTS_OK && node->outbound_size != 0U) {
         result = tr_chaos_stdio_write(node->outbound, node->outbound_size);
     }
     return result;
@@ -370,7 +370,7 @@ int main(int argc, char **argv)
     if (payload == NULL) {
         return 4;
     }
-    if (tr_chaos_node_open(&node, node_id, argv[4]) != TURBO_OK) {
+    if (tr_chaos_node_open(&node, node_id, argv[4]) != SALTS_OK) {
         free(payload);
         return 5;
     }
@@ -382,10 +382,10 @@ int main(int argc, char **argv)
         tr_chaos_command_kind_t kind;
         int result = tr_chaos_stdio_read(header, sizeof(header));
 
-        if (result == TURBO_EOF) {
+        if (result == SALTS_EOF) {
             break;
         }
-        if (result != TURBO_OK ||
+        if (result != SALTS_OK ||
             memcmp(header, tr_chaos_command_magic,
                    sizeof(tr_chaos_command_magic)) != 0 ||
             tr_chaos_get_u16(header + 4U) != TR_CHAOS_PROTOCOL_VERSION) {
@@ -397,14 +397,14 @@ int main(int argc, char **argv)
         payload_size = tr_chaos_get_u32(header + 12U);
         if (payload_size > TR_CHAOS_MAX_FRAME_BYTES ||
             (payload_size != 0U &&
-             tr_chaos_stdio_read(payload, payload_size) != TURBO_OK)) {
+             tr_chaos_stdio_read(payload, payload_size) != SALTS_OK)) {
             exit_code = 7;
             break;
         }
         node.outbound_size = 0U;
         node.outbound_count = 0U;
         result = tr_chaos_execute(&node, kind, payload, payload_size);
-        if (tr_chaos_respond(&node, request_id, result) != TURBO_OK) {
+        if (tr_chaos_respond(&node, request_id, result) != SALTS_OK) {
             exit_code = 8;
             break;
         }

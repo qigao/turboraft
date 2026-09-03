@@ -3,11 +3,11 @@
 
 #ifdef TURBORAFT_BENCHMARK_WAL
 #include <turboraft/raft_wal_storage.h>
-#include <turbo_fs.h>
+#include <salts_fs.h>
 #endif
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -52,11 +52,11 @@ static int benchmark_elect_leader(tr_raft_core_t *core,
     tr_raft_ready_t ready = benchmark_ready(messages, capacity);
     int result = tr_raft_core_tick(core, &tick, &ready);
 
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_raft_core_advance(core);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
 
@@ -68,11 +68,11 @@ static int benchmark_elect_leader(tr_raft_core_t *core,
     response.granted = true;
     ready = benchmark_ready(messages, capacity);
     result = tr_raft_core_step(core, &response, &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_raft_core_advance(core);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
 
@@ -80,8 +80,8 @@ static int benchmark_elect_leader(tr_raft_core_t *core,
     response.term = 1U;
     ready = benchmark_ready(messages, capacity);
     result = tr_raft_core_step(core, &response, &ready);
-    if (result != TURBO_OK || ready.role != TR_RAFT_LEADER) {
-        return result == TURBO_OK ? TURBO_EPROTO : result;
+    if (result != SALTS_OK || ready.role != TR_RAFT_LEADER) {
+        return result == SALTS_OK ? SALTS_EPROTO : result;
     }
     return tr_raft_core_advance(core);
 }
@@ -104,13 +104,13 @@ static int benchmark_replication_round_trips(
     size_t current_round = 0U;
     size_t current_count = 0U;
     size_t index;
-    int result = TURBO_OK;
+    int result = SALTS_OK;
 
     if (window == 0U || window > REPLICATION_MODEL_MAX_WINDOW ||
         entry_count == 0U ||
         entry_count > SIZE_MAX - TR_RAFT_MAX_APPEND_ENTRIES ||
         out_result == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(out_result, 0, sizeof(*out_result));
     memset(&status, 0, sizeof(status));
@@ -120,7 +120,7 @@ static int benchmark_replication_round_trips(
     round_messages[1] = (tr_raft_message_t *) calloc(
         window, sizeof(*round_messages[1]));
     if (round_messages[0] == NULL || round_messages[1] == NULL) {
-        result = TURBO_ENOMEM;
+        result = SALTS_ENOMEM;
         goto cleanup;
     }
 
@@ -135,11 +135,11 @@ static int benchmark_replication_round_trips(
     config.max_log_entries = entry_count + TR_RAFT_MAX_APPEND_ENTRIES;
     config.max_inflight_append_requests = window;
     result = tr_raft_core_create(&config, &core);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         goto cleanup;
     }
     result = benchmark_elect_leader(core, round_messages[0], window);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         goto cleanup;
     }
 
@@ -154,9 +154,9 @@ static int benchmark_replication_round_trips(
         proposal.data = &payload;
         proposal.data_length = sizeof(payload);
         result = tr_raft_core_propose(core, &proposal, &ready);
-        if (result != TURBO_OK ||
+        if (result != SALTS_OK ||
             ready.message_count != (index == 1U ? 1U : 0U)) {
-            result = result == TURBO_OK ? TURBO_EPROTO : result;
+            result = result == SALTS_OK ? SALTS_EPROTO : result;
             goto cleanup;
         }
         if (index == 1U) {
@@ -164,7 +164,7 @@ static int benchmark_replication_round_trips(
             out_result->append_requests += ready.message_count;
         }
         result = tr_raft_core_advance(core);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             goto cleanup;
         }
     }
@@ -182,7 +182,7 @@ static int benchmark_replication_round_trips(
 
             if (request->type != TR_RAFT_MSG_APPEND_REQUEST ||
                 request->entry_count == 0U || next_count >= window) {
-                result = TURBO_EPROTO;
+                result = SALTS_EPROTO;
                 goto cleanup;
             }
             memset(&response, 0, sizeof(response));
@@ -198,15 +198,15 @@ static int benchmark_replication_round_trips(
                 &round_messages[next_round][next_count],
                 window - next_count);
             result = tr_raft_core_step(core, &response, &ready);
-            if (result != TURBO_OK ||
+            if (result != SALTS_OK ||
                 ready.message_count > window - next_count) {
-                result = result == TURBO_OK ? TURBO_EPROTO : result;
+                result = result == SALTS_OK ? SALTS_EPROTO : result;
                 goto cleanup;
             }
             next_count += ready.message_count;
             out_result->append_requests += ready.message_count;
             result = tr_raft_core_advance(core);
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 goto cleanup;
             }
         }
@@ -215,12 +215,12 @@ static int benchmark_replication_round_trips(
     }
 
     result = tr_raft_core_status(core, &status);
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_raft_core_progress(core, &progress);
     }
-    if (result != TURBO_OK || progress.peer_count != 2U ||
+    if (result != SALTS_OK || progress.peer_count != 2U ||
         progress.peers[1].node_id != 2U) {
-        result = result == TURBO_OK ? TURBO_EPROTO : result;
+        result = result == SALTS_OK ? SALTS_EPROTO : result;
         goto cleanup;
     }
     out_result->match_index = progress.peers[1].match_index;
@@ -281,30 +281,30 @@ spec("TurboRaft performance baselines")
         replication_model_result_t window_four;
         replication_model_result_t window_eight;
 
-        check_int_eq(benchmark_replication_round_trips(
+        check_equal(benchmark_replication_round_trips(
                          1U, REPLICATION_MODEL_ENTRY_COUNT, &single),
-                     TURBO_OK);
-        check_int_eq(benchmark_replication_round_trips(
+                     SALTS_OK);
+        check_equal(benchmark_replication_round_trips(
                          4U, REPLICATION_MODEL_ENTRY_COUNT, &window_four),
-                     TURBO_OK);
-        check_int_eq(benchmark_replication_round_trips(
+                     SALTS_OK);
+        check_equal(benchmark_replication_round_trips(
                          8U, REPLICATION_MODEL_ENTRY_COUNT, &window_eight),
-                     TURBO_OK);
-        check_size_eq(single.round_trips, 33U);
-        check_size_eq(window_four.round_trips, 9U);
-        check_size_eq(window_eight.round_trips, 5U);
-        check_size_eq(single.append_requests, 33U);
-        check_size_eq(window_four.append_requests, single.append_requests);
-        check_size_eq(window_eight.append_requests, single.append_requests);
-        check_long_eq(single.match_index, REPLICATION_MODEL_ENTRY_COUNT);
-        check_long_eq(window_four.match_index,
+                     SALTS_OK);
+        check_equal(single.round_trips, 33U);
+        check_equal(window_four.round_trips, 9U);
+        check_equal(window_eight.round_trips, 5U);
+        check_equal(single.append_requests, 33U);
+        check_equal(window_four.append_requests, single.append_requests);
+        check_equal(window_eight.append_requests, single.append_requests);
+        check_equal(single.match_index, REPLICATION_MODEL_ENTRY_COUNT);
+        check_equal(window_four.match_index,
                       REPLICATION_MODEL_ENTRY_COUNT);
-        check_long_eq(window_eight.match_index,
+        check_equal(window_eight.match_index,
                       REPLICATION_MODEL_ENTRY_COUNT);
-        check_long_eq(single.commit_index, REPLICATION_MODEL_ENTRY_COUNT);
-        check_long_eq(window_four.commit_index,
+        check_equal(single.commit_index, REPLICATION_MODEL_ENTRY_COUNT);
+        check_equal(window_four.commit_index,
                       REPLICATION_MODEL_ENTRY_COUNT);
-        check_long_eq(window_eight.commit_index,
+        check_equal(window_eight.commit_index,
                       REPLICATION_MODEL_ENTRY_COUNT);
     }
 
@@ -317,21 +317,21 @@ spec("TurboRaft performance baselines")
         tr_raft_wire_metadata_t metadata;
         tr_raft_wire_metadata_t decoded_metadata;
         size_t frame_size = 0U;
-        int first_error = TURBO_OK;
+        int first_error = SALTS_OK;
 
         benchmark_wire_message(&message);
         memset(&metadata, 0, sizeof(metadata));
         metadata.cluster_id.bytes[0] = 1U;
         metadata.message_id = 1U;
-        check_int_eq(tr_raft_wire_codec_create(&codec), TURBO_OK);
-        check_int_eq(tr_raft_wire_encode_version(
+        check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
+        check_equal(tr_raft_wire_encode_version(
                          codec, TR_RAFT_WIRE_VERSION, &metadata, &message,
                          frame, sizeof(frame), &frame_size),
-                     TURBO_OK);
-        check_int_eq(tr_raft_wire_decode(codec, frame, frame_size,
+                     SALTS_OK);
+        check_equal(tr_raft_wire_decode(codec, frame, frame_size,
                                          &decoded_metadata, &decoded),
-                     TURBO_OK);
-        check_size_eq(decoded.entry_count, message.entry_count);
+                     SALTS_OK);
+        check_equal(decoded.entry_count, message.entry_count);
 
         benchmark_io("wire v3 encode 8x256B",
                      WIRE_BENCHMARK_SAMPLE_COUNT, 1U, frame_size)
@@ -339,12 +339,12 @@ spec("TurboRaft performance baselines")
             int result = tr_raft_wire_encode_version(
                 codec, TR_RAFT_WIRE_VERSION, &metadata, &message,
                 frame, sizeof(frame), &frame_size);
-            if (first_error == TURBO_OK && result != TURBO_OK) {
+            if (first_error == SALTS_OK && result != SALTS_OK) {
                 first_error = result;
             }
             benchmark_result_sink = result;
         }
-        check_int_eq(first_error, TURBO_OK);
+        check_equal(first_error, SALTS_OK);
 
         {
             static uint8_t burst_frames[WIRE_BENCHMARK_BURST_ITEMS]
@@ -355,15 +355,15 @@ spec("TurboRaft performance baselines")
 
             for (index = 0U; index < WIRE_BENCHMARK_BURST_ITEMS; ++index) {
                 metadata.message_id = index + 1U;
-                check_int_eq(tr_raft_wire_encode_version(
+                check_equal(tr_raft_wire_encode_version(
                                  codec, TR_RAFT_WIRE_VERSION, &metadata,
                                  &message, burst_frames[index],
                                  sizeof(burst_frames[index]),
                                  &burst_frame_sizes[index]),
-                             TURBO_OK);
+                             SALTS_OK);
                 burst_bytes += burst_frame_sizes[index];
             }
-            first_error = TURBO_OK;
+            first_error = SALTS_OK;
             benchmark_io("wire v3 encode 16-frame replication burst",
                          WIRE_BENCHMARK_SAMPLE_COUNT,
                          WIRE_BENCHMARK_BURST_ITEMS, burst_bytes)
@@ -377,27 +377,27 @@ spec("TurboRaft performance baselines")
                         codec, TR_RAFT_WIRE_VERSION, &metadata, &message,
                         burst_frames[index], sizeof(burst_frames[index]),
                         &burst_frame_sizes[index]);
-                    if (first_error == TURBO_OK && result != TURBO_OK) {
+                    if (first_error == SALTS_OK && result != SALTS_OK) {
                         first_error = result;
                     }
                     benchmark_result_sink = result;
                 }
             }
-            check_int_eq(first_error, TURBO_OK);
+            check_equal(first_error, SALTS_OK);
         }
 
-        first_error = TURBO_OK;
+        first_error = SALTS_OK;
         benchmark_io("wire v3 decode 8x256B",
                      WIRE_BENCHMARK_SAMPLE_COUNT, 1U, frame_size)
         {
             int result = tr_raft_wire_decode(
                 codec, frame, frame_size, &decoded_metadata, &decoded);
-            if (first_error == TURBO_OK && result != TURBO_OK) {
+            if (first_error == SALTS_OK && result != SALTS_OK) {
                 first_error = result;
             }
             benchmark_result_sink = result;
         }
-        check_int_eq(first_error, TURBO_OK);
+        check_equal(first_error, SALTS_OK);
 
         {
             static uint8_t snapshot_data[
@@ -426,12 +426,12 @@ spec("TurboRaft performance baselines")
             chunk.done = true;
             memset(chunk.snapshot_digest, 0x3c,
                    sizeof(chunk.snapshot_digest));
-            check_int_eq(tr_raft_wire_encode_snapshot_chunk(
+            check_equal(tr_raft_wire_encode_snapshot_chunk(
                              codec, &metadata, &chunk, snapshot_frame,
                              sizeof(snapshot_frame), &snapshot_frame_size),
-                         TURBO_OK);
+                         SALTS_OK);
 
-            first_error = TURBO_OK;
+            first_error = SALTS_OK;
             benchmark_io("snapshot V5 encode 64KiB",
                          WIRE_BENCHMARK_SAMPLE_COUNT, 1U,
                          snapshot_frame_size)
@@ -439,14 +439,14 @@ spec("TurboRaft performance baselines")
                 int result = tr_raft_wire_encode_snapshot_chunk(
                     codec, &metadata, &chunk, snapshot_frame,
                     sizeof(snapshot_frame), &snapshot_frame_size);
-                if (first_error == TURBO_OK && result != TURBO_OK) {
+                if (first_error == SALTS_OK && result != SALTS_OK) {
                     first_error = result;
                 }
                 benchmark_result_sink = result;
             }
-            check_int_eq(first_error, TURBO_OK);
+            check_equal(first_error, SALTS_OK);
 
-            first_error = TURBO_OK;
+            first_error = SALTS_OK;
             benchmark_io("snapshot V5 decode 64KiB borrowed",
                          WIRE_BENCHMARK_SAMPLE_COUNT, 1U,
                          snapshot_frame_size)
@@ -454,12 +454,12 @@ spec("TurboRaft performance baselines")
                 int result = tr_raft_wire_decode_snapshot_chunk(
                     codec, snapshot_frame, snapshot_frame_size,
                     &decoded_metadata, &decoded_chunk);
-                if (first_error == TURBO_OK && result != TURBO_OK) {
+                if (first_error == SALTS_OK && result != SALTS_OK) {
                     first_error = result;
                 }
                 benchmark_result_sink = result;
             }
-            check_int_eq(first_error, TURBO_OK);
+            check_equal(first_error, SALTS_OK);
         }
         tr_raft_wire_codec_destroy(codec);
     }
@@ -468,13 +468,13 @@ spec("TurboRaft performance baselines")
     bench("segmented WAL durable storage")
     {
         char *prefix = tt_make_temp_file("turboraft-wal-benchmark", ".data");
-        char segment_path[TURBO_FS_MAX_PATH];
-        char lock_path[TURBO_FS_MAX_PATH];
+        char segment_path[SALTS_FS_MAX_PATH];
+        char lock_path[SALTS_FS_MAX_PATH];
         tr_raft_wal_storage_config_t config;
         tr_raft_wal_storage_t *storage = NULL;
         tr_raft_storage_t adapter;
         tr_raft_index_t index = 0U;
-        int first_error = TURBO_OK;
+        int first_error = SALTS_OK;
 
         check_not_null(prefix);
         memset(&config, 0, sizeof(config));
@@ -485,8 +485,8 @@ spec("TurboRaft performance baselines")
         config.max_segments = 1U;
         config.max_log_entries = STORAGE_BENCHMARK_SAMPLE_COUNT;
         config.create_if_missing = true;
-        check_int_eq(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
-        check_int_eq(tr_raft_wal_storage_bind(storage, &adapter), TURBO_OK);
+        check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), SALTS_OK);
 
         benchmark_batch("segmented WAL fsync single-entry commit",
                         STORAGE_BENCHMARK_SAMPLE_COUNT)
@@ -494,36 +494,36 @@ spec("TurboRaft performance baselines")
             tr_raft_entry_t entry = benchmark_storage_entry(++index);
             int result = adapter.begin(adapter.context);
 
-            if (result == TURBO_OK) {
+            if (result == SALTS_OK) {
                 result = adapter.write_hard_state(
                     adapter.context, entry.term, 1U);
             }
-            if (result == TURBO_OK) {
+            if (result == SALTS_OK) {
                 result = adapter.append_log(adapter.context, &entry, 1U);
             }
-            if (result == TURBO_OK) {
+            if (result == SALTS_OK) {
                 result = adapter.write_commit_index(
                     adapter.context, entry.index);
             }
-            if (result == TURBO_OK) {
+            if (result == SALTS_OK) {
                 result = adapter.commit(adapter.context);
             } else {
                 (void)adapter.rollback(adapter.context);
             }
-            if (first_error == TURBO_OK && result != TURBO_OK) {
+            if (first_error == SALTS_OK && result != SALTS_OK) {
                 first_error = result;
             }
             benchmark_result_sink = result;
         }
-        check_int_eq(first_error, TURBO_OK);
-        check_long_eq(index, STORAGE_BENCHMARK_SAMPLE_COUNT);
-        check_int_eq(tr_raft_wal_storage_close(storage), TURBO_OK);
+        check_equal(first_error, SALTS_OK);
+        check_equal(index, STORAGE_BENCHMARK_SAMPLE_COUNT);
+        check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
         snprintf(segment_path, sizeof(segment_path), "%s.00000001.wal",
                  prefix);
         snprintf(lock_path, sizeof(lock_path), "%s.lock", prefix);
-        check_int_eq(tt_remove_file(segment_path), 0);
-        check_int_eq(tt_remove_file(lock_path), 0);
-        check_int_eq(tt_remove_file(prefix), 0);
+        check_equal(tt_remove_file(segment_path), 0);
+        check_equal(tt_remove_file(lock_path), 0);
+        check_equal(tt_remove_file(prefix), 0);
         free(prefix);
     }
 #endif

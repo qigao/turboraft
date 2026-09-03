@@ -1,20 +1,20 @@
-#ifndef TURBORAFT_RAFT_CORONET_PAYLOAD_STORAGE_H
-#define TURBORAFT_RAFT_CORONET_PAYLOAD_STORAGE_H
+#ifndef TURBORAFT_RAFT_TRANSPORT_PAYLOAD_STORAGE_H
+#define TURBORAFT_RAFT_TRANSPORT_PAYLOAD_STORAGE_H
 
-#include <turboraft/raft_coronet_transport.h>
+#include <turboraft/raft_transport.h>
 
-#include <turbo_buffer.h>
-#include <turbo_error.h>
+#include <salts_buffer.h>
+#include <salts_error.h>
 
 #include <string.h>
 
-typedef struct tr_raft_owned_coronet_payload {
-    tr_raft_coronet_payload_t payload;
+typedef struct tr_raft_owned_transport_payload {
+    tr_raft_transport_payload_t payload;
     mem_buffer_t *payload_data;
-} tr_raft_owned_coronet_payload_t;
+} tr_raft_owned_transport_payload_t;
 
-static inline void tr_raft_owned_coronet_payload_release(
-    tr_raft_owned_coronet_payload_t *owned)
+static inline void tr_raft_owned_transport_payload_release(
+    tr_raft_owned_transport_payload_t *owned)
 {
     if (owned == NULL) {
         return;
@@ -23,15 +23,15 @@ static inline void tr_raft_owned_coronet_payload_release(
     memset(owned, 0, sizeof(*owned));
 }
 
-static inline int tr_raft_owned_coronet_payload_copy(
-    tr_raft_owned_coronet_payload_t *owned,
-    const tr_raft_coronet_payload_t *payload)
+static inline int tr_raft_owned_transport_payload_copy(
+    tr_raft_owned_transport_payload_t *owned,
+    const tr_raft_transport_payload_t *payload)
 {
     const uint8_t *data = NULL;
     size_t data_length = 0U;
 
     if (owned == NULL || payload == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(owned, 0, sizeof(*owned));
     owned->payload = *payload;
@@ -42,7 +42,7 @@ static inline int tr_raft_owned_coronet_payload_copy(
         data = payload->data.data_chunk.data;
         data_length = payload->data.data_chunk.data_length;
     } else {
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (data_length == 0U) {
         if (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
@@ -50,18 +50,18 @@ static inline int tr_raft_owned_coronet_payload_copy(
         } else {
             owned->payload.data.data_chunk.data = NULL;
         }
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (data == NULL ||
         (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK &&
          data_length > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) ||
         (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
          data_length > TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     owned->payload_data = mem_get_buffer(mem_global(), data_length);
     if (owned->payload_data == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     memcpy(mem_buffer_data(owned->payload_data), data, data_length);
     mem_set_used(owned->payload_data, data_length);
@@ -71,7 +71,7 @@ static inline int tr_raft_owned_coronet_payload_copy(
     } else {
         owned->payload.data.data_chunk.data = data;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 #endif

@@ -2,7 +2,7 @@
 
 #include "raft_peer_set.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -70,12 +70,12 @@ static int tr_raft_membership_transition_validate_next(
     size_t source_count = 0U;
     size_t index;
 
-    if (tr_raft_conf_validate(configuration) != TURBO_OK) {
-        return TURBO_EPROTO;
+    if (tr_raft_conf_validate(configuration) != SALTS_OK) {
+        return SALTS_EPROTO;
     }
     if (transition->pending_count >
         TR_RAFT_PEER_SET_MAX_SOURCES - 2U) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     peer_memberships[source_count++] = &transition->committed;
     for (index = 0U; index < transition->pending_count; ++index) {
@@ -83,8 +83,8 @@ static int tr_raft_membership_transition_validate_next(
     }
     peer_memberships[source_count++] = configuration;
     if (tr_raft_peer_set_build(peer_memberships, source_count, &peers) !=
-        TURBO_OK) {
-        return TURBO_EPROTO;
+        SALTS_OK) {
+        return SALTS_EPROTO;
     }
     if (transition->pending_count != 0U) {
         base = &transition->pending[transition->pending_count - 1U];
@@ -94,21 +94,21 @@ static int tr_raft_membership_transition_validate_next(
             transition->committed.phase != TR_RAFT_CONF_FINAL ||
             !tr_raft_joint_old_voters_match(&transition->committed,
                                             configuration)) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (configuration->phase == TR_RAFT_CONF_FINAL &&
         base->phase == TR_RAFT_CONF_JOINT) {
         tr_raft_membership_t expected;
 
-        if (tr_raft_membership_final(base, &expected) != TURBO_OK ||
+        if (tr_raft_membership_final(base, &expected) != SALTS_OK ||
             !tr_raft_membership_equal(&expected, configuration)) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
-        return TURBO_OK;
+        return SALTS_OK;
     }
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
 }
 
 int tr_raft_membership_transition_init(
@@ -121,13 +121,13 @@ int tr_raft_membership_transition_init(
     int result;
 
     if (transition == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(transition, 0, sizeof(*transition));
     result = tr_raft_membership_stable(voters, voter_count, learners,
                                        learner_count,
                                        &transition->committed);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         memset(transition, 0, sizeof(*transition));
     }
     return result;
@@ -138,12 +138,12 @@ int tr_raft_membership_transition_init_configuration(
     const tr_raft_conf_t *configuration)
 {
     if (transition == NULL || configuration == NULL ||
-        tr_raft_conf_validate(configuration) != TURBO_OK) {
-        return TURBO_EINVAL;
+        tr_raft_conf_validate(configuration) != SALTS_OK) {
+        return SALTS_EINVAL;
     }
     memset(transition, 0, sizeof(*transition));
     transition->committed = *configuration;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_membership_transition_propose(
@@ -156,11 +156,11 @@ int tr_raft_membership_transition_propose(
     tr_raft_membership_t *joint)
 {
     if (transition == NULL || joint == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (transition->committed.phase != TR_RAFT_CONF_FINAL ||
         transition->pending_count != 0U) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     return tr_raft_membership_joint(
         &transition->committed, target_voters, target_voter_count,
@@ -176,35 +176,35 @@ int tr_raft_membership_transition_stage(
     int result;
 
     if (transition == NULL || configuration == NULL || log_index == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (transition->pending_count > TR_RAFT_MEMBERSHIP_MAX_PENDING) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     for (pending_index = 0U; pending_index < transition->pending_count;
          ++pending_index) {
         if (transition->pending_indices[pending_index] == log_index) {
             return tr_raft_membership_equal(
                        &transition->pending[pending_index], configuration)
-                       ? TURBO_OK
-                       : TURBO_EPROTO;
+                       ? SALTS_OK
+                       : SALTS_EPROTO;
         }
     }
     if (transition->pending_count == TR_RAFT_MEMBERSHIP_MAX_PENDING ||
         (transition->pending_count != 0U &&
          transition->pending_indices[transition->pending_count - 1U] >=
              log_index)) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     result = tr_raft_membership_transition_validate_next(transition,
                                                          configuration);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     pending_index = transition->pending_count++;
     transition->pending[pending_index] = *configuration;
     transition->pending_indices[pending_index] = log_index;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_membership_transition_stage_entry(
@@ -215,10 +215,10 @@ int tr_raft_membership_transition_stage_entry(
     int result;
 
     if (transition == NULL || entry == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_conf_entry_decode(entry, &configuration);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_raft_membership_transition_stage(
@@ -241,7 +241,7 @@ int tr_raft_membership_transition_apply(
     tr_raft_index_t commit_index)
 {
     if (transition == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     while (transition->pending_count != 0U &&
            transition->pending_indices[0] <= commit_index) {
@@ -255,7 +255,7 @@ int tr_raft_membership_transition_apply(
         transition->pending_indices[transition->pending_count - 1U] = 0U;
         --transition->pending_count;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 bool tr_raft_membership_transition_needs_final(
@@ -272,7 +272,7 @@ int tr_raft_membership_transition_final(
 {
     if (!tr_raft_membership_transition_needs_final(transition) ||
         final_membership == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     return tr_raft_membership_final(&transition->committed,
                                     final_membership);

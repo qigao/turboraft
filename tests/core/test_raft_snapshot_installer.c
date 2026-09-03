@@ -1,8 +1,8 @@
 #include "raft_snapshot_installer.h"
 
 #include <tinytest.h>
-#include <turbo_error.h>
-#include <turbo_fs.h>
+#include <salts_error.h>
+#include <salts_fs.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,14 +41,14 @@ static tr_raft_wal_storage_t *installer_open_storage(void)
     config.max_log_entries = 16U;
     config.create_if_missing = true;
     config.max_snapshot_bytes = 1024U;
-    check_equal(tr_raft_wal_storage_open(&config, &storage), TURBO_OK);
+    check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
     return storage;
 }
 
 static void installer_close_storage(tr_raft_wal_storage_t *storage)
 {
-    char path[TURBO_FS_MAX_PATH];
-    check_equal(tr_raft_wal_storage_close(storage), TURBO_OK);
+    char path[SALTS_FS_MAX_PATH];
+    check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
     snprintf(path, sizeof(path), "%s.snapshot.9.6", installer_path_prefix);
     check_equal(tt_remove_file(path), 0);
     snprintf(path, sizeof(path), "%s.00000001.wal", installer_path_prefix);
@@ -71,7 +71,7 @@ static int installer_restore(
 
     if (capture == NULL || snapshot_index != 9U || snapshot_term != 6U ||
         data == NULL || size > sizeof(capture->data)) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     capture->restore_order = ++capture->sequence;
     memcpy(capture->data, data, size);
@@ -87,7 +87,7 @@ static int installer_reload(
     installer_capture_t *capture = (installer_capture_t *) context;
 
     if (capture == NULL || snapshot_index != 9U || snapshot_term != 6U) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     capture->reload_order = ++capture->sequence;
     return capture->reload_result;
@@ -107,7 +107,7 @@ static tr_raft_snapshot_installer_t *installer_create(
     config.reload_runtime = installer_reload;
     config.runtime_context = capture;
     check_equal(tr_raft_snapshot_installer_create(&config, &installer),
-                 TURBO_OK);
+                 SALTS_OK);
     return installer;
 }
 
@@ -125,13 +125,13 @@ spec("raft snapshot installer")
         installer = installer_create(storage, &capture);
         check_equal(tr_raft_snapshot_installer_install(
                          installer, 7U, 9U, 6U, &installer_configuration,
-                         snapshot, sizeof(snapshot)), TURBO_OK);
+                         snapshot, sizeof(snapshot)), SALTS_OK);
         check_equal(capture.restore_order, 1);
         check_equal(capture.reload_order, 2);
         check_equal(capture.size, sizeof(snapshot));
         check_equal(capture.data, snapshot, sizeof(snapshot));
         check_equal(tr_raft_snapshot_installer_get_status(installer, &status),
-                     TURBO_OK);
+                     SALTS_OK);
         check(!status.faulted);
         check_equal(status.stage, TR_RAFT_SNAPSHOT_INSTALL_COMPLETE);
         check_equal(status.durable_index, 9U);
@@ -151,23 +151,23 @@ spec("raft snapshot installer")
         installer_capture_t capture;
 
         memset(&capture, 0, sizeof(capture));
-        capture.restore_result = TURBO_EPIPE;
+        capture.restore_result = SALTS_EPIPE;
         installer = installer_create(storage, &capture);
         check_equal(tr_raft_snapshot_installer_install(
                          installer, 7U, 9U, 6U, &installer_configuration,
-                         snapshot, sizeof(snapshot)), TURBO_EPIPE);
+                         snapshot, sizeof(snapshot)), SALTS_EPIPE);
         check_equal(tr_raft_snapshot_installer_get_status(installer, &status),
-                     TURBO_OK);
+                     SALTS_OK);
         check(status.faulted);
         check_equal(status.stage, TR_RAFT_SNAPSHOT_INSTALL_APPLICATION);
-        check_equal(status.cause, TURBO_EPIPE);
+        check_equal(status.cause, SALTS_EPIPE);
         check_equal(status.durable_index, 9U);
         check_equal(status.restored_index, 0U);
         check_equal(status.active_index, 0U);
         check_equal(capture.reload_order, 0);
         check_equal(tr_raft_snapshot_installer_install(
                          installer, 8U, 10U, 7U, &installer_configuration,
-                         snapshot, sizeof(snapshot)), TURBO_EPROTO);
+                         snapshot, sizeof(snapshot)), SALTS_EPROTO);
 
         tr_raft_snapshot_installer_destroy(installer);
         installer_close_storage(storage);

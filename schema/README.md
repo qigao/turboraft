@@ -7,7 +7,7 @@ source is stored under `src/wire/generated`; runtime requires DataBind but not
 Lemon or re2c. Configure requires the pinned `tbe_compiler` because CMake keeps
 both generated contracts synchronized.
 
-Regenerate with the pinned TurboUtils build-time tool:
+Regenerate with the pinned SaltsUtils build-time tool:
 
 ```powershell
 tbe_compiler schema/turboraft_wire.schema --lang c `

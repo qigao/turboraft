@@ -2,7 +2,7 @@
 
 #include "raft_snapshot_peer.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -39,26 +39,18 @@ static size_t tr_snapshot_manager_find_peer(
 
 static int tr_snapshot_manager_enqueue(
     void *context,
-    const tr_raft_coronet_payload_t *payload)
+    const tr_raft_transport_payload_t *payload)
 {
     tr_raft_snapshot_manager_t *manager =
         (tr_raft_snapshot_manager_t *) context;
 
     if (manager == NULL || payload == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (manager->enqueue == NULL) {
-        return TURBO_ENOTCONN;
+        return SALTS_ENOTCONN;
     }
     return manager->enqueue(manager->enqueue_context, payload);
-}
-
-static int tr_snapshot_manager_peer_service_enqueue(
-    void *context,
-    const tr_raft_coronet_payload_t *payload)
-{
-    return tr_raft_coronet_peer_service_enqueue_payload(
-        (tr_raft_coronet_peer_service_t *) context, payload);
 }
 
 int tr_raft_snapshot_manager_create(
@@ -73,21 +65,21 @@ int tr_raft_snapshot_manager_create(
         config->peer_node_ids == NULL || config->peer_count == 0U ||
         config->peer_count > TR_RAFT_MAX_VOTERS - 1U ||
         config->max_snapshot_bytes == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     for (index = 0U; index < config->peer_count; ++index) {
         if (config->peer_node_ids[index] == 0U ||
             config->peer_node_ids[index] == config->self_id ||
             (index > 0U && config->peer_node_ids[index - 1U] >=
                                config->peer_node_ids[index])) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
     }
 
     *out_manager = NULL;
     manager = (tr_raft_snapshot_manager_t *) calloc(1U, sizeof(*manager));
     if (manager == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     manager->self_id = config->self_id;
     manager->peer_count = config->peer_count;
@@ -103,7 +95,7 @@ int tr_raft_snapshot_manager_create(
             manager->max_snapshot_bytes);
         if (manager->snapshot_buffer == NULL) {
             free(manager);
-            return TURBO_ENOMEM;
+            return SALTS_ENOMEM;
         }
     }
     memcpy(manager->peer_node_ids, config->peer_node_ids,
@@ -123,7 +115,7 @@ int tr_raft_snapshot_manager_create(
         peer_config.enqueue_context = manager;
         result = tr_raft_snapshot_peer_create(&peer_config,
                                               &manager->peers[index]);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             while (index > 0U) {
                 --index;
                 tr_raft_snapshot_peer_destroy(manager->peers[index]);
@@ -134,7 +126,7 @@ int tr_raft_snapshot_manager_create(
         }
     }
     *out_manager = manager;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_snapshot_manager_destroy(tr_raft_snapshot_manager_t *manager)
@@ -151,21 +143,6 @@ void tr_raft_snapshot_manager_destroy(tr_raft_snapshot_manager_t *manager)
     free(manager);
 }
 
-int tr_raft_snapshot_manager_bind_peer_service(
-    tr_raft_snapshot_manager_t *manager,
-    tr_raft_coronet_peer_service_t *peer_service)
-{
-    if (manager == NULL || peer_service == NULL) {
-        return TURBO_EINVAL;
-    }
-    if (manager->enqueue != NULL) {
-        return TURBO_EBUSY;
-    }
-    manager->enqueue = tr_snapshot_manager_peer_service_enqueue;
-    manager->enqueue_context = peer_service;
-    return TURBO_OK;
-}
-
 int tr_raft_snapshot_manager_begin(
     tr_raft_snapshot_manager_t *manager,
     tr_raft_node_id_t peer_id,
@@ -179,21 +156,21 @@ int tr_raft_snapshot_manager_begin(
     size_t index;
 
     if (manager == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (manager->enqueue == NULL) {
-        return TURBO_ENOTCONN;
+        return SALTS_ENOTCONN;
     }
     index = tr_snapshot_manager_find_peer(manager, peer_id);
     if (index == SIZE_MAX) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     {
         int result = tr_raft_snapshot_peer_begin(
             manager->peers[index], leader_term, snapshot_index, snapshot_term,
             configuration, data, size);
 
-        if (result == TURBO_OK) {
+        if (result == SALTS_OK) {
             manager->completion_notified[index] = false;
         }
         return result;
@@ -215,23 +192,23 @@ int tr_raft_snapshot_manager_enqueue_request(
     if (manager == NULL || request == NULL || request->peer_id == 0U ||
         request->leader_term == 0U || request->snapshot_index == 0U ||
         request->snapshot_term == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (manager->provider == NULL || manager->snapshot_buffer == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     index = tr_snapshot_manager_find_peer(manager, request->peer_id);
     if (index == SIZE_MAX) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     result = tr_raft_snapshot_peer_get_status(manager->peers[index], &status);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (status.active && !status.complete) {
         return status.snapshot_index == request->snapshot_index
-                   ? TURBO_OK
-                   : TURBO_EBUSY;
+                   ? SALTS_OK
+                   : SALTS_EBUSY;
     }
 
     memset(&point, 0, sizeof(point));
@@ -239,14 +216,14 @@ int tr_raft_snapshot_manager_enqueue_request(
         manager->provider_context, request->snapshot_index,
         request->snapshot_term, &point, manager->snapshot_buffer,
         manager->max_snapshot_bytes, &snapshot_size);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (point.index != request->snapshot_index ||
         point.term != request->snapshot_term ||
-        tr_raft_conf_validate(&point.configuration) != TURBO_OK ||
+        tr_raft_conf_validate(&point.configuration) != SALTS_OK ||
         snapshot_size > manager->max_snapshot_bytes) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     return tr_raft_snapshot_manager_begin(
         manager, request->peer_id, request->leader_term, point.index,
@@ -256,7 +233,7 @@ int tr_raft_snapshot_manager_enqueue_request(
 
 int tr_raft_snapshot_manager_handle_payload(
     void *context,
-    const tr_raft_coronet_payload_t *payload)
+    const tr_raft_transport_payload_t *payload)
 {
     tr_raft_snapshot_manager_t *manager =
         (tr_raft_snapshot_manager_t *) context;
@@ -265,24 +242,24 @@ int tr_raft_snapshot_manager_handle_payload(
     if (manager == NULL || payload == NULL ||
         payload->kind != TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK ||
         payload->data.snapshot_ack.to != manager->self_id) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     index = tr_snapshot_manager_find_peer(
         manager, payload->data.snapshot_ack.from);
     if (index == SIZE_MAX) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     {
         tr_raft_snapshot_sender_status_t status;
         int result = tr_raft_snapshot_peer_handle_payload(
             manager->peers[index], payload);
 
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
         result = tr_raft_snapshot_peer_get_status(manager->peers[index],
                                                   &status);
-        if (result != TURBO_OK || !status.complete ||
+        if (result != SALTS_OK || !status.complete ||
             manager->completion_notified[index]) {
             return result;
         }
@@ -290,12 +267,12 @@ int tr_raft_snapshot_manager_handle_payload(
             result = manager->complete(manager->complete_context,
                                        payload->data.snapshot_ack.from,
                                        status.snapshot_index);
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 return result;
             }
         }
         manager->completion_notified[index] = true;
-        return TURBO_OK;
+        return SALTS_OK;
     }
 }
 
@@ -306,14 +283,14 @@ int tr_raft_snapshot_manager_resume(
     size_t index;
 
     if (manager == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (manager->enqueue == NULL) {
-        return TURBO_ENOTCONN;
+        return SALTS_ENOTCONN;
     }
     index = tr_snapshot_manager_find_peer(manager, peer_id);
     if (index == SIZE_MAX) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     return tr_raft_snapshot_peer_resume(manager->peers[index]);
 }
@@ -326,11 +303,11 @@ int tr_raft_snapshot_manager_get_status(
     size_t index;
 
     if (manager == NULL || out_status == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     index = tr_snapshot_manager_find_peer(manager, peer_id);
     if (index == SIZE_MAX) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     return tr_raft_snapshot_peer_get_status(manager->peers[index], out_status);
 }

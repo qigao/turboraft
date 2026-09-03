@@ -3,13 +3,13 @@
 
 #include "raft_snapshot_coordinator.h"
 
-#include <turboraft/raft_coronet_transport.h>
+#include <turboraft/raft_transport.h>
 
 typedef struct tr_raft_snapshot_peer tr_raft_snapshot_peer_t;
 
 typedef int (*tr_raft_snapshot_payload_enqueue_fn)(
     void *context,
-    const tr_raft_coronet_payload_t *payload);
+    const tr_raft_transport_payload_t *payload);
 
 typedef struct tr_raft_snapshot_peer_config {
     tr_raft_node_id_t self_id;
@@ -38,7 +38,7 @@ int tr_raft_snapshot_peer_begin(
 
 int tr_raft_snapshot_peer_handle_payload(
     tr_raft_snapshot_peer_t *peer,
-    const tr_raft_coronet_payload_t *payload);
+    const tr_raft_transport_payload_t *payload);
 
 int tr_raft_snapshot_peer_resume(tr_raft_snapshot_peer_t *peer);
 

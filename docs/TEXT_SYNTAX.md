@@ -197,7 +197,7 @@ until the callback returns. `client_id` and `sequence` remain action metadata;
 the callback decides how the application layer maps them because the native
 `tr_raft_proposal_t` contract currently contains only `command_id` and data.
 Node, transport-fault, and expectation actions are parsed into the plan,
-but the generic adapter returns `TURBO_ENOTSUP` for them; use the native
+but the generic adapter returns `SALTS_ENOTSUP` for them; use the native
 core driver for those actions.
 
 ### Native core driver
@@ -217,27 +217,24 @@ plan through `tr_replay_driver_run()`:
   directed link and messages on a cut link are dropped at delivery.
 - `submit` proposes on the target node (must be the leader) with
   `command_id = request_id` and returns a `(term, index)` receipt;
-  duplicate request ids fail with `TURBO_EALREADY`.
+  duplicate request ids fail with `SALTS_EALREADY`.
 - `poll` checks the receipt against `tr_raft_core_operation_status()` and
   advances time internally up to `timeout_ticks` (driver-specific; the
   generic adapter never advances time).
 - `expect role` / `expect commit_index` assert on `tr_raft_core_status()`
-  and return `TURBO_EPROTO` on mismatch.
+  and return `SALTS_EPROTO` on mismatch.
 
 ### REPL tool
 
 `turboraft_repl` (built as a tool, not installed) drives the native core
-driver interactively. Each command line is analyzed by the TurboUtils
-`turbo_cmd` parser (`turbo_parser.h`), which provides typed arguments,
-choices, and help. Interactive commands cover the full action set plus
+driver interactively. Each command line is analyzed by a local bounded
+tokenizer with explicit command, argument-count, and integer validation.
+Interactive commands cover the full action set plus
 `cluster <n>`, `status [--node <id>]`, `run <file>`, `help`, and `exit`.
 A replay DSL script file can also be executed in batch with
 `turboraft_repl --nodes N --script FILE` or the `run <file>` command.
 
-Note: `turbo_cmd` (cmd_arger) terminates the process on a malformed option
-or bad value; the REPL pre-validates command names, positional counts, and
-integer values to avoid that path. Use `run <file>` for fully robust batch
-execution.
+Use `run <file>` for deterministic batch execution.
 
 ## Lifetime and limits
 
@@ -246,7 +243,7 @@ bounded by `TR_TEXT_MAX_INPUT_BYTES` and `TR_TEXT_MAX_STATEMENTS`, and callers
 may select lower limits with `tr_text_parse_options_t`. Hexadecimal payload
 bytes are also bounded at parse time: `submit` payloads by
 `TR_RAFT_MAX_ENTRY_BYTES` and protocol frame payloads by
-`TR_RAFT_WIRE_MAX_FRAME_SIZE`, each reported as `TURBO_ENOSPC`.
+`TR_RAFT_WIRE_MAX_FRAME_SIZE`, each reported as `SALTS_ENOSPC`.
 
 String fields use borrowed `vstr` views into the input buffer. Keep the input
 buffer alive and unchanged until the plan is no longer used.

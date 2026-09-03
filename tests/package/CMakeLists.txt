@@ -4,25 +4,20 @@ project(TurboRaftPackageConsumer LANGUAGES C)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/CmakeUtils.cmake)
 
-find_package(TurboRaft CONFIG REQUIRED)
+find_package(
+  TurboRaft CONFIG REQUIRED
+  COMPONENTS Core Service SnapshotReceiver SnapshotSender SnapshotManager
+             CNet ControlPlane FlowMQ)
 
 add_executable(turboraft_package_consumer main.c)
 target_link_libraries(turboraft_package_consumer
                       PRIVATE TurboRaft::Core
                               TurboRaft::Service
                               TurboRaft::SnapshotReceiver
-                              TurboRaft::SnapshotSender)
-
-foreach(optional_target IN ITEMS CoroNet SnapshotManager
-                                 ServiceOwner ControlPlane FlowMQ)
-    if(TARGET TurboRaft::${optional_target})
-        target_link_libraries(turboraft_package_consumer
-                              PRIVATE TurboRaft::${optional_target})
-        if(optional_target STREQUAL "FlowMQ")
-            target_compile_definitions(turboraft_package_consumer
-                                       PRIVATE TURBORAFT_PACKAGE_HAVE_FLOWMQ=1)
-        endif()
-    endif()
-endforeach()
+                              TurboRaft::SnapshotSender
+                              TurboRaft::SnapshotManager
+                              TurboRaft::CNet
+                              TurboRaft::ControlPlane
+                              TurboRaft::FlowMQ)
 
 cmake_config_directory_targets(FOLDER "tests/package")

@@ -3,7 +3,7 @@
 #include <turboraft/raft_snapshot_receiver.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -13,7 +13,7 @@ static const tr_raft_conf_t snapshot_peer_configuration = {
 };
 
 typedef struct snapshot_payload_capture {
-    tr_raft_coronet_payload_t payloads[2];
+    tr_raft_transport_payload_t payloads[2];
     size_t count;
 } snapshot_payload_capture_t;
 
@@ -24,7 +24,7 @@ typedef struct snapshot_peer_install_capture {
 
 static int snapshot_payload_enqueue(
     void *context,
-    const tr_raft_coronet_payload_t *payload)
+    const tr_raft_transport_payload_t *payload)
 {
     snapshot_payload_capture_t *capture =
         (snapshot_payload_capture_t *) context;
@@ -32,10 +32,10 @@ static int snapshot_payload_enqueue(
     if (capture == NULL || payload == NULL ||
         capture->count >= sizeof(capture->payloads) /
                               sizeof(capture->payloads[0])) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
     capture->payloads[capture->count++] = *payload;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int snapshot_peer_install(
@@ -52,11 +52,11 @@ static int snapshot_peer_install(
 
     if (capture == NULL || leader_term != 7U || snapshot_index != 9U ||
         snapshot_term != 6U || data == NULL || size != sizeof(capture->data)) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     memcpy(capture->data, data, size);
     ++capture->count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 spec("raft snapshot peer")
@@ -69,7 +69,7 @@ spec("raft snapshot peer")
         tr_raft_snapshot_receiver_t *receiver = NULL;
         tr_raft_snapshot_receive_result_t receive_result;
         tr_raft_snapshot_sender_status_t status;
-        tr_raft_coronet_payload_t ack_payload;
+        tr_raft_transport_payload_t ack_payload;
         snapshot_payload_capture_t payloads;
         snapshot_peer_install_capture_t installed;
         uint8_t snapshot[600];
@@ -86,6 +86,8 @@ spec("raft snapshot peer")
         peer_config.self_id = 1U;
         peer_config.peer_id = 2U;
         peer_config.max_snapshot_bytes = 1024U;
+        peer_config.chunk_size = TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+        peer_config.max_inflight_chunks = 1U;
         peer_config.enqueue = snapshot_payload_enqueue;
         peer_config.enqueue_context = &payloads;
         receiver_config.self_id = 2U;
@@ -94,13 +96,13 @@ spec("raft snapshot peer")
         receiver_config.install_context = &installed;
 
         check_equal(tr_raft_snapshot_peer_create(&peer_config, &peer),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_snapshot_receiver_create(
-                         &receiver_config, &receiver), TURBO_OK);
+                         &receiver_config, &receiver), SALTS_OK);
         check_equal(tr_raft_snapshot_peer_begin(
                          peer, 7U, 9U, 6U, &snapshot_peer_configuration,
                          snapshot, sizeof(snapshot)),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(payloads.count, 1U);
         check_equal(payloads.payloads[0].kind,
                      TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK);
@@ -110,12 +112,12 @@ spec("raft snapshot peer")
         check_equal(tr_raft_snapshot_receiver_handle(
                          receiver,
                          &payloads.payloads[0].data.snapshot_chunk,
-                         &receive_result), TURBO_OK);
+                         &receive_result), SALTS_OK);
         memset(&ack_payload, 0, sizeof(ack_payload));
         ack_payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
         ack_payload.data.snapshot_ack = receive_result.ack;
         check_equal(tr_raft_snapshot_peer_handle_payload(peer, &ack_payload),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(payloads.count, 2U);
         check_equal(payloads.payloads[1].data.snapshot_chunk.snapshot_offset,
                       512U);
@@ -123,11 +125,11 @@ spec("raft snapshot peer")
         check_equal(tr_raft_snapshot_receiver_handle(
                          receiver,
                          &payloads.payloads[1].data.snapshot_chunk,
-                         &receive_result), TURBO_OK);
+                         &receive_result), SALTS_OK);
         ack_payload.data.snapshot_ack = receive_result.ack;
         check_equal(tr_raft_snapshot_peer_handle_payload(peer, &ack_payload),
-                     TURBO_OK);
-        check_equal(tr_raft_snapshot_peer_get_status(peer, &status), TURBO_OK);
+                     SALTS_OK);
+        check_equal(tr_raft_snapshot_peer_get_status(peer, &status), SALTS_OK);
         check(status.complete);
         check_equal(installed.count, 1U);
         check_equal(installed.data, snapshot, sizeof(snapshot));

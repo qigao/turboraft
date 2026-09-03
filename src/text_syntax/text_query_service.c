@@ -19,7 +19,7 @@ static int tr_text_query_service_status(
   int result;
 
   result = tr_raft_service_status(driver->service, &status);
-  if (result != TURBO_OK) {
+  if (result != SALTS_OK) {
     return result;
   }
   return driver->sink->status(driver->sink_context, command, &status);
@@ -53,11 +53,11 @@ static int tr_text_query_service_members(
   int result;
 
   result = tr_raft_service_configuration(driver->service, &configuration);
-  if (result != TURBO_OK) {
+  if (result != SALTS_OK) {
     return result;
   }
   if (configuration.member_count > TR_RAFT_MAX_MEMBERS) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
 
   for (member_index = 0u; member_index < configuration.member_count;
@@ -69,12 +69,12 @@ static int tr_text_query_service_members(
     }
     result = driver->sink->member(
         driver->sink_context, command, &configuration, member);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
       return result;
     }
   }
 
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int tr_text_query_service_progress(
@@ -88,11 +88,11 @@ static int tr_text_query_service_progress(
   int result;
 
   result = tr_raft_service_progress(driver->service, &progress);
-  if (result != TURBO_OK) {
+  if (result != SALTS_OK) {
     return result;
   }
   if (progress.peer_count > TR_RAFT_MAX_MEMBERS) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
 
   for (peer_index = 0u; peer_index < progress.peer_count; ++peer_index) {
@@ -105,7 +105,7 @@ static int tr_text_query_service_progress(
         driver->sink_context, command, &progress, peer);
   }
 
-  return TURBO_ENOENT;
+  return SALTS_ENOENT;
 }
 
 int tr_text_query_execute_service(
@@ -118,11 +118,11 @@ int tr_text_query_execute_service(
   tr_text_query_executor_ops_t ops;
 
   if (service == NULL || plan == NULL || sink == NULL) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (sink->status == NULL || sink->member == NULL ||
       sink->progress == NULL) {
-    return TURBO_ENOTSUP;
+    return SALTS_ENOTSUP;
   }
 
   driver.service = service;

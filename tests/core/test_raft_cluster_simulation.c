@@ -1,7 +1,7 @@
 #include <turboraft/raft_core.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -101,16 +101,16 @@ static int sim_cluster_create(sim_cluster_t *cluster)
             cluster->links[from][to] = true;
         }
         if (sim_node_create(&cluster->nodes[from],
-                            (tr_raft_node_id_t)(from + 1U)) != TURBO_OK) {
+                            (tr_raft_node_id_t)(from + 1U)) != SALTS_OK) {
             while (from > 0U) {
                 --from;
                 tr_raft_core_destroy(cluster->nodes[from].core);
             }
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         cluster->nodes[from].active = true;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static void sim_cluster_destroy(sim_cluster_t *cluster)
@@ -146,7 +146,7 @@ static int sim_persist_ready(sim_node_t *node, const tr_raft_ready_t *ready)
     }
     if (ready->log_changed && ready->log_truncate_from != 0U) {
         if (ready->log_truncate_from > node->durable.entry_count + 1U) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         node->durable.entry_count = (size_t)ready->log_truncate_from - 1U;
     }
@@ -154,10 +154,10 @@ static int sim_persist_ready(sim_node_t *node, const tr_raft_ready_t *ready)
         const tr_raft_entry_t *entry = &ready->log_entries[index];
 
         if (entry->index == 0U || entry->index > SIM_MAX_LOG_ENTRIES) {
-            return TURBO_ERANGE;
+            return SALTS_ERANGE;
         }
         if (entry->index > node->durable.entry_count + 1U) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         node->durable.entries[entry->index - 1U] = *entry;
         if (entry->index > node->durable.entry_count) {
@@ -166,7 +166,7 @@ static int sim_persist_ready(sim_node_t *node, const tr_raft_ready_t *ready)
     }
     if (ready->commit_changed) {
         if (ready->commit_index > node->durable.entry_count) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         node->durable.commit_index = ready->commit_index;
     }
@@ -175,11 +175,11 @@ static int sim_persist_ready(sim_node_t *node, const tr_raft_ready_t *ready)
             ready->committed_entries[ready->committed_entry_count - 1U].index;
 
         if (applied > node->durable.commit_index) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         node->durable.applied_index = applied;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int sim_finish_ready(sim_cluster_t *cluster,
@@ -189,18 +189,18 @@ static int sim_finish_ready(sim_cluster_t *cluster,
     size_t index;
     int result = sim_persist_ready(&cluster->nodes[node_index], ready);
 
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (ready->message_count > SIM_QUEUE_CAPACITY - cluster->queue_count) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
     for (index = 0U; index < ready->message_count; ++index) {
         cluster->queue[cluster->queue_count++] = ready->messages[index];
     }
     if (sim_ready_has_effects(ready)) {
         result = tr_raft_core_advance(cluster->nodes[node_index].core);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
     }
@@ -213,7 +213,7 @@ static int sim_take_message(sim_cluster_t *cluster,
 {
     if (cluster == NULL || out_message == NULL ||
         index >= cluster->queue_count) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     *out_message = cluster->queue[index];
     if (index + 1U < cluster->queue_count) {
@@ -222,7 +222,7 @@ static int sim_take_message(sim_cluster_t *cluster,
                     sizeof(cluster->queue[0]));
     }
     --cluster->queue_count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int sim_deliver(sim_cluster_t *cluster,
@@ -237,7 +237,7 @@ static int sim_deliver(sim_cluster_t *cluster,
     if (message == NULL || message->from == 0U ||
         message->from > SIM_NODE_COUNT || message->to == 0U ||
         message->to > SIM_NODE_COUNT) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     from = (size_t)message->from - 1U;
     to = (size_t)message->to - 1U;
@@ -247,7 +247,7 @@ static int sim_deliver(sim_cluster_t *cluster,
     }
     ready = sim_ready(emitted);
     result = tr_raft_core_step(cluster->nodes[to].core, message, &ready);
-    return result == TURBO_OK ? sim_finish_ready(cluster, to, &ready) : result;
+    return result == SALTS_OK ? sim_finish_ready(cluster, to, &ready) : result;
 }
 
 static int sim_pump(sim_cluster_t *cluster)
@@ -259,18 +259,18 @@ static int sim_pump(sim_cluster_t *cluster)
         int result;
 
         if (++deliveries > SIM_MAX_DELIVERIES) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         result = sim_take_message(cluster, 0U, &message);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
         result = sim_deliver(cluster, &message);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static uint32_t sim_random(sim_cluster_t *cluster)
@@ -296,14 +296,14 @@ static int sim_chaos_deliver_one(sim_cluster_t *cluster)
     choice = sim_random(cluster);
     result = sim_take_message(cluster, choice % cluster->queue_count,
                               &message);
-    if (result != TURBO_OK || choice % 8U == 0U) {
-        return result == TURBO_OK ? sim_check_invariants(cluster) : result;
+    if (result != SALTS_OK || choice % 8U == 0U) {
+        return result == SALTS_OK ? sim_check_invariants(cluster) : result;
     }
     result = sim_deliver(cluster, &message);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
-    return choice % 8U == 1U ? sim_deliver(cluster, &message) : TURBO_OK;
+    return choice % 8U == 1U ? sim_deliver(cluster, &message) : SALTS_OK;
 }
 
 static int sim_tick_enqueue(sim_cluster_t *cluster,
@@ -318,10 +318,10 @@ static int sim_tick_enqueue(sim_cluster_t *cluster,
 
     if (node_id == 0U || node_id > SIM_NODE_COUNT ||
         !cluster->nodes[node_index].active) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_core_tick(cluster->nodes[node_index].core, &tick, &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return sim_finish_ready(cluster, node_index, &ready);
@@ -333,7 +333,7 @@ static int sim_tick(sim_cluster_t *cluster,
 {
     int result = sim_tick_enqueue(cluster, node_id, elapsed_ticks);
 
-    return result == TURBO_OK ? sim_pump(cluster) : result;
+    return result == SALTS_OK ? sim_pump(cluster) : result;
 }
 
 static int sim_propose_enqueue(sim_cluster_t *cluster,
@@ -349,7 +349,7 @@ static int sim_propose_enqueue(sim_cluster_t *cluster,
 
     result = tr_raft_core_propose(cluster->nodes[node_index].core, &proposal,
                                   &ready);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return sim_finish_ready(cluster, node_index, &ready);
@@ -362,7 +362,7 @@ static int sim_propose(sim_cluster_t *cluster,
 {
     int result = sim_propose_enqueue(cluster, node_id, command_id, data);
 
-    return result == TURBO_OK ? sim_pump(cluster) : result;
+    return result == SALTS_OK ? sim_pump(cluster) : result;
 }
 
 static void sim_partition(sim_cluster_t *cluster,
@@ -404,7 +404,7 @@ static int sim_check_invariants(sim_cluster_t *cluster)
             durable->term < cluster->observed_terms[left] ||
             durable->commit_index < cluster->observed_commits[left] ||
             durable->applied_index < cluster->observed_applied[left]) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         cluster->observed_terms[left] = durable->term;
         cluster->observed_commits[left] = durable->commit_index;
@@ -413,11 +413,11 @@ static int sim_check_invariants(sim_cluster_t *cluster)
             continue;
         }
         if (tr_raft_core_status(cluster->nodes[left].core, &status) !=
-                TURBO_OK ||
+                SALTS_OK ||
             status.term != durable->term ||
             status.commit_index != durable->commit_index ||
             status.applied_index != durable->applied_index) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         if (status.role != TR_RAFT_LEADER) {
             continue;
@@ -427,9 +427,9 @@ static int sim_check_invariants(sim_cluster_t *cluster)
 
             if (cluster->nodes[right].active &&
                 tr_raft_core_status(cluster->nodes[right].core, &other) ==
-                    TURBO_OK &&
+                    SALTS_OK &&
                 other.role == TR_RAFT_LEADER && other.term == status.term) {
-                return TURBO_EPROTO;
+                return SALTS_EPROTO;
             }
         }
     }
@@ -446,12 +446,12 @@ static int sim_check_invariants(sim_cluster_t *cluster)
                 if (!sim_entries_equal(
                         &cluster->nodes[left].durable.entries[index - 1U],
                         &cluster->nodes[right].durable.entries[index - 1U])) {
-                    return TURBO_EPROTO;
+                    return SALTS_EPROTO;
                 }
             }
         }
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static tr_raft_node_id_t sim_find_highest_term_leader(sim_cluster_t *cluster)
@@ -465,7 +465,7 @@ static tr_raft_node_id_t sim_find_highest_term_leader(sim_cluster_t *cluster)
 
         if (!cluster->nodes[index].active ||
             tr_raft_core_status(cluster->nodes[index].core, &status) !=
-                TURBO_OK ||
+                SALTS_OK ||
             status.role != TR_RAFT_LEADER || status.term < leader_term) {
             continue;
         }
@@ -480,16 +480,16 @@ static int sim_crash(sim_cluster_t *cluster, tr_raft_node_id_t node_id)
     sim_node_t *node;
 
     if (node_id == 0U || node_id > SIM_NODE_COUNT) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     node = &cluster->nodes[node_id - 1U];
     if (!node->active) {
-        return TURBO_EALREADY;
+        return SALTS_EALREADY;
     }
     tr_raft_core_destroy(node->core);
     node->core = NULL;
     node->active = false;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int sim_restart(sim_cluster_t *cluster, tr_raft_node_id_t node_id)
@@ -498,14 +498,14 @@ static int sim_restart(sim_cluster_t *cluster, tr_raft_node_id_t node_id)
     int result;
 
     if (node_id == 0U || node_id > SIM_NODE_COUNT) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     node = &cluster->nodes[node_id - 1U];
     if (node->active) {
-        return TURBO_EALREADY;
+        return SALTS_EALREADY;
     }
     result = sim_node_create(node, node_id);
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         node->active = true;
     }
     return result;
@@ -520,35 +520,35 @@ spec("raft deterministic cluster simulation")
         tr_raft_status_t second;
         tr_raft_status_t third;
 
-        check_equal(sim_cluster_create(cluster), TURBO_OK);
-        check_equal(sim_tick(cluster, 1U, 4U), TURBO_OK);
-        check_equal(sim_status(cluster, 1U, &first), TURBO_OK);
+        check_equal(sim_cluster_create(cluster), SALTS_OK);
+        check_equal(sim_tick(cluster, 1U, 4U), SALTS_OK);
+        check_equal(sim_status(cluster, 1U, &first), SALTS_OK);
         check_equal(first.role, TR_RAFT_LEADER);
 
         sim_partition(cluster, 1U, 2U, false);
         sim_partition(cluster, 1U, 3U, false);
-        check_equal(sim_tick(cluster, 1U, 4U), TURBO_OK);
-        check_equal(sim_tick(cluster, 1U, 4U), TURBO_OK);
-        check_equal(sim_status(cluster, 1U, &first), TURBO_OK);
+        check_equal(sim_tick(cluster, 1U, 4U), SALTS_OK);
+        check_equal(sim_tick(cluster, 1U, 4U), SALTS_OK);
+        check_equal(sim_status(cluster, 1U, &first), SALTS_OK);
         check_equal(first.role, TR_RAFT_FOLLOWER);
-        check_equal(sim_tick(cluster, 2U, 4U), TURBO_OK);
-        check_equal(sim_status(cluster, 2U, &second), TURBO_OK);
+        check_equal(sim_tick(cluster, 2U, 4U), SALTS_OK);
+        check_equal(sim_status(cluster, 2U, &second), SALTS_OK);
         check_equal(second.role, TR_RAFT_LEADER);
         check(second.term > first.term);
 
         check_equal(sim_propose(cluster, 2U, 41U, "partition-value"),
-                     TURBO_OK);
-        check_equal(sim_tick(cluster, 2U, 1U), TURBO_OK);
-        check_equal(sim_status(cluster, 2U, &second), TURBO_OK);
-        check_equal(sim_status(cluster, 3U, &third), TURBO_OK);
+                     SALTS_OK);
+        check_equal(sim_tick(cluster, 2U, 1U), SALTS_OK);
+        check_equal(sim_status(cluster, 2U, &second), SALTS_OK);
+        check_equal(sim_status(cluster, 3U, &third), SALTS_OK);
         check_equal(second.commit_index, 1U);
         check_equal(third.commit_index, 1U);
 
         sim_partition(cluster, 1U, 2U, true);
         sim_partition(cluster, 1U, 3U, true);
-        check_equal(sim_tick(cluster, 2U, 1U), TURBO_OK);
-        check_equal(sim_tick(cluster, 2U, 1U), TURBO_OK);
-        check_equal(sim_status(cluster, 1U, &first), TURBO_OK);
+        check_equal(sim_tick(cluster, 2U, 1U), SALTS_OK);
+        check_equal(sim_tick(cluster, 2U, 1U), SALTS_OK);
+        check_equal(sim_status(cluster, 1U, &first), SALTS_OK);
         check_equal(first.leader_id, 2U);
         check_equal(first.last_log_index, 1U);
         check_equal(first.commit_index, 1U);
@@ -564,23 +564,23 @@ spec("raft deterministic cluster simulation")
         tr_raft_status_t restarted;
         size_t attempt;
 
-        check_equal(sim_cluster_create(cluster), TURBO_OK);
-        check_equal(sim_tick(cluster, 1U, 3U), TURBO_OK);
+        check_equal(sim_cluster_create(cluster), SALTS_OK);
+        check_equal(sim_tick(cluster, 1U, 3U), SALTS_OK);
         check_equal(sim_propose(cluster, 1U, 51U, "before-crash"),
-                     TURBO_OK);
-        check_equal(sim_tick(cluster, 1U, 1U), TURBO_OK);
-        check_equal(sim_crash(cluster, 3U), TURBO_OK);
+                     SALTS_OK);
+        check_equal(sim_tick(cluster, 1U, 1U), SALTS_OK);
+        check_equal(sim_crash(cluster, 3U), SALTS_OK);
         check_equal(sim_propose(cluster, 1U, 52U, "during-crash"),
-                     TURBO_OK);
-        check_equal(sim_tick(cluster, 1U, 1U), TURBO_OK);
-        check_equal(sim_status(cluster, 1U, &leader), TURBO_OK);
+                     SALTS_OK);
+        check_equal(sim_tick(cluster, 1U, 1U), SALTS_OK);
+        check_equal(sim_status(cluster, 1U, &leader), SALTS_OK);
         check_equal(leader.commit_index, 2U);
 
-        check_equal(sim_restart(cluster, 3U), TURBO_OK);
+        check_equal(sim_restart(cluster, 3U), SALTS_OK);
         for (attempt = 0U; attempt < 4U; ++attempt) {
-            check_equal(sim_tick(cluster, 1U, 1U), TURBO_OK);
+            check_equal(sim_tick(cluster, 1U, 1U), SALTS_OK);
         }
-        check_equal(sim_status(cluster, 3U, &restarted), TURBO_OK);
+        check_equal(sim_status(cluster, 3U, &restarted), SALTS_OK);
         check_equal(restarted.leader_id, 1U);
         check_equal(restarted.last_log_index, 2U);
         check_equal(restarted.commit_index, 2U);
@@ -597,18 +597,18 @@ spec("raft deterministic cluster simulation")
             sim_cluster_t *cluster = sim_cluster_allocate();
             size_t step;
 
-            check_equal(sim_cluster_create(cluster), TURBO_OK);
+            check_equal(sim_cluster_create(cluster), SALTS_OK);
             cluster->random_state = seed;
-            check_equal(sim_tick(cluster, 1U, 4U), TURBO_OK);
+            check_equal(sim_tick(cluster, 1U, 4U), SALTS_OK);
             check_equal(sim_propose(cluster, 1U, seed, "baseline"),
-                         TURBO_OK);
+                         SALTS_OK);
 
             for (step = 0U; step < SIM_CHAOS_STEPS; ++step) {
                 uint32_t choice = sim_random(cluster);
                 tr_raft_node_id_t node_id =
                     (tr_raft_node_id_t)(choice % SIM_NODE_COUNT + 1U);
                 uint32_t action = (choice / SIM_NODE_COUNT) % 8U;
-                int result = TURBO_OK;
+                int result = SALTS_OK;
 
                 if (action <= 2U &&
                     cluster->nodes[node_id - 1U].active) {
@@ -644,9 +644,9 @@ spec("raft deterministic cluster simulation")
                            !cluster->nodes[node_id - 1U].active) {
                     result = sim_restart(cluster, node_id);
                 }
-                check_equal(result, TURBO_OK);
-                check_equal(sim_chaos_deliver_one(cluster), TURBO_OK);
-                check_equal(sim_check_invariants(cluster), TURBO_OK);
+                check_equal(result, SALTS_OK);
+                check_equal(sim_chaos_deliver_one(cluster), SALTS_OK);
+                check_equal(sim_check_invariants(cluster), SALTS_OK);
             }
 
             for (step = 0U; step < SIM_NODE_COUNT; ++step) {
@@ -654,7 +654,7 @@ spec("raft deterministic cluster simulation")
                     check_equal(sim_restart(
                                      cluster,
                                      (tr_raft_node_id_t)(step + 1U)),
-                                 TURBO_OK);
+                                 SALTS_OK);
                 }
             }
             for (step = 0U; step < SIM_NODE_COUNT; ++step) {
@@ -666,15 +666,15 @@ spec("raft deterministic cluster simulation")
                                   (tr_raft_node_id_t)(peer + 1U), true);
                 }
             }
-            check_equal(sim_pump(cluster), TURBO_OK);
+            check_equal(sim_pump(cluster), SALTS_OK);
             for (step = 0U; step < SIM_CHAOS_RECOVERY_ROUNDS; ++step) {
                 tr_raft_node_id_t node_id =
                     (tr_raft_node_id_t)(step % SIM_NODE_COUNT + 1U);
 
-                check_equal(sim_tick(cluster, node_id, 1U), TURBO_OK);
+                check_equal(sim_tick(cluster, node_id, 1U), SALTS_OK);
             }
             check_not_equal(sim_find_highest_term_leader(cluster), 0U);
-            check_equal(sim_check_invariants(cluster), TURBO_OK);
+            check_equal(sim_check_invariants(cluster), SALTS_OK);
             sim_cluster_destroy(cluster);
             free(cluster);
         }

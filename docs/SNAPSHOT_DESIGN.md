@@ -85,6 +85,6 @@ per-peer FIFO used by Raft messages.
 ## Compatibility and rollback
 
 The WAL format is strict and does not import the removed database format.
-Unknown format versions fail with `TURBO_EPROTO`. Rollback requires a WAL and
+Unknown format versions fail with `SALTS_EPROTO`. Rollback requires a WAL and
 snapshot backup from the target binary version. Wire compatibility is a
 separate concern from local storage format compatibility.

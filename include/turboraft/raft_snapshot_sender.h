@@ -14,13 +14,13 @@ extern "C" {
 typedef struct tr_raft_snapshot_sender tr_raft_snapshot_sender_t;
 
 #define TR_RAFT_SNAPSHOT_MAX_INFLIGHT_CHUNKS 4U
-#define TR_RAFT_SNAPSHOT_DEFAULT_INFLIGHT_CHUNKS 4U
+#define TR_RAFT_SNAPSHOT_RECOMMENDED_INFLIGHT_CHUNKS 4U
 
 typedef struct tr_raft_snapshot_sender_config {
     tr_raft_node_id_t self_id;
     tr_raft_node_id_t peer_id;
     size_t max_snapshot_bytes;
-    /* Zero preserves V4 stop-and-wait behavior. */
+    /* Both limits are required and validated; zero is rejected. */
     size_t chunk_size;
     size_t max_inflight_chunks;
 } tr_raft_snapshot_sender_config_t;

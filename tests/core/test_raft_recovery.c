@@ -1,7 +1,7 @@
 #include <turboraft/raft_core.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -58,19 +58,19 @@ spec("raft startup recovery and apply")
         config = recovery_config(entries, 2U);
         config.initial_commit_index = 2U;
         config.initial_applied_index = 1U;
-        check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
 
         memset(&ready, 0, sizeof(ready));
-        check_equal(tr_raft_core_poll(core, &ready), TURBO_OK);
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
         check_equal(ready.committed_entry_count, 1U);
         check_not_null(ready.committed_entries);
         check_equal(ready.committed_entries[0].index, 2U);
         check_equal(ready.committed_entries[0].command_id, 12U);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.applied_index, 1U);
 
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
-        check_equal(tr_raft_core_status(core, &status), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.applied_index, 2U);
         tr_raft_core_destroy(core);
     }
@@ -83,7 +83,7 @@ spec("raft startup recovery and apply")
 
         config.initial_commit_index = 2U;
         config.initial_applied_index = 1U;
-        check_equal(tr_raft_core_create(&config, &core), TURBO_EINVAL);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_EINVAL);
         check_null(core);
     }
 
@@ -96,14 +96,14 @@ spec("raft startup recovery and apply")
         tr_raft_tick_t tick = {1U, 6U};
 
         config.initial_commit_index = 1U;
-        check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
         memset(&ready, 0, sizeof(ready));
-        check_equal(tr_raft_core_poll(core, &ready), TURBO_OK);
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
         check_equal(ready.committed_entry_count, 1U);
-        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_EPROTO);
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_EPROTO);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
         memset(&ready, 0, sizeof(ready));
-        check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
         tr_raft_core_destroy(core);
     }
 }

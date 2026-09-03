@@ -3,7 +3,7 @@
 #include <turboraft/raft_wire_codec.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -57,7 +57,7 @@ spec("raft wire fuzz corpus")
 
         memset(&metadata, 0, sizeof(metadata));
         metadata.message_id = 1U;
-        check_equal(tr_raft_wire_codec_create(&codec), TURBO_OK);
+        check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
 
         memset(&message, 0, sizeof(message));
         message.type = TR_RAFT_MSG_APPEND_REQUEST;
@@ -74,7 +74,7 @@ spec("raft wire fuzz corpus")
         memcpy(message.entries[0].data, "seed", 4U);
         check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
-                     TURBO_OK);
+                     SALTS_OK);
         wire_fuzz_exercise_frame(frame, frame_length);
 
         memset(&chunk, 0, sizeof(chunk));
@@ -102,7 +102,7 @@ spec("raft wire fuzz corpus")
         check_equal(tr_raft_wire_encode_snapshot_chunk(
                          codec, &metadata, &chunk, frame, sizeof(frame),
                          &frame_length),
-                     TURBO_OK);
+                     SALTS_OK);
         wire_fuzz_exercise_frame(frame, frame_length);
 
         memset(&ack, 0, sizeof(ack));
@@ -118,7 +118,7 @@ spec("raft wire fuzz corpus")
         check_equal(tr_raft_wire_encode_snapshot_ack(
                          codec, &metadata, &ack, frame, sizeof(frame),
                          &frame_length),
-                     TURBO_OK);
+                     SALTS_OK);
         wire_fuzz_exercise_frame(frame, frame_length);
 
         for (index = 0U; index < WIRE_FUZZ_RANDOM_CASES; ++index) {

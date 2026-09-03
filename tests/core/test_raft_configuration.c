@@ -1,7 +1,7 @@
 #include "raft_configuration.h"
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -29,10 +29,10 @@ spec("raft configuration codec")
 
         check_equal(tr_raft_conf_encode(&configuration, encoded,
                                          sizeof(encoded), &encoded_length),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(encoded_length, 43U);
         check_equal(tr_raft_conf_decode(encoded, encoded_length, &decoded),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(decoded.phase, TR_RAFT_CONF_FINAL);
         check_equal(decoded.transition_id, 41U);
         check_equal(decoded.member_count, 3U);
@@ -59,10 +59,10 @@ spec("raft configuration codec")
         configuration.members[2].node_id = 3U;
         configuration.members[2].roles = TR_RAFT_CONF_NEW_VOTER;
 
-        check_equal(tr_raft_conf_validate(&configuration), TURBO_OK);
+        check_equal(tr_raft_conf_validate(&configuration), SALTS_OK);
         check_equal(tr_raft_conf_encode(&configuration, encoded,
                                          sizeof(encoded), &encoded_length),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(encoded_length, 43U);
     }
 
@@ -82,22 +82,22 @@ spec("raft configuration codec")
             TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
         check_equal(tr_raft_conf_encode(&configuration, encoded,
                                          sizeof(encoded), &encoded_length),
-                     TURBO_OK);
+                     SALTS_OK);
 
         encoded[0] = 'X';
         check_equal(tr_raft_conf_decode(encoded, encoded_length, &decoded),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
         encoded[0] = 'T';
         encoded[7] = 1U;
         check_equal(tr_raft_conf_decode(encoded, encoded_length, &decoded),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
         encoded[7] = 0U;
         encoded[24] = 0x80U;
         check_equal(tr_raft_conf_decode(encoded, encoded_length, &decoded),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
         check_equal(tr_raft_conf_decode(encoded, encoded_length - 1U,
                                          &decoded),
-                     TURBO_EPROTO);
+                     SALTS_EPROTO);
     }
 
     it("rejects invalid in-memory role and ordering combinations")
@@ -112,14 +112,14 @@ spec("raft configuration codec")
         configuration.members[0].roles = TR_RAFT_CONF_OLD_VOTER;
         configuration.members[1].node_id = 1U;
         configuration.members[1].roles = TR_RAFT_CONF_NEW_VOTER;
-        check_equal(tr_raft_conf_validate(&configuration), TURBO_EINVAL);
+        check_equal(tr_raft_conf_validate(&configuration), SALTS_EINVAL);
 
         configuration.phase = TR_RAFT_CONF_JOINT;
         configuration.members[0].node_id = 1U;
         configuration.members[0].roles =
             TR_RAFT_CONF_NEW_VOTER | TR_RAFT_CONF_LEARNER;
         configuration.members[1].node_id = 2U;
-        check_equal(tr_raft_conf_validate(&configuration), TURBO_EINVAL);
+        check_equal(tr_raft_conf_validate(&configuration), SALTS_EINVAL);
     }
 
     it("encodes the bounded 31 member maximum")
@@ -142,11 +142,11 @@ spec("raft configuration codec")
         check_equal(tr_raft_conf_encode(&configuration, encoded,
                                          sizeof(encoded) - 1U,
                                          &encoded_length),
-                     TURBO_ENOSPC);
+                     SALTS_ENOSPC);
         check_equal(encoded_length, TR_RAFT_CONF_MAX_ENCODED_SIZE);
         check_equal(tr_raft_conf_encode(&configuration, encoded,
                                          sizeof(encoded), &encoded_length),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(encoded_length, 295U);
     }
 }

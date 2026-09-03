@@ -1,6 +1,6 @@
 #include "raft_service_wal_reload.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -44,13 +44,13 @@ int tr_raft_service_wal_reload_create(
         config->max_log_entries == 0U ||
         config->max_inflight_append_requests >
             TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     for (index = 0U; index < config->voter_count; ++index) {
         if (config->voters[index] == 0U ||
             (index > 0U && config->voters[index - 1U] >=
                                config->voters[index])) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
     }
     for (index = 0U; index < config->learner_count; ++index) {
@@ -59,12 +59,12 @@ int tr_raft_service_wal_reload_create(
         if (config->learners[index] == 0U ||
             (index > 0U && config->learners[index - 1U] >=
                               config->learners[index])) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
         for (voter_index = 0U; voter_index < config->voter_count;
              ++voter_index) {
             if (config->learners[index] == config->voters[voter_index]) {
-                return TURBO_EINVAL;
+                return SALTS_EINVAL;
             }
         }
     }
@@ -73,7 +73,7 @@ int tr_raft_service_wal_reload_create(
     reload = (tr_raft_service_wal_reload_t *) calloc(
         1U, sizeof(*reload));
     if (reload == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     reload->service = config->service;
     reload->storage = config->storage;
@@ -95,7 +95,7 @@ int tr_raft_service_wal_reload_create(
     reload->max_inflight_append_requests =
         config->max_inflight_append_requests;
     *out_reload = reload;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_service_wal_reload_destroy(tr_raft_service_wal_reload_t *reload)
@@ -115,18 +115,18 @@ int tr_raft_service_wal_reload_runtime(
     int result;
 
     if (reload == NULL || snapshot_index == 0U || snapshot_term == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(&recovery, 0, sizeof(recovery));
     result = tr_raft_wal_storage_load(reload->storage, &recovery);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (recovery.snapshot_index != snapshot_index ||
         recovery.snapshot_term != snapshot_term ||
         recovery.commit_index < snapshot_index) {
         tr_raft_wal_recovery_destroy(&recovery);
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
 
     memset(&core_config, 0, sizeof(core_config));

@@ -283,7 +283,7 @@ void tr_raft_core_destroy(tr_raft_core_t *core);
  * Advances logical time. Randomness remains outside the core: every tick input
  * supplies the timeout to use for the next election cycle.
  *
- * Returns TURBO_ENOSPC without changing state when ready cannot hold all
+ * Returns SALTS_ENOSPC without changing state when ready cannot hold all
  * messages. On success, persist changed hard state before transmitting messages.
  */
 int tr_raft_core_tick(tr_raft_core_t *core,
@@ -309,7 +309,7 @@ int tr_raft_core_change_membership(
 /**
  * Starts transfer to a voting peer. A caught-up peer receives TimeoutNow;
  * otherwise one replication message is emitted first. Proposals return
- * TURBO_EBUSY until transfer succeeds, is cancelled by a role change, or times
+ * SALTS_EBUSY until transfer succeeds, is cancelled by a role change, or times
  * out after the current election timeout.
  */
 int tr_raft_core_transfer_leadership(tr_raft_core_t *core,

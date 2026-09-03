@@ -29,7 +29,7 @@ extern "C" {
      TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4 |                                \
      TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V5 |                                \
      TR_RAFT_HANDSHAKE_FEATURE_DATA_STREAM_V5)
-/* V4 peers only require the legacy 8 KiB frame ceiling. */
+/* Structural lower bounds retained for rejecting malformed records. */
 #define TR_RAFT_HANDSHAKE_MIN_FRAME_SIZE                                  \
     (TR_RAFT_WIRE_HEADER_SIZE + TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE)
 #define TR_RAFT_HANDSHAKE_MIN_SNAPSHOT_CHUNK_SIZE 4096U
@@ -120,17 +120,13 @@ int tr_raft_handshake_negotiate(
     tr_raft_handshake_message_t *out_local_ack,
     tr_raft_handshake_result_t *out_result);
 
-/** Selects v2 for legacy peers and v3 when batch capability was negotiated. */
+/** Returns the current Raft wire version for a valid current contract. */
 int tr_raft_handshake_select_raft_wire_version(
     const tr_raft_handshake_result_t *result,
     size_t entry_count,
     uint16_t *out_wire_version);
 
-/** Returns EPROTONOSUPPORT unless snapshot wire v4 was negotiated. */
-int tr_raft_handshake_require_snapshot_v4(
-    const tr_raft_handshake_result_t *result);
-
-/** Selects V5 when negotiated and frame/chunk limits can carry it, else V4. */
+/** Returns the current snapshot version and chunk size, or fails. */
 int tr_raft_handshake_select_snapshot_wire_version(
     const tr_raft_handshake_result_t *result,
     uint16_t *out_wire_version,

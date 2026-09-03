@@ -1,8 +1,8 @@
 #ifndef TURBORAFT_TEXT_SYNTAX_H
 #define TURBORAFT_TEXT_SYNTAX_H
 
-#include <turbo_error.h>
-#include <turbo_vstr.h>
+#include <salts_error.h>
+#include <salts_vstr.h>
 
 #include <stddef.h>
 #include <stdint.h>

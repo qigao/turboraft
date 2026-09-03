@@ -15,7 +15,7 @@ same stream is durable on a voting quorum.
   FlowMQ batch is four frames (256 KiB), the receive buffer is 256 KiB, and the
   retained per-peer data budget is 4 MiB.
 - Backpressure: a full outbound item queue or byte budget returns
-  `TURBO_ENOSPC`; no data is dropped or moved to unbounded storage.
+  `SALTS_ENOSPC`; no data is dropped or moved to unbounded storage.
 - Durability: the receiver calls `sink.commit` only after length and SHA-256
   validation. Only an accepted final ACK sets `durable=true`.
 - Consensus: old and new voting majorities are checked, but proposal remains
@@ -39,28 +39,28 @@ tr_raft_data_stream_sender_config_t config = {
 };
 tr_raft_data_stream_sender_t *sender = NULL;
 int rc = tr_raft_data_stream_sender_create(&config, &sender);
-if (rc == TURBO_OK)
+if (rc == SALTS_OK)
     rc = tr_raft_data_stream_sender_begin(sender, term, stream_id,
                                            bytes, byte_count);
-while (rc == TURBO_OK) {
+while (rc == SALTS_OK) {
     tr_raft_data_chunk_t chunk;
     rc = tr_raft_data_stream_sender_next(sender, &chunk);
-    if (rc == TURBO_OK) {
-        tr_raft_coronet_payload_t payload = {
+    if (rc == SALTS_OK) {
+        tr_raft_transport_payload_t payload = {
             .kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK,
             .data.data_chunk = chunk,
         };
         rc = tr_raft_flowmq_peer_service_enqueue_payload(flowmq, &payload);
-        if (rc != TURBO_OK)
+        if (rc != SALTS_OK)
             tr_raft_data_stream_sender_cancel(sender, chunk.stream_offset);
     }
 }
 ```
 
-`sender_begin` returns `TURBO_EINVAL` for invalid identity, pointer, or size and
-`TURBO_EBUSY` while another stream is active. `sender_next` returns
-`TURBO_EBUSY` when its bounded window is full. Receiver callbacks propagate
-their error; digest, order, or identity violations return `TURBO_EPROTO`.
+`sender_begin` returns `SALTS_EINVAL` for invalid identity, pointer, or size and
+`SALTS_EBUSY` while another stream is active. `sender_next` returns
+`SALTS_EBUSY` when its bounded window is full. Receiver callbacks propagate
+their error; digest, order, or identity violations return `SALTS_EPROTO`.
 
 After every current member returns a final durable ACK, encode the proposal:
 
@@ -69,7 +69,7 @@ uint8_t descriptor[TR_RAFT_DATA_DESCRIPTOR_ENCODED_SIZE];
 tr_raft_proposal_t proposal;
 rc = tr_raft_data_quorum_make_proposal(quorum, command_id,
                                        descriptor, &proposal);
-if (rc == TURBO_OK)
+if (rc == SALTS_OK)
     rc = tr_raft_core_propose(core, &proposal, &ready);
 ```
 

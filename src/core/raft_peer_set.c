@@ -1,6 +1,6 @@
 #include "raft_peer_set.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <limits.h>
 #include <string.h>
@@ -34,13 +34,13 @@ int tr_raft_peer_set_build(
 
     if (memberships == NULL || membership_count == 0U ||
         membership_count > TR_RAFT_PEER_SET_MAX_SOURCES || peers == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(peers, 0, sizeof(*peers));
     for (source_index = 0U; source_index < membership_count;
          ++source_index) {
         if (!tr_raft_peer_set_membership_valid(memberships[source_index])) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
     }
 
@@ -60,11 +60,11 @@ int tr_raft_peer_set_build(
             }
         }
         if (!available) {
-            return TURBO_OK;
+            return SALTS_OK;
         }
         if (peers->count == TR_RAFT_MAX_MEMBERS) {
             memset(peers, 0, sizeof(*peers));
-            return TURBO_ENOSPC;
+            return SALTS_ENOSPC;
         }
         peers->node_ids[peers->count++] = next;
         for (source_index = 0U; source_index < membership_count;

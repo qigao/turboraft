@@ -51,10 +51,10 @@ typedef struct {
  * Executes submit, poll, and tick actions synchronously in plan order.
  *
  * Request ids are unique within one execution and are mapped to the receipt
- * returned by submit. Duplicate request ids return TURBO_EALREADY and polls
- * for unknown request ids return TURBO_ENOENT. The first callback failure is
+ * returned by submit. Duplicate request ids return SALTS_EALREADY and polls
+ * for unknown request ids return SALTS_ENOENT. The first callback failure is
  * returned unchanged and stops execution. Other replay action kinds are
- * rejected with TURBO_ENOTSUP until a runtime-specific driver handles them.
+ * rejected with SALTS_ENOTSUP until a runtime-specific driver handles them.
  *
  * The function is single-threaded with respect to the supplied callbacks.
  * Payloads are decoded into bounded temporary storage and are not retained by

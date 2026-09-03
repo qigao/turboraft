@@ -1,7 +1,7 @@
 add_executable(turboraft_benchmarks benchmark_turboraft.c)
 target_link_libraries(turboraft_benchmarks
                       PRIVATE TurboRaft::Core TurboRaft::WalStorage
-                              TurboUtils::TinyTest)
+                              Salts::TinyTest)
 target_compile_definitions(turboraft_benchmarks
                            PRIVATE TURBORAFT_BENCHMARK_WAL=1)
 

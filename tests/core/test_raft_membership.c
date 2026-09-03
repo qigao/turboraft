@@ -1,7 +1,7 @@
 #include "raft_membership.h"
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -33,7 +33,7 @@ spec("raft membership state")
 
         check_equal(tr_raft_membership_stable(
                          voters, 2U, learners, 2U, &membership),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(membership.phase, TR_RAFT_CONF_FINAL);
         check_equal(membership.member_count, 4U);
         check_equal(membership.members[1].node_id, 2U);
@@ -54,11 +54,11 @@ spec("raft membership state")
 
         check_equal(tr_raft_membership_stable(
                          voters, 3U, learners, 1U, &stable),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_joint(
                          &stable, target_voters, 3U, target_learners, 1U,
                          51U, &joint),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(joint.phase, TR_RAFT_CONF_JOINT);
         check_equal(joint.transition_id, 51U);
         check_equal(tr_raft_membership_roles(&joint, 2U),
@@ -78,13 +78,13 @@ spec("raft membership state")
 
         check_equal(tr_raft_membership_stable(
                          voters, 3U, NULL, 0U, &stable),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_joint(
                          &stable, target_voters, 2U, target_learners, 1U,
                          52U, &joint),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_final(&joint, &final_membership),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(final_membership.member_count, 3U);
         check_equal(tr_raft_membership_index(&final_membership, 3U), -1);
         check_equal(tr_raft_membership_roles(&final_membership, 1U),
@@ -107,10 +107,10 @@ spec("raft membership state")
 
         check_equal(tr_raft_membership_stable(
                          voters, 3U, NULL, 0U, &stable),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_joint(
                          &stable, target_voters, 3U, NULL, 0U, 53U, &joint),
-                     TURBO_OK);
+                     SALTS_OK);
         check(!tr_raft_membership_has_quorum(
             &joint, membership_acknowledgements(&joint, old_only, 2U)));
         check(!tr_raft_membership_has_quorum(
@@ -133,10 +133,10 @@ spec("raft membership state")
         }
         check_equal(tr_raft_membership_stable(
                          voters, TR_RAFT_MAX_MEMBERS, NULL, 0U, &stable),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(tr_raft_membership_joint(
                          &stable, target_voters, TR_RAFT_MAX_MEMBERS,
                          NULL, 0U, 54U, &joint),
-                     TURBO_ENOSPC);
+                     SALTS_ENOSPC);
     }
 }

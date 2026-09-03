@@ -2,7 +2,7 @@
 
 #include <turboraft/raft_wire_codec.h>
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdlib.h>
 
@@ -20,7 +20,7 @@ static tr_raft_wire_codec_t *tr_fuzz_get_codec(void)
     if (tr_fuzz_codec != NULL) {
         return tr_fuzz_codec;
     }
-    if (tr_raft_wire_codec_create(&tr_fuzz_codec) != TURBO_OK) {
+    if (tr_raft_wire_codec_create(&tr_fuzz_codec) != SALTS_OK) {
         return NULL;
     }
     if (!tr_fuzz_cleanup_registered) {
@@ -37,7 +37,7 @@ static tr_raft_wire_codec_t *tr_fuzz_get_codec(void)
 static void tr_fuzz_require_round_trip(int encode_result,
                                        int decode_result)
 {
-    if (encode_result != TURBO_OK || decode_result != TURBO_OK) {
+    if (encode_result != SALTS_OK || decode_result != SALTS_OK) {
         abort();
     }
 }
@@ -67,10 +67,10 @@ int tr_raft_wire_fuzz_one_input(const uint8_t *data, size_t size)
 
     decode_result = tr_raft_wire_decode(codec, data, size, &metadata,
                                         &message);
-    if (decode_result == TURBO_OK) {
+    if (decode_result == SALTS_OK) {
         encode_result = tr_raft_wire_encode(
             codec, &metadata, &message, frame, sizeof(frame), &frame_length);
-        decode_result = encode_result == TURBO_OK
+        decode_result = encode_result == SALTS_OK
                             ? tr_raft_wire_decode(
                                   codec, frame, frame_length,
                                   &round_trip_metadata, &round_trip_message)
@@ -80,10 +80,10 @@ int tr_raft_wire_fuzz_one_input(const uint8_t *data, size_t size)
 
     decode_result = tr_raft_wire_decode_snapshot_chunk(
         codec, data, size, &metadata, &chunk);
-    if (decode_result == TURBO_OK) {
+    if (decode_result == SALTS_OK) {
         encode_result = tr_raft_wire_encode_snapshot_chunk(
             codec, &metadata, &chunk, frame, sizeof(frame), &frame_length);
-        decode_result = encode_result == TURBO_OK
+        decode_result = encode_result == SALTS_OK
                             ? tr_raft_wire_decode_snapshot_chunk(
                                   codec, frame, frame_length,
                                   &round_trip_metadata, &round_trip_chunk)
@@ -93,10 +93,10 @@ int tr_raft_wire_fuzz_one_input(const uint8_t *data, size_t size)
 
     decode_result = tr_raft_wire_decode_snapshot_ack(
         codec, data, size, &metadata, &ack);
-    if (decode_result == TURBO_OK) {
+    if (decode_result == SALTS_OK) {
         encode_result = tr_raft_wire_encode_snapshot_ack(
             codec, &metadata, &ack, frame, sizeof(frame), &frame_length);
-        decode_result = encode_result == TURBO_OK
+        decode_result = encode_result == SALTS_OK
                             ? tr_raft_wire_decode_snapshot_ack(
                                   codec, frame, frame_length,
                                   &round_trip_metadata, &round_trip_ack)

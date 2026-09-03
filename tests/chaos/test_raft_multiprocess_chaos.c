@@ -4,9 +4,9 @@
 #include <turboraft/raft_wire_codec.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
-#include <turbo_process.h>
-#include <turbo_thread.h>
+#include <salts_error.h>
+#include <salts_process.h>
+#include <salts_thread.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +38,7 @@ typedef struct tr_chaos_response {
 typedef struct tr_chaos_process_node {
     tr_raft_node_id_t id;
     char database_path[512];
-    turbo_process_t *process;
+    salts_process_t *process;
     uint32_t next_request_id;
     int alive;
     tr_chaos_response_t status;
@@ -78,7 +78,7 @@ static uint32_t tr_chaos_random(uint32_t *state)
     return value;
 }
 
-static int tr_chaos_process_read_exact(turbo_process_t *process,
+static int tr_chaos_process_read_exact(salts_process_t *process,
                                        void *output,
                                        size_t size)
 {
@@ -88,26 +88,26 @@ static int tr_chaos_process_read_exact(turbo_process_t *process,
 
     while (total < size && waited < TR_CHAOS_IO_TIMEOUT_MS) {
         size_t count = 0U;
-        int result = turbo_process_read_stdout(
+        int result = salts_process_read_stdout(
             process, bytes + total, size - total, &count);
 
         total += count;
         if (total == size) {
-            return TURBO_OK;
+            return SALTS_OK;
         }
-        if (result == TURBO_EOF) {
-            return TURBO_EPIPE;
+        if (result == SALTS_EOF) {
+            return SALTS_EPIPE;
         }
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
-        turbo_sleep_ms(1U);
+        salts_sleep_ms(1U);
         waited++;
     }
-    return TURBO_ETIMEDOUT;
+    return SALTS_ETIMEDOUT;
 }
 
-static int tr_chaos_process_write_exact(turbo_process_t *process,
+static int tr_chaos_process_write_exact(salts_process_t *process,
                                         const void *input,
                                         size_t size)
 {
@@ -116,18 +116,18 @@ static int tr_chaos_process_write_exact(turbo_process_t *process,
 
     while (total < size) {
         size_t count = 0U;
-        int result = turbo_process_write_stdin(
+        int result = salts_process_write_stdin(
             process, bytes + total, size - total, &count);
 
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
         if (count == 0U) {
-            return TURBO_EPIPE;
+            return SALTS_EPIPE;
         }
         total += count;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_chaos_node_command(tr_chaos_process_node_t *node,
@@ -145,7 +145,7 @@ static int tr_chaos_node_command(tr_chaos_process_node_t *node,
     if (node == NULL || !node->alive || response == NULL ||
         payload_size > TR_CHAOS_MAX_FRAME_BYTES ||
         (payload == NULL && payload_size != 0U)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     request_id = node->next_request_id++;
     memset(command, 0, sizeof(command));
@@ -156,15 +156,15 @@ static int tr_chaos_node_command(tr_chaos_process_node_t *node,
     tr_chaos_put_u32(command + 12U, (uint32_t) payload_size);
     result = tr_chaos_process_write_exact(node->process, command,
                                           sizeof(command));
-    if (result == TURBO_OK && payload_size != 0U) {
+    if (result == SALTS_OK && payload_size != 0U) {
         result = tr_chaos_process_write_exact(node->process, payload,
                                               payload_size);
     }
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_chaos_process_read_exact(node->process, header,
                                              sizeof(header));
     }
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         fprintf(stderr,
                 "chaos command io node=%llu kind=%d request=%u result=%d\n",
                 (unsigned long long) node->id, (int) kind, request_id,
@@ -187,7 +187,7 @@ static int tr_chaos_node_command(tr_chaos_process_node_t *node,
                 tr_chaos_get_u32(header + 16U),
                 tr_chaos_get_u32(header + 20U),
                 (unsigned long long) tr_chaos_get_u64(header + 24U));
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     memset(response, 0, sizeof(*response));
     response->operation_result = (int) tr_chaos_get_u32(header + 12U);
@@ -213,12 +213,12 @@ static int tr_chaos_node_command(tr_chaos_process_node_t *node,
                 (unsigned long long) node->id,
                 (unsigned long long) response->node_id,
                 response->message_count, response->payload_size);
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (response->payload_size != 0U) {
         result = tr_chaos_process_read_exact(
             node->process, response_payload, response->payload_size);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             fprintf(stderr,
                     "chaos command payload node=%llu messages=%u payload=%u "
                     "result=%d\n",
@@ -226,7 +226,7 @@ static int tr_chaos_node_command(tr_chaos_process_node_t *node,
                     response->message_count, response->payload_size, result);
         }
     }
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         node->status = *response;
     }
     return result;
@@ -250,7 +250,7 @@ static int tr_chaos_track_status(tr_chaos_safety_t *safety,
                 (unsigned long long) status->last_log_index,
                 (unsigned long long) status->commit_index,
                 (unsigned long long) status->applied_index);
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     node_index = (size_t) status->node_id - 1U;
     if (status->term < safety->last_term[node_index] ||
@@ -263,7 +263,7 @@ static int tr_chaos_track_status(tr_chaos_safety_t *safety,
                 (unsigned long long) safety->last_term[node_index],
                 (unsigned long long) status->commit_index,
                 (unsigned long long) safety->last_commit[node_index]);
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     safety->last_term[node_index] = status->term;
     safety->last_commit[node_index] = status->commit_index;
@@ -276,7 +276,7 @@ static int tr_chaos_track_status(tr_chaos_safety_t *safety,
                     (unsigned long long) status->term,
                     (unsigned long long) known,
                     (unsigned long long) status->node_id);
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         safety->leader_by_term[status->term] = status->node_id;
     }
@@ -292,7 +292,7 @@ static int tr_chaos_track_status(tr_chaos_safety_t *safety,
                     (unsigned long long) safety->hash_by_index[applied],
                     (unsigned long long) status->applied_hash,
                     (unsigned long long) status->node_id);
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         safety->hash_known[applied] = 1U;
         safety->hash_by_index[applied] = status->applied_hash;
@@ -300,7 +300,7 @@ static int tr_chaos_track_status(tr_chaos_safety_t *safety,
     if (status->user_apply_count > safety->max_user_apply_count) {
         safety->max_user_apply_count = status->user_apply_count;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_chaos_network_collect(tr_chaos_network_t *network,
@@ -324,7 +324,7 @@ static int tr_chaos_network_collect(tr_chaos_network_t *network,
                     "offset=%zu payload=%u\n",
                     index, response->message_count, offset,
                     response->payload_size);
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         frame_size = tr_chaos_get_u32(payload + offset);
         offset += 4U;
@@ -336,11 +336,11 @@ static int tr_chaos_network_collect(tr_chaos_network_t *network,
                     "payload=%u queued=%zu\n",
                     index, frame_size, offset, response->payload_size,
                     network->count);
-            return TURBO_ENOSPC;
+            return SALTS_ENOSPC;
         }
         result = tr_raft_wire_decode(codec, payload + offset, frame_size,
                                      &metadata, &message);
-        if (result != TURBO_OK || message.from != response->node_id ||
+        if (result != SALTS_OK || message.from != response->node_id ||
             message.to == 0U || message.to > 3U) {
             fprintf(stderr,
                     "chaos collect decode index=%u result=%d response-node=%llu "
@@ -349,7 +349,7 @@ static int tr_chaos_network_collect(tr_chaos_network_t *network,
                     (unsigned long long) response->node_id,
                     (unsigned long long) message.from,
                     (unsigned long long) message.to, frame_size);
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         frame = &network->frames[network->count++];
         frame->from = message.from;
@@ -362,9 +362,9 @@ static int tr_chaos_network_collect(tr_chaos_network_t *network,
         fprintf(stderr,
                 "chaos collect trailing count=%u offset=%zu payload=%u\n",
                 response->message_count, offset, response->payload_size);
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_chaos_node_spawn(tr_chaos_process_node_t *node,
@@ -372,7 +372,7 @@ static int tr_chaos_node_spawn(tr_chaos_process_node_t *node,
                                tr_chaos_safety_t *safety,
                                uint8_t *response_payload)
 {
-    turbo_process_options_t options;
+    salts_process_options_t options;
     tr_chaos_response_t response;
     char node_id[16];
     const char *args[5];
@@ -385,21 +385,21 @@ static int tr_chaos_node_spawn(tr_chaos_process_node_t *node,
     args[2] = "--db";
     args[3] = node->database_path;
     args[4] = NULL;
-    turbo_process_options_init(&options);
+    salts_process_options_init(&options);
     options.program = program;
     options.args = args;
-    options.flags |= TURBO_PROCESS_PIPE_STDIN;
+    options.flags |= SALTS_PROCESS_PIPE_STDIN;
     options.timeout_ms = 60000U;
     options.max_output_bytes = 8U * 1024U * 1024U;
-    result = turbo_process_spawn(&options, &node->process);
-    if (result != TURBO_OK) {
+    result = salts_process_spawn(&options, &node->process);
+    if (result != SALTS_OK) {
         return result;
     }
     node->alive = 1;
     node->next_request_id = 1U;
     result = tr_chaos_node_command(node, TR_CHAOS_COMMAND_STATUS, NULL, 0U,
                                    response_payload, &response);
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_chaos_track_status(safety, &response);
     }
     return result;
@@ -407,17 +407,17 @@ static int tr_chaos_node_spawn(tr_chaos_process_node_t *node,
 
 static int tr_chaos_node_terminate(tr_chaos_process_node_t *node)
 {
-    turbo_process_result_t result;
+    salts_process_result_t result;
     int operation_result;
 
     if (!node->alive) {
-        return TURBO_OK;
+        return SALTS_OK;
     }
-    operation_result = turbo_process_terminate(node->process);
-    if (operation_result == TURBO_OK) {
-        operation_result = turbo_process_wait(node->process, &result);
+    operation_result = salts_process_terminate(node->process);
+    if (operation_result == SALTS_OK) {
+        operation_result = salts_process_wait(node->process, &result);
     }
-    turbo_process_destroy(node->process);
+    salts_process_destroy(node->process);
     node->process = NULL;
     node->alive = 0;
     return operation_result;
@@ -427,25 +427,25 @@ static int tr_chaos_node_stop(tr_chaos_process_node_t *node,
                               uint8_t *response_payload)
 {
     tr_chaos_response_t response;
-    turbo_process_result_t process_result;
+    salts_process_result_t process_result;
     int result;
 
     memset(&process_result, 0, sizeof(process_result));
 
     if (!node->alive) {
-        return TURBO_OK;
+        return SALTS_OK;
     }
     result = tr_chaos_node_command(node, TR_CHAOS_COMMAND_STOP, NULL, 0U,
                                    response_payload, &response);
-    if (result == TURBO_OK) {
-        result = turbo_process_wait(node->process, &process_result);
+    if (result == SALTS_OK) {
+        result = salts_process_wait(node->process, &process_result);
     }
-    if (result == TURBO_OK &&
-        (process_result.state != TURBO_PROCESS_EXITED ||
+    if (result == SALTS_OK &&
+        (process_result.state != SALTS_PROCESS_EXITED ||
          process_result.exit_code != 0)) {
-        result = TURBO_EPROTO;
+        result = SALTS_EPROTO;
     }
-    turbo_process_destroy(node->process);
+    salts_process_destroy(node->process);
     node->process = NULL;
     node->alive = 0;
     return result;
@@ -467,10 +467,10 @@ static int tr_chaos_collect_command(
         node, kind, command_payload, command_size, response_payload,
         &response);
 
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_chaos_track_status(safety, &response);
     }
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_chaos_network_collect(network, codec, response_payload,
                                           &response);
     }
@@ -498,7 +498,7 @@ static int tr_chaos_deliver_one(
     int index;
 
     if (network->count == 0U) {
-        return TURBO_OK;
+        return SALTS_OK;
     }
     selected = tr_chaos_random(random_state) % network->count;
     frame = network->frames[selected];
@@ -509,24 +509,24 @@ static int tr_chaos_deliver_one(
         (partitioned_node != 0U &&
          (frame.from == partitioned_node || frame.to == partitioned_node))) {
         network->dropped++;
-        return TURBO_OK;
+        return SALTS_OK;
     }
     decision = tr_chaos_random(random_state) % 100U;
     if (faults_enabled && decision < 18U) {
         network->dropped++;
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (faults_enabled && decision >= 18U && decision < 28U) {
         deliveries = 2;
         network->duplicated++;
     }
     for (index = 0; index < deliveries; ++index) {
-        int operation_result = TURBO_OK;
+        int operation_result = SALTS_OK;
         int result = tr_chaos_collect_command(
             target, TR_CHAOS_COMMAND_STEP, frame.data, frame.size, network,
             codec, safety, response_payload, &operation_result);
 
-        if (result != TURBO_OK || operation_result != TURBO_OK) {
+        if (result != SALTS_OK || operation_result != SALTS_OK) {
             fprintf(stderr,
                     "chaos deliver from=%llu to=%llu copy=%d result=%d "
                     "operation=%d faulted=%d cause=%d term=%llu role=%d "
@@ -539,10 +539,10 @@ static int tr_chaos_deliver_one(
                     (int) target->status.role,
                     (unsigned long long) target->status.commit_index,
                     (unsigned long long) target->status.applied_index);
-            return result != TURBO_OK ? result : operation_result;
+            return result != SALTS_OK ? result : operation_result;
         }
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_chaos_run_seed(const char *program,
@@ -559,7 +559,7 @@ static int tr_chaos_run_seed(const char *program,
     int accepted_proposals = 0;
     uint32_t round = 0U;
     size_t index;
-    int result = TURBO_OK;
+    int result = SALTS_OK;
     const char *stage = "allocate";
 
     memset(nodes, 0, sizeof(nodes));
@@ -569,11 +569,11 @@ static int tr_chaos_run_seed(const char *program,
         TR_CHAOS_MAX_QUEUED_FRAMES, sizeof(*network.frames));
     response_payload = (uint8_t *) malloc(TR_CHAOS_MAX_RESPONSE_BYTES);
     if (network.frames == NULL || response_payload == NULL) {
-        result = TURBO_ENOMEM;
+        result = SALTS_ENOMEM;
         goto cleanup;
     }
     result = tr_raft_wire_codec_create(&codec);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         goto cleanup;
     }
     for (index = 0U; index < 3U; ++index) {
@@ -584,7 +584,7 @@ static int tr_chaos_run_seed(const char *program,
                  directory, seed, index + 1U);
         result = tr_chaos_node_spawn(&nodes[index], program, &safety,
                                      response_payload);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             goto cleanup;
         }
     }
@@ -610,7 +610,7 @@ static int tr_chaos_run_seed(const char *program,
                 killed_node = 0;
             }
             result = tr_chaos_node_terminate(&nodes[killed_node]);
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 goto cleanup;
             }
         }
@@ -618,13 +618,13 @@ static int tr_chaos_run_seed(const char *program,
             stage = "restart-node";
             result = tr_chaos_node_spawn(&nodes[killed_node], program,
                                          &safety, response_payload);
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 goto cleanup;
             }
         }
 
         for (index = 0U; index < 3U; ++index) {
-            int operation_result = TURBO_OK;
+            int operation_result = SALTS_OK;
 
             if (!nodes[index].alive) {
                 continue;
@@ -637,8 +637,8 @@ static int tr_chaos_run_seed(const char *program,
                 &nodes[index], TR_CHAOS_COMMAND_TICK, tick, sizeof(tick),
                 &network, codec, &safety, response_payload,
                 &operation_result);
-            if (result != TURBO_OK || operation_result != TURBO_OK) {
-                result = result != TURBO_OK ? result : operation_result;
+            if (result != SALTS_OK || operation_result != SALTS_OK) {
+                result = result != SALTS_OK ? result : operation_result;
                 goto cleanup;
             }
         }
@@ -650,7 +650,7 @@ static int tr_chaos_run_seed(const char *program,
             result = tr_chaos_deliver_one(
                 nodes, &network, codec, &safety, response_payload,
                 &random_state, faults_enabled, partitioned_node);
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 goto cleanup;
             }
         }
@@ -661,7 +661,7 @@ static int tr_chaos_run_seed(const char *program,
                 if (nodes[index].alive &&
                     nodes[index].status.role == TR_RAFT_LEADER) {
                     uint8_t proposal[20];
-                    int operation_result = TURBO_OK;
+                    int operation_result = SALTS_OK;
 
                     tr_chaos_put_u64(proposal,
                                      (uint64_t) seed * 1000U + round + 1U);
@@ -673,10 +673,10 @@ static int tr_chaos_run_seed(const char *program,
                         &nodes[index], TR_CHAOS_COMMAND_PROPOSE, proposal,
                         sizeof(proposal), &network, codec, &safety,
                         response_payload, &operation_result);
-                    if (result != TURBO_OK) {
+                    if (result != SALTS_OK) {
                         goto cleanup;
                     }
-                    if (operation_result == TURBO_OK) {
+                    if (operation_result == SALTS_OK) {
                         accepted_proposals++;
                     }
                     break;
@@ -689,17 +689,17 @@ static int tr_chaos_run_seed(const char *program,
         stage = "drain";
         result = tr_chaos_deliver_one(nodes, &network, codec, &safety,
                                       response_payload, &random_state, 0, 0U);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             goto cleanup;
         }
     }
     if (accepted_proposals == 0 || safety.max_user_apply_count == 0U) {
         stage = "liveness";
-        result = TURBO_EPROTO;
+        result = SALTS_EPROTO;
     }
 
 cleanup:
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         fprintf(stderr,
                 "chaos seed=%u stage=%s round=%u result=%d queue=%zu "
                 "accepted=%d user_applied=%u "
@@ -724,7 +724,7 @@ cleanup:
     for (index = 0U; index < 3U; ++index) {
         int close_result = tr_chaos_node_stop(&nodes[index],
                                               response_payload);
-        if (result == TURBO_OK && close_result != TURBO_OK) {
+        if (result == SALTS_OK && close_result != SALTS_OK) {
             result = close_result;
         }
     }
@@ -746,7 +746,7 @@ spec("raft multi-process deterministic chaos")
         check_not_null(directory);
         for (seed = 1U; seed <= TR_CHAOS_SEED_COUNT; ++seed) {
             check_equal(tr_chaos_run_seed(program, directory, seed),
-                         TURBO_OK);
+                         SALTS_OK);
             fprintf(stderr, "chaos seed=%u completed\n", seed);
         }
         check_equal(tt_remove_tree(directory), 0);

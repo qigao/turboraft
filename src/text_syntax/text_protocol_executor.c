@@ -73,27 +73,27 @@ static int tr_text_protocol_decode_hex(
   if (input.data == NULL || output == NULL || output_length == NULL ||
       input.len < 3u || input.data[0] != '0' ||
       (input.data[1] != 'x' && input.data[1] != 'X')) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   hex_digits = input.len - 2u;
   if ((hex_digits & 1u) != 0u) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
   decoded_length = hex_digits / 2u;
   if (decoded_length > output_capacity) {
-    return TURBO_ENOSPC;
+    return SALTS_ENOSPC;
   }
   for (index = 0u; index < decoded_length; ++index) {
     int high = tr_text_protocol_hex_value(input.data[2u + index * 2u]);
     int low = tr_text_protocol_hex_value(input.data[3u + index * 2u]);
 
     if (high < 0 || low < 0) {
-      return TURBO_EPROTO;
+      return SALTS_EPROTO;
     }
     output[index] = (uint8_t)((high << 4) | low);
   }
   *output_length = decoded_length;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static bool tr_text_protocol_find_message(
@@ -126,17 +126,17 @@ static int tr_text_protocol_expected_kind(
 {
   if (tr_text_protocol_text_equals(name, "raft")) {
     *out_kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
-    return TURBO_OK;
+    return SALTS_OK;
   }
   if (tr_text_protocol_text_equals(name, "snapshot_chunk")) {
     *out_kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
-    return TURBO_OK;
+    return SALTS_OK;
   }
   if (tr_text_protocol_text_equals(name, "snapshot_ack")) {
     *out_kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
-    return TURBO_OK;
+    return SALTS_OK;
   }
-  return TURBO_ENOTSUP;
+  return SALTS_ENOTSUP;
 }
 
 static int tr_text_protocol_validate_common(
@@ -148,9 +148,9 @@ static int tr_text_protocol_validate_common(
 {
   if (frame->version != (uint64_t)version || frame->from != from ||
       frame->to != to || frame->term != term) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 static int tr_text_protocol_decode_frame(
@@ -167,30 +167,30 @@ static int tr_text_protocol_decode_frame(
   int result;
 
   if (frame->payload_hex.len == 0u) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   result = tr_text_protocol_expected_kind(frame->kind, &expected_kind);
-  if (result != TURBO_OK) {
+  if (result != SALTS_OK) {
     return result;
   }
   result = tr_text_protocol_decode_hex(
       frame->payload_hex, wire_frame, sizeof(wire_frame), &wire_frame_length);
-  if (result != TURBO_OK) {
+  if (result != SALTS_OK) {
     return result;
   }
   result = tr_raft_wire_peek_version(
       wire_frame, wire_frame_length, &version);
-  if (result != TURBO_OK) {
+  if (result != SALTS_OK) {
     return result;
   }
   result = tr_raft_wire_peek_payload_kind(
       wire_frame, wire_frame_length, &payload_kind);
-  if (result != TURBO_OK) {
+  if (result != SALTS_OK) {
     return result;
   }
   if (payload_kind != expected_kind ||
       frame->version != (uint64_t)version) {
-    return TURBO_EPROTO;
+    return SALTS_EPROTO;
   }
 
   memset(decoded, 0, sizeof(*decoded));
@@ -200,16 +200,16 @@ static int tr_text_protocol_decode_frame(
   switch (payload_kind) {
     case TR_RAFT_WIRE_PAYLOAD_RAFT:
       if (!tr_text_protocol_find_message(frame->message, &expected_message)) {
-        return TURBO_ENOTSUP;
+        return SALTS_ENOTSUP;
       }
       result = tr_raft_wire_decode(
           codec, wire_frame, wire_frame_length, &decoded->metadata,
           &decoded->payload.raft);
-      if (result != TURBO_OK) {
+      if (result != SALTS_OK) {
         return result;
       }
       if (decoded->payload.raft.type != expected_message) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
       }
       return tr_text_protocol_validate_common(
           frame, version, decoded->payload.raft.from,
@@ -217,12 +217,12 @@ static int tr_text_protocol_decode_frame(
 
     case TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK:
       if (!tr_text_protocol_text_equals(frame->message, "snapshot_chunk")) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
       }
       result = tr_raft_wire_decode_snapshot_chunk(
           codec, wire_frame, wire_frame_length, &decoded->metadata,
           &decoded->payload.snapshot_chunk);
-      if (result != TURBO_OK) {
+      if (result != SALTS_OK) {
         return result;
       }
       return tr_text_protocol_validate_common(
@@ -232,12 +232,12 @@ static int tr_text_protocol_decode_frame(
 
     case TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK:
       if (!tr_text_protocol_text_equals(frame->message, "snapshot_ack")) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
       }
       result = tr_raft_wire_decode_snapshot_ack(
           codec, wire_frame, wire_frame_length, &decoded->metadata,
           &decoded->payload.snapshot_ack);
-      if (result != TURBO_OK) {
+      if (result != SALTS_OK) {
         return result;
       }
       return tr_text_protocol_validate_common(
@@ -246,7 +246,7 @@ static int tr_text_protocol_decode_frame(
           decoded->payload.snapshot_ack.term);
 
     default:
-      return TURBO_ENOTSUP;
+      return SALTS_ENOTSUP;
   }
 }
 
@@ -261,27 +261,27 @@ int tr_text_protocol_debug_execute(
 
   if (plan == NULL || ops == NULL ||
       plan->frame_count > TR_TEXT_MAX_STATEMENTS) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
   if (ops->frame == NULL) {
-    return TURBO_ENOTSUP;
+    return SALTS_ENOTSUP;
   }
   result = tr_raft_wire_codec_create(&codec);
-  if (result != TURBO_OK) {
+  if (result != SALTS_OK) {
     return result;
   }
 
-  result = TURBO_OK;
+  result = SALTS_OK;
   for (frame_index = 0u; frame_index < plan->frame_count; ++frame_index) {
     tr_text_protocol_debug_decoded_frame_t decoded;
     const tr_text_protocol_frame_t *frame = &plan->frames[frame_index];
 
     result = tr_text_protocol_decode_frame(codec, frame, &decoded);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
       break;
     }
     result = ops->frame(context, frame, &decoded);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
       break;
     }
   }

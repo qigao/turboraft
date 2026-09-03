@@ -9,7 +9,7 @@ int tr_text_query_execute(
 
   if (plan == NULL || ops == NULL ||
       plan->command_count > TR_TEXT_MAX_STATEMENTS) {
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
   }
 
   for (command_index = 0u; command_index < plan->command_count;
@@ -20,30 +20,30 @@ int tr_text_query_execute(
     switch (command->kind) {
       case TR_TEXT_QUERY_SHOW_STATUS:
         if (ops->status == NULL) {
-          return TURBO_ENOTSUP;
+          return SALTS_ENOTSUP;
         }
         result = ops->status(context, command);
         break;
       case TR_TEXT_QUERY_SHOW_MEMBERS:
         if (ops->members == NULL) {
-          return TURBO_ENOTSUP;
+          return SALTS_ENOTSUP;
         }
         result = ops->members(context, command);
         break;
       case TR_TEXT_QUERY_SHOW_PROGRESS:
         if (ops->progress == NULL) {
-          return TURBO_ENOTSUP;
+          return SALTS_ENOTSUP;
         }
         result = ops->progress(context, command);
         break;
       default:
-        return TURBO_ENOTSUP;
+        return SALTS_ENOTSUP;
     }
 
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
       return result;
     }
   }
 
-  return TURBO_OK;
+  return SALTS_OK;
 }

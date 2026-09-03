@@ -1,7 +1,7 @@
 #include <turboraft/raft_core.h>
 
 #include <tinytest.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <string.h>
 
@@ -19,7 +19,7 @@ static void advance_ready(tr_raft_core_t *core, tr_raft_ready_t *ready)
         ready->role_changed || ready->log_changed || ready->commit_changed ||
         ready->committed_entry_count != 0U || ready->read_state_ready ||
         ready->snapshot_request_count != 0U) {
-        check_equal(tr_raft_core_advance(core), TURBO_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
     }
 }
 
@@ -54,12 +54,12 @@ spec("compacted leader replication")
         config.initial_log_entry_count = 1U;
         config.initial_commit_index = 2U;
         config.initial_applied_index = 2U;
-        check_equal(tr_raft_core_create(&config, &core), TURBO_OK);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
 
         prepare_ready(&ready, messages);
         {
             tr_raft_tick_t tick = {2U, 2U};
-            check_equal(tr_raft_core_tick(core, &tick, &ready), TURBO_OK);
+            check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
         }
         check_equal(ready.message_count, 1U);
         check_equal(ready.messages[0].type, TR_RAFT_MSG_PRE_VOTE_REQUEST);
@@ -73,7 +73,7 @@ spec("compacted leader replication")
         response.campaign_term = 3U;
         response.granted = true;
         prepare_ready(&ready, messages);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 1U);
         check_equal(ready.messages[0].type, TR_RAFT_MSG_VOTE_REQUEST);
         advance_ready(core, &ready);
@@ -81,7 +81,7 @@ spec("compacted leader replication")
         response.type = TR_RAFT_MSG_VOTE_RESPONSE;
         response.term = 3U;
         prepare_ready(&ready, messages);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 1U);
         advance_ready(core, &ready);
 
@@ -92,7 +92,7 @@ spec("compacted leader replication")
         response.term = 3U;
         response.reject_hint = 1U;
         prepare_ready(&ready, messages);
-        check_equal(tr_raft_core_step(core, &response, &ready), TURBO_OK);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_equal(ready.message_count, 0U);
         check_equal(ready.snapshot_request_count, 1U);
         check_equal(ready.snapshot_requests[0].peer_id, 2U);
@@ -103,7 +103,7 @@ spec("compacted leader replication")
 
         prepare_ready(&ready, messages);
         check_equal(tr_raft_core_snapshot_completed(core, 2U, 2U, &ready),
-                     TURBO_OK);
+                     SALTS_OK);
         check_equal(ready.snapshot_request_count, 0U);
         check_equal(ready.message_count, 1U);
         check_equal(ready.messages[0].type, TR_RAFT_MSG_APPEND_REQUEST);

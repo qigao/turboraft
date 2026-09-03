@@ -88,9 +88,9 @@ poll request 7 until applied timeout 40 ticks;
 tick 5;
 expect node 2 commit_index >= 1;
 ```
-完整交互命令见 REPL 内 `help`。命令行分析由 TurboUtils `turbo_cmd`
-（`turbo_parser.h`）完成；为避免其对错误输入直接退出进程，REPL 会先预校验
-命令名、参数个数与整数值，批处理请用 `run <file>` 或 `--script`。
+完整交互命令见 REPL 内 `help`。命令行由 REPL 内置的 bounded tokenizer
+分析，并校验命令名、参数个数与整数值；批处理请用 `run <file>` 或
+`--script`。
 
 ## 4. C API 使用
 
@@ -102,7 +102,7 @@ expect node 2 commit_index >= 1;
 
 static int on_status(void *ctx, const tr_text_query_command_t *cmd) {
     (void)ctx; (void)cmd;
-    return TURBO_OK; /* 输出/上报 */
+    return SALTS_OK; /* 输出/上报 */
 }
 /* on_members / on_progress 同形 */
 
@@ -113,7 +113,7 @@ tr_text_query_executor_ops_t ops = {
     .status = on_status, .members = on_members, .progress = on_progress,
 };
 int rc = tr_text_query_parse(text, strlen(text), NULL, &plan, &diag);
-if (rc == TURBO_OK) {
+if (rc == SALTS_OK) {
     rc = tr_text_query_execute(&plan, &ops, NULL);
 }
 ```
@@ -132,7 +132,7 @@ static int on_frame(void *ctx,
                     const tr_text_protocol_debug_decoded_frame_t *decoded) {
     (void)ctx; (void)frame;
     /* decoded->payload.raft / .snapshot_chunk / .snapshot_ack */
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 const char text[] =
@@ -142,7 +142,7 @@ tr_text_protocol_debug_plan_t plan;
 tr_text_diagnostic_t diag;
 tr_text_protocol_debug_executor_ops_t ops = { .frame = on_frame };
 int rc = tr_text_protocol_debug_parse(text, strlen(text), NULL, &plan, &diag);
-if (rc == TURBO_OK) {
+if (rc == SALTS_OK) {
     rc = tr_text_protocol_debug_execute(&plan, &ops, NULL);
 }
 ```
@@ -161,7 +161,7 @@ int rc = tr_replay_driver_create(&cfg, &driver);
 tr_text_replay_plan_t plan;
 tr_text_diagnostic_t diag;
 rc = tr_text_replay_parse(script, strlen(script), NULL, &plan, &diag);
-if (rc == TURBO_OK) {
+if (rc == SALTS_OK) {
     rc = tr_replay_driver_run(driver, &plan);
 }
 
@@ -185,7 +185,7 @@ tr_replay_driver_destroy(driver);
 - `tick N` 按 1 tick 逐单位推进（单位内 tick 所有节点并投递到期消息）。
 - `drop/delay/duplicate` 作用于下一个同名在途消息；`partition/heal` 控制有向链路。
 - `submit` 目标节点必须是 leader；`poll` 内部推进时间至 `timeout_ticks`。
-- `expect` 失败返回 `TURBO_EPROTO`。
+- `expect` 失败返回 `SALTS_EPROTO`。
 
 ## 5. 完整示例
 
@@ -203,9 +203,9 @@ build/msvc-release/bin/turboraft_dsl_embed_demo
 - `turboraft_console` 只支持 Query；protocol/replay 文本不会发给远端节点。
 - `turboraft_repl` 是本地进程内仿真，不连网络、不连控制面。
 - 通用适配器 `tr_text_replay_execute()` 只实现 submit/poll/tick，其余动作
-  返回 `TURBO_ENOTSUP`；完整动作请用 `TurboRaft::ReplayDriver`。
+  返回 `SALTS_ENOTSUP`；完整动作请用 `TurboRaft::ReplayDriver`。
 - 输入与容量：输入 ≤ `TR_TEXT_MAX_INPUT_BYTES`（1MB）、语句 ≤
   `TR_TEXT_MAX_STATEMENTS`（64）；submit payload ≤ `TR_RAFT_MAX_ENTRY_BYTES`、
   protocol payload ≤ `TR_RAFT_WIRE_MAX_FRAME_SIZE`，超限在解析期即报
-  `TURBO_ENOSPC`。
+  `SALTS_ENOSPC`。
 - 配置类 DSL 不在范围内。

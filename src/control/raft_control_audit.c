@@ -1,6 +1,6 @@
 #include <turboraft/raft_control_audit.h>
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -41,13 +41,13 @@ int tr_raft_control_audit_create(
         memcmp(config->reserved, zero_reserved,
                sizeof(config->reserved)) != 0 ||
         (config->required && config->sink == NULL)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
 
     *out_audit = NULL;
     audit = (tr_raft_control_audit_t *)calloc(1U, sizeof(*audit));
     if (audit == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     audit->sink = config->sink;
     audit->context = config->context;
@@ -55,7 +55,7 @@ int tr_raft_control_audit_create(
     atomic_init(&audit->next_sequence, 1U);
     atomic_init(&audit->dropped_events, 0U);
     *out_audit = audit;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_control_audit_destroy(tr_raft_control_audit_t *audit)
@@ -72,7 +72,7 @@ int tr_raft_control_audit_emit(
     if (audit == NULL || event == NULL ||
         !tr_control_audit_method_valid(event->method) ||
         !tr_control_audit_phase_valid(event->phase)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
 
     event->version = TR_RAFT_CONTROL_AUDIT_VERSION;
@@ -82,16 +82,16 @@ int tr_raft_control_audit_emit(
     if (audit->sink == NULL) {
         atomic_fetch_add_explicit(&audit->dropped_events, 1U,
                                   memory_order_relaxed);
-        return TURBO_OK;
+        return SALTS_OK;
     }
 
     result = audit->sink(audit->context, event);
-    if (result == TURBO_OK || audit->required) {
+    if (result == SALTS_OK || audit->required) {
         return result;
     }
     atomic_fetch_add_explicit(&audit->dropped_events, 1U,
                               memory_order_relaxed);
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 uint64_t tr_raft_control_audit_dropped(

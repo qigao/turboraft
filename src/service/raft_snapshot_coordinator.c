@@ -1,6 +1,6 @@
 #include "raft_snapshot_coordinator.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -20,25 +20,25 @@ static int tr_snapshot_coordinator_fill_window(
 
         result = tr_raft_snapshot_sender_next_chunk(coordinator->sender,
                                                     &chunk);
-        if (result == TURBO_EBUSY) {
-            return TURBO_OK;
+        if (result == SALTS_EBUSY) {
+            return SALTS_OK;
         }
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             return result;
         }
         result = coordinator->emit(coordinator->emit_context, &chunk);
-        if (result != TURBO_OK) {
+        if (result != SALTS_OK) {
             int cancel_result = tr_raft_snapshot_sender_cancel_chunk(
                 coordinator->sender, chunk.snapshot_offset);
 
-            return cancel_result == TURBO_OK ? result : cancel_result;
+            return cancel_result == SALTS_OK ? result : cancel_result;
         }
         {
             tr_raft_snapshot_sender_status_t status;
 
             result = tr_raft_snapshot_sender_get_status(
                 coordinator->sender, &status);
-            if (result != TURBO_OK ||
+            if (result != SALTS_OK ||
                 status.inflight_chunks >= status.max_inflight_chunks) {
                 return result;
             }
@@ -55,14 +55,14 @@ int tr_raft_snapshot_coordinator_create(
     int result;
 
     if (config == NULL || out_coordinator == NULL || config->emit == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     *out_coordinator = NULL;
     memset(&sender_config, 0, sizeof(sender_config));
     coordinator = (tr_raft_snapshot_coordinator_t *) calloc(
         1U, sizeof(*coordinator));
     if (coordinator == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
 
     sender_config.self_id = config->self_id;
@@ -72,14 +72,14 @@ int tr_raft_snapshot_coordinator_create(
     sender_config.max_inflight_chunks = config->max_inflight_chunks;
     result = tr_raft_snapshot_sender_create(&sender_config,
                                             &coordinator->sender);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         free(coordinator);
         return result;
     }
     coordinator->emit = config->emit;
     coordinator->emit_context = config->emit_context;
     *out_coordinator = coordinator;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_snapshot_coordinator_destroy(
@@ -104,12 +104,12 @@ int tr_raft_snapshot_coordinator_begin(
     int result;
 
     if (coordinator == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_snapshot_sender_begin(
         coordinator->sender, leader_term, snapshot_index, snapshot_term,
         configuration, data, size);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     return tr_snapshot_coordinator_fill_window(coordinator);
@@ -123,14 +123,14 @@ int tr_raft_snapshot_coordinator_handle_ack(
     int result;
 
     if (coordinator == NULL || ack == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_snapshot_sender_acknowledge(coordinator->sender, ack);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_raft_snapshot_sender_get_status(coordinator->sender, &status);
-    if (result != TURBO_OK || status.complete) {
+    if (result != SALTS_OK || status.complete) {
         return result;
     }
     return tr_snapshot_coordinator_fill_window(coordinator);
@@ -140,13 +140,13 @@ int tr_raft_snapshot_coordinator_resume(
     tr_raft_snapshot_coordinator_t *coordinator)
 {
     if (coordinator == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     {
         int result = tr_raft_snapshot_sender_prepare_resume(
             coordinator->sender);
 
-        return result == TURBO_OK
+        return result == SALTS_OK
                    ? tr_snapshot_coordinator_fill_window(coordinator)
                    : result;
     }
@@ -157,7 +157,7 @@ int tr_raft_snapshot_coordinator_get_status(
     tr_raft_snapshot_sender_status_t *out_status)
 {
     if (coordinator == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     return tr_raft_snapshot_sender_get_status(coordinator->sender,
                                               out_status);

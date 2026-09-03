@@ -1,7 +1,7 @@
 #include "raft_log.h"
 #include "../turboraft_stl_status.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <limits.h>
 #include <string.h>
@@ -60,18 +60,18 @@ int tr_raft_log_init(tr_raft_log_t *log,
     if (log == NULL || max_entries == 0U ||
         !tr_raft_log_base_valid(base_index, base_term) ||
         max_entries > UINT64_MAX - base_index) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
 
     memset(log, 0, sizeof(*log));
     result = tr_raft_stl_status_to_error(vec_init_bytes(
         &log->entries, sizeof(tr_raft_log_entry_t),
         _Alignof(tr_raft_log_entry_t), max_entries));
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_raft_stl_status_to_error(vec_reserve(&log->entries, max_entries));
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         vec_destroy(&log->entries);
         memset(log, 0, sizeof(*log));
         return result;
@@ -79,7 +79,7 @@ int tr_raft_log_init(tr_raft_log_t *log,
     log->max_entries = max_entries;
     log->base_index = base_index;
     log->base_term = base_term;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_log_destroy(tr_raft_log_t *log)
@@ -154,10 +154,10 @@ int tr_raft_log_compact(tr_raft_log_t *log,
 
     if (log == NULL || index <= log->base_index || term == 0U ||
         index > tr_raft_log_last_index(log)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (!tr_raft_log_matches(log, index, term)) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
 
     removed_count = (size_t) (index - log->base_index);
@@ -168,12 +168,12 @@ int tr_raft_log_compact(tr_raft_log_t *log,
                 retained_count * sizeof(*entries));
     }
     result = tr_raft_stl_status_to_error(vec_resize(&log->entries, retained_count));
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     log->base_index = index;
     log->base_term = term;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_log_append_local(tr_raft_log_t *log,
@@ -188,11 +188,11 @@ int tr_raft_log_append_local(tr_raft_log_t *log,
 
     if (log == NULL || term == 0U || command_id == 0U ||
         (data_length != 0U && data == NULL)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (data_length > TR_RAFT_LOG_MAX_ENTRY_BYTES ||
         tr_raft_log_count(log) >= log->max_entries) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
 
     memset(&entry, 0, sizeof(entry));
@@ -205,13 +205,13 @@ int tr_raft_log_append_local(tr_raft_log_t *log,
     }
 
     result = tr_raft_stl_status_to_error(vec_push(&log->entries, &entry));
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (out_entry != NULL) {
         *out_entry = tr_raft_log_get(log, entry.index);
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_log_append_configuration(
@@ -224,24 +224,24 @@ int tr_raft_log_append_configuration(
     int result;
 
     if (log == NULL || term == 0U || configuration == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (tr_raft_log_count(log) >= log->max_entries) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
     result = tr_raft_conf_entry_encode(
         configuration, tr_raft_log_last_index(log) + 1U, term, &entry);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_raft_stl_status_to_error(vec_push(&log->entries, &entry));
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (out_entry != NULL) {
         *out_entry = tr_raft_log_get(log, entry.index);
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_log_reconcile(tr_raft_log_t *log,
@@ -262,13 +262,13 @@ int tr_raft_log_reconcile(tr_raft_log_t *log,
     if (log == NULL || result == NULL ||
         (incoming_count != 0U && incoming == NULL) ||
         incoming_count > UINT64_MAX - previous_index) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(result, 0, sizeof(*result));
 
     if (!tr_raft_log_matches(log, previous_index, previous_term)) {
         result->reject_hint = tr_raft_log_reject_hint(log, previous_index);
-        return TURBO_OK;
+        return SALTS_OK;
     }
     result->matched = true;
 
@@ -280,12 +280,12 @@ int tr_raft_log_reconcile(tr_raft_log_t *log,
         if (incoming[index].index != expected_index ||
             incoming[index].term == 0U ||
             incoming[index].data_length > TR_RAFT_LOG_MAX_ENTRY_BYTES) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
         if (incoming[index].command_id == 0U &&
             tr_raft_conf_entry_decode(&incoming[index], &configuration) !=
-                TURBO_OK) {
-            return TURBO_EPROTO;
+                SALTS_OK) {
+            return SALTS_EPROTO;
         }
         local = tr_raft_log_get(log, expected_index);
         if (local == NULL) {
@@ -298,27 +298,27 @@ int tr_raft_log_reconcile(tr_raft_log_t *log,
             break;
         }
         if (!tr_raft_log_entry_equal(local, &incoming[index])) {
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
     }
 
     if (first_change == incoming_count) {
-        return TURBO_OK;
+        return SALTS_OK;
     }
 
     retained_count = (size_t) (previous_index - log->base_index) + first_change;
     if (truncates_existing && incoming[first_change].index <= protected_index) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (retained_count > log->max_entries ||
         incoming_count - first_change > log->max_entries - retained_count) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
     final_count = retained_count + incoming_count - first_change;
 
     resize_result = tr_raft_stl_status_to_error(
         vec_resize(&log->entries, final_count));
-    if (resize_result != TURBO_OK) {
+    if (resize_result != SALTS_OK) {
         return resize_result;
     }
     for (index = first_change; index < incoming_count; ++index) {
@@ -335,5 +335,5 @@ int tr_raft_log_reconcile(tr_raft_log_t *log,
                                 : 0U;
     result->append_from = incoming[first_change].index;
     result->append_count = incoming_count - first_change;
-    return TURBO_OK;
+    return SALTS_OK;
 }

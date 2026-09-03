@@ -26,7 +26,7 @@ snapshot payload checksum.
 
 A partial final transaction is an uncommitted torn tail and is truncated.
 Checksum mismatch, missing committed snapshot data, sequence gaps, or invalid
-Raft state return `TURBO_EPROTO`; I/O failures return `TURBO_EIO`. Recovery
+Raft state return `SALTS_EPROTO`; I/O failures return `SALTS_EIO`. Recovery
 never skips a damaged committed record.
 
 ## FSM recovery order

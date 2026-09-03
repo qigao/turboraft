@@ -1,6 +1,6 @@
 #include "raft_snapshot_peer.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -16,10 +16,10 @@ static int tr_snapshot_peer_emit(
     const tr_raft_snapshot_chunk_t *chunk)
 {
     tr_raft_snapshot_peer_t *peer = (tr_raft_snapshot_peer_t *) context;
-    tr_raft_coronet_payload_t payload;
+    tr_raft_transport_payload_t payload;
 
     if (peer == NULL || chunk == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(&payload, 0, sizeof(payload));
     payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
@@ -36,13 +36,13 @@ int tr_raft_snapshot_peer_create(
     int result;
 
     if (config == NULL || out_peer == NULL || config->enqueue == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     *out_peer = NULL;
     memset(&coordinator_config, 0, sizeof(coordinator_config));
     peer = (tr_raft_snapshot_peer_t *) calloc(1U, sizeof(*peer));
     if (peer == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     peer->enqueue = config->enqueue;
     peer->enqueue_context = config->enqueue_context;
@@ -56,12 +56,12 @@ int tr_raft_snapshot_peer_create(
     coordinator_config.emit_context = peer;
     result = tr_raft_snapshot_coordinator_create(&coordinator_config,
                                                  &peer->coordinator);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         free(peer);
         return result;
     }
     *out_peer = peer;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_snapshot_peer_destroy(tr_raft_snapshot_peer_t *peer)
@@ -83,7 +83,7 @@ int tr_raft_snapshot_peer_begin(
     size_t size)
 {
     if (peer == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     return tr_raft_snapshot_coordinator_begin(
         peer->coordinator, leader_term, snapshot_index, snapshot_term,
@@ -92,11 +92,11 @@ int tr_raft_snapshot_peer_begin(
 
 int tr_raft_snapshot_peer_handle_payload(
     tr_raft_snapshot_peer_t *peer,
-    const tr_raft_coronet_payload_t *payload)
+    const tr_raft_transport_payload_t *payload)
 {
     if (peer == NULL || payload == NULL ||
         payload->kind != TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     return tr_raft_snapshot_coordinator_handle_ack(
         peer->coordinator, &payload->data.snapshot_ack);
@@ -105,7 +105,7 @@ int tr_raft_snapshot_peer_handle_payload(
 int tr_raft_snapshot_peer_resume(tr_raft_snapshot_peer_t *peer)
 {
     if (peer == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     return tr_raft_snapshot_coordinator_resume(peer->coordinator);
 }
@@ -115,7 +115,7 @@ int tr_raft_snapshot_peer_get_status(
     tr_raft_snapshot_sender_status_t *out_status)
 {
     if (peer == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     return tr_raft_snapshot_coordinator_get_status(peer->coordinator,
                                                    out_status);

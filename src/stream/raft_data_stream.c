@@ -1,7 +1,7 @@
 #include <turboraft/raft_data_stream.h>
 
 #include <openssl/sha.h>
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -44,10 +44,10 @@ int tr_raft_data_descriptor_encode(
     if (descriptor == NULL || output == NULL || output_size == NULL ||
         descriptor->stream_id == 0U ||
         descriptor->stream_size > TR_RAFT_WIRE_MAX_DATA_STREAM_BYTES) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (output_capacity < TR_RAFT_DATA_DESCRIPTOR_ENCODED_SIZE)
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     memcpy(output, TR_DATA_DESCRIPTOR_MAGIC, sizeof(TR_DATA_DESCRIPTOR_MAGIC));
     tr_data_put_u16(output + 4U, TR_RAFT_DATA_DESCRIPTOR_VERSION);
     tr_data_put_u16(output + 6U, 0U);
@@ -55,7 +55,7 @@ int tr_raft_data_descriptor_encode(
     tr_data_put_u64(output + 16U, descriptor->stream_size);
     memcpy(output + 24U, descriptor->stream_digest,
            sizeof(descriptor->stream_digest));
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_data_descriptor_decode(
@@ -63,13 +63,13 @@ int tr_raft_data_descriptor_decode(
     size_t input_size,
     tr_raft_data_descriptor_t *descriptor)
 {
-    if (input == NULL || descriptor == NULL) return TURBO_EINVAL;
+    if (input == NULL || descriptor == NULL) return SALTS_EINVAL;
     if (input_size != TR_RAFT_DATA_DESCRIPTOR_ENCODED_SIZE ||
         memcmp(input, TR_DATA_DESCRIPTOR_MAGIC,
                sizeof(TR_DATA_DESCRIPTOR_MAGIC)) != 0 ||
         tr_data_get_u16(input + 4U) != TR_RAFT_DATA_DESCRIPTOR_VERSION ||
         tr_data_get_u16(input + 6U) != 0U) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     memset(descriptor, 0, sizeof(*descriptor));
     descriptor->stream_id = tr_data_get_u64(input + 8U);
@@ -79,8 +79,8 @@ int tr_raft_data_descriptor_decode(
     return descriptor->stream_id != 0U &&
                    descriptor->stream_size <=
                        TR_RAFT_WIRE_MAX_DATA_STREAM_BYTES
-               ? TURBO_OK
-               : TURBO_EPROTO;
+               ? SALTS_OK
+               : SALTS_EPROTO;
 }
 
 typedef struct tr_data_claim {
@@ -144,25 +144,25 @@ int tr_raft_data_quorum_create(
 {
     tr_raft_data_quorum_t *quorum;
     size_t self_index;
-    if (out_quorum == NULL) return TURBO_EINVAL;
+    if (out_quorum == NULL) return SALTS_EINVAL;
     *out_quorum = NULL;
     if (config == NULL || config->self_id == 0U || config->term == 0U ||
         config->descriptor.stream_id == 0U ||
         config->descriptor.stream_size > TR_RAFT_WIRE_MAX_DATA_STREAM_BYTES ||
-        tr_raft_conf_validate(&config->configuration) != TURBO_OK) {
-        return TURBO_EINVAL;
+        tr_raft_conf_validate(&config->configuration) != SALTS_OK) {
+        return SALTS_EINVAL;
     }
     self_index = tr_data_member_index(&config->configuration, config->self_id);
     if (self_index == SIZE_MAX ||
         (config->configuration.members[self_index].roles &
          (TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER)) == 0U) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     quorum = (tr_raft_data_quorum_t *)calloc(1U, sizeof(*quorum));
-    if (quorum == NULL) return TURBO_ENOMEM;
+    if (quorum == NULL) return SALTS_ENOMEM;
     quorum->config = *config;
     *out_quorum = quorum;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_data_quorum_destroy(tr_raft_data_quorum_t *quorum)
@@ -173,19 +173,19 @@ void tr_raft_data_quorum_destroy(tr_raft_data_quorum_t *quorum)
 int tr_raft_data_quorum_mark_local_durable(tr_raft_data_quorum_t *quorum)
 {
     size_t index;
-    if (quorum == NULL) return TURBO_EINVAL;
+    if (quorum == NULL) return SALTS_EINVAL;
     index = tr_data_member_index(&quorum->config.configuration,
                                  quorum->config.self_id);
-    if (index == SIZE_MAX) return TURBO_EPROTO;
+    if (index == SIZE_MAX) return SALTS_EPROTO;
     quorum->durable[index] = true;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_data_quorum_acknowledge(
     tr_raft_data_quorum_t *quorum, const tr_raft_data_ack_t *ack)
 {
     size_t index;
-    if (quorum == NULL || ack == NULL) return TURBO_EINVAL;
+    if (quorum == NULL || ack == NULL) return SALTS_EINVAL;
     if (ack->to != quorum->config.self_id ||
         ack->term != quorum->config.term ||
         ack->stream_id != quorum->config.descriptor.stream_id ||
@@ -194,12 +194,12 @@ int tr_raft_data_quorum_acknowledge(
         !ack->durable ||
         memcmp(ack->stream_digest, quorum->config.descriptor.stream_digest,
                sizeof(ack->stream_digest)) != 0) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     index = tr_data_member_index(&quorum->config.configuration, ack->from);
-    if (index == SIZE_MAX) return TURBO_EPROTO;
+    if (index == SIZE_MAX) return SALTS_EPROTO;
     quorum->durable[index] = true;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 bool tr_raft_data_quorum_ready(const tr_raft_data_quorum_t *quorum)
@@ -243,17 +243,17 @@ int tr_raft_data_quorum_make_proposal(
     size_t encoded_size = 0U;
     int rc;
     if (quorum == NULL || command_id == 0U || descriptor_storage == NULL ||
-        out_proposal == NULL) return TURBO_EINVAL;
-    if (!tr_raft_data_quorum_ready(quorum)) return TURBO_EBUSY;
+        out_proposal == NULL) return SALTS_EINVAL;
+    if (!tr_raft_data_quorum_ready(quorum)) return SALTS_EBUSY;
     rc = tr_raft_data_descriptor_encode(
         &quorum->config.descriptor, descriptor_storage,
         TR_RAFT_DATA_DESCRIPTOR_ENCODED_SIZE, &encoded_size);
-    if (rc != TURBO_OK) return rc;
+    if (rc != SALTS_OK) return rc;
     memset(out_proposal, 0, sizeof(*out_proposal));
     out_proposal->command_id = command_id;
     out_proposal->data = descriptor_storage;
     out_proposal->data_length = encoded_size;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static void tr_data_sender_clear(tr_raft_data_stream_sender_t *sender)
@@ -279,33 +279,29 @@ int tr_raft_data_stream_sender_create(
     size_t chunk_size;
     size_t inflight;
 
-    if (out_sender == NULL) return TURBO_EINVAL;
+    if (out_sender == NULL) return SALTS_EINVAL;
     *out_sender = NULL;
     if (config == NULL || config->self_id == 0U || config->peer_id == 0U ||
         config->self_id == config->peer_id || config->max_stream_bytes == 0U ||
         config->max_stream_bytes > TR_RAFT_WIRE_MAX_DATA_STREAM_BYTES) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
-    chunk_size = config->chunk_size == 0U
-                     ? TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES
-                     : config->chunk_size;
-    inflight = config->max_inflight_chunks == 0U
-                   ? TR_RAFT_DATA_STREAM_DEFAULT_INFLIGHT_CHUNKS
-                   : config->max_inflight_chunks;
+    chunk_size = config->chunk_size;
+    inflight = config->max_inflight_chunks;
     if (chunk_size == 0U ||
         chunk_size > TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES ||
         inflight == 0U ||
         inflight > TR_RAFT_DATA_STREAM_MAX_INFLIGHT_CHUNKS ||
         chunk_size > SIZE_MAX / inflight) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     sender = (tr_raft_data_stream_sender_t *)calloc(1U, sizeof(*sender));
-    if (sender == NULL) return TURBO_ENOMEM;
+    if (sender == NULL) return SALTS_ENOMEM;
     sender->config = *config;
     sender->chunk_size = chunk_size;
     sender->max_inflight_chunks = inflight;
     *out_sender = sender;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_data_stream_sender_destroy(tr_raft_data_stream_sender_t *sender)
@@ -330,9 +326,9 @@ int tr_raft_data_stream_sender_begin(
 {
     if (sender == NULL || term == 0U || stream_id == 0U ||
         size > sender->config.max_stream_bytes || (size != 0U && data == NULL)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
-    if (sender->active && !sender->complete) return TURBO_EBUSY;
+    if (sender->active && !sender->complete) return SALTS_EBUSY;
     tr_data_sender_clear(sender);
     sender->data = data;
     sender->size = size;
@@ -340,7 +336,7 @@ int tr_raft_data_stream_sender_begin(
     sender->stream_id = stream_id;
     SHA256(size == 0U ? (const uint8_t *)"" : data, size, sender->digest);
     sender->active = true;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_data_stream_sender_next(
@@ -351,11 +347,11 @@ int tr_raft_data_stream_sender_next(
     size_t length;
     tr_data_claim_t *claim;
 
-    if (sender == NULL || out_chunk == NULL) return TURBO_EINVAL;
+    if (sender == NULL || out_chunk == NULL) return SALTS_EINVAL;
     if (!sender->active || sender->complete ||
         sender->claim_count >= sender->max_inflight_chunks ||
         (sender->next_offset == sender->size && sender->claim_count != 0U)) {
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     remaining = sender->size - (size_t)sender->next_offset;
     length = remaining < sender->chunk_size ? remaining : sender->chunk_size;
@@ -374,30 +370,30 @@ int tr_raft_data_stream_sender_next(
     claim->offset = sender->next_offset;
     claim->length = length;
     sender->next_offset += length;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_data_stream_sender_cancel(
     tr_raft_data_stream_sender_t *sender, uint64_t stream_offset)
 {
     tr_data_claim_t *claim;
-    if (sender == NULL || sender->claim_count == 0U) return TURBO_EINVAL;
+    if (sender == NULL || sender->claim_count == 0U) return SALTS_EINVAL;
     claim = &sender->claims[sender->claim_count - 1U];
-    if (claim->offset != stream_offset) return TURBO_EPROTO;
+    if (claim->offset != stream_offset) return SALTS_EPROTO;
     sender->next_offset = claim->offset;
     memset(claim, 0, sizeof(*claim));
     --sender->claim_count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_data_stream_sender_resume(tr_raft_data_stream_sender_t *sender)
 {
-    if (sender == NULL) return TURBO_EINVAL;
-    if (!sender->active || sender->complete) return TURBO_EBUSY;
+    if (sender == NULL) return SALTS_EINVAL;
+    if (!sender->active || sender->complete) return SALTS_EBUSY;
     sender->next_offset = sender->acknowledged_offset;
     sender->claim_count = 0U;
     memset(sender->claims, 0, sizeof(sender->claims));
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_data_stream_sender_acknowledge(
@@ -406,22 +402,22 @@ int tr_raft_data_stream_sender_acknowledge(
     size_t released = 0U;
     bool boundary = false;
 
-    if (sender == NULL || ack == NULL) return TURBO_EINVAL;
-    if (!sender->active) return TURBO_EBUSY;
+    if (sender == NULL || ack == NULL) return SALTS_EINVAL;
+    if (!sender->active) return SALTS_EBUSY;
     if (ack->from != sender->config.peer_id ||
         ack->to != sender->config.self_id || ack->term != sender->term ||
         ack->stream_id != sender->stream_id || ack->stream_size != sender->size ||
         memcmp(ack->stream_digest, sender->digest, sizeof(sender->digest)) != 0 ||
         ack->next_offset > sender->next_offset) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (!ack->accepted) {
         if (ack->durable || ack->next_offset > sender->acknowledged_offset)
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         sender->acknowledged_offset = ack->next_offset;
         return tr_raft_data_stream_sender_resume(sender);
     }
-    if (ack->next_offset < sender->acknowledged_offset) return TURBO_EPROTO;
+    if (ack->next_offset < sender->acknowledged_offset) return SALTS_EPROTO;
     boundary = ack->next_offset == sender->acknowledged_offset;
     for (released = 0U; released < sender->claim_count; ++released) {
         if (sender->claims[released].offset + sender->claims[released].length ==
@@ -430,7 +426,7 @@ int tr_raft_data_stream_sender_acknowledge(
             break;
         }
     }
-    if (!boundary) return TURBO_EPROTO;
+    if (!boundary) return SALTS_EPROTO;
     sender->acknowledged_offset = ack->next_offset;
     released = 0U;
     while (released < sender->claim_count &&
@@ -446,19 +442,19 @@ int tr_raft_data_stream_sender_acknowledge(
                released * sizeof(sender->claims[0]));
     }
     if (ack->next_offset == sender->size) {
-        if (!ack->durable) return TURBO_EPROTO;
+        if (!ack->durable) return SALTS_EPROTO;
         sender->complete = true;
     } else if (ack->durable) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_data_stream_sender_get_status(
     const tr_raft_data_stream_sender_t *sender,
     tr_raft_data_stream_sender_status_t *out_status)
 {
-    if (sender == NULL || out_status == NULL) return TURBO_EINVAL;
+    if (sender == NULL || out_status == NULL) return SALTS_EINVAL;
     memset(out_status, 0, sizeof(*out_status));
     out_status->active = sender->active;
     out_status->complete = sender->complete;
@@ -467,7 +463,7 @@ int tr_raft_data_stream_sender_get_status(
     out_status->acknowledged_offset = sender->acknowledged_offset;
     out_status->next_offset = sender->next_offset;
     out_status->inflight_chunks = sender->claim_count;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static void tr_data_receiver_clear(tr_raft_data_stream_receiver_t *receiver)
@@ -489,20 +485,20 @@ int tr_raft_data_stream_receiver_create(
     tr_raft_data_stream_receiver_t **out_receiver)
 {
     tr_raft_data_stream_receiver_t *receiver;
-    if (out_receiver == NULL) return TURBO_EINVAL;
+    if (out_receiver == NULL) return SALTS_EINVAL;
     *out_receiver = NULL;
     if (config == NULL || config->self_id == 0U ||
         config->max_stream_bytes == 0U ||
         config->max_stream_bytes > TR_RAFT_WIRE_MAX_DATA_STREAM_BYTES ||
         config->sink.begin == NULL || config->sink.write == NULL ||
         config->sink.commit == NULL || config->sink.abort == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     receiver = (tr_raft_data_stream_receiver_t *)calloc(1U, sizeof(*receiver));
-    if (receiver == NULL) return TURBO_ENOMEM;
+    if (receiver == NULL) return SALTS_ENOMEM;
     receiver->config = *config;
     *out_receiver = receiver;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_data_stream_receiver_destroy(
@@ -529,7 +525,7 @@ int tr_raft_data_stream_receiver_handle(
     int rc;
 
     if (receiver == NULL || chunk == NULL || out_result == NULL)
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     memset(out_result, 0, sizeof(*out_result));
     out_result->ack.from = receiver->config.self_id;
     out_result->ack.to = chunk->from;
@@ -547,20 +543,20 @@ int tr_raft_data_stream_receiver_handle(
         chunk->data_length > chunk->stream_size - chunk->stream_offset ||
         chunk->done !=
             (chunk->stream_offset + chunk->data_length == chunk->stream_size)) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (!receiver->active) {
-        if (chunk->stream_offset != 0U) return TURBO_EPROTO;
+        if (chunk->stream_offset != 0U) return SALTS_EPROTO;
         receiver->leader_id = chunk->from;
         receiver->term = chunk->term;
         receiver->stream_id = chunk->stream_id;
         receiver->stream_size = chunk->stream_size;
         memcpy(receiver->digest, chunk->stream_digest, sizeof(receiver->digest));
-        if (SHA256_Init(&receiver->sha256) != 1) return TURBO_EPROTO;
+        if (SHA256_Init(&receiver->sha256) != 1) return SALTS_EPROTO;
         rc = receiver->config.sink.begin(
             receiver->config.sink.context, chunk->from, chunk->term,
             chunk->stream_id, chunk->stream_size, chunk->stream_digest);
-        if (rc != TURBO_OK) {
+        if (rc != SALTS_OK) {
             tr_data_receiver_clear(receiver);
             return rc;
         }
@@ -571,33 +567,33 @@ int tr_raft_data_stream_receiver_handle(
                receiver->stream_size != chunk->stream_size ||
                memcmp(receiver->digest, chunk->stream_digest,
                       sizeof(receiver->digest)) != 0) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (receiver->committed) {
         out_result->ack.next_offset = receiver->next_offset;
         out_result->ack.accepted = true;
         out_result->ack.durable = true;
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (chunk->stream_offset < receiver->next_offset) {
         out_result->ack.next_offset = receiver->next_offset;
         out_result->ack.accepted = true;
-        return TURBO_OK;
+        return SALTS_OK;
     }
     if (chunk->stream_offset != receiver->next_offset) {
         out_result->ack.next_offset = receiver->next_offset;
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     if (chunk->data_length != 0U) {
         if (SHA256_Update(&receiver->sha256, chunk->data,
                           chunk->data_length) != 1) {
             tr_data_receiver_clear(receiver);
-            return TURBO_EPROTO;
+            return SALTS_EPROTO;
         }
         rc = receiver->config.sink.write(receiver->config.sink.context,
                                          receiver->next_offset, chunk->data,
                                          chunk->data_length);
-        if (rc != TURBO_OK) {
+        if (rc != SALTS_OK) {
             tr_data_receiver_clear(receiver);
             return rc;
         }
@@ -605,16 +601,16 @@ int tr_raft_data_stream_receiver_handle(
     receiver->next_offset += chunk->data_length;
     out_result->ack.next_offset = receiver->next_offset;
     out_result->ack.accepted = true;
-    if (!chunk->done) return TURBO_OK;
+    if (!chunk->done) return SALTS_OK;
     if (SHA256_Final(digest, &receiver->sha256) != 1 ||
         memcmp(digest, receiver->digest, sizeof(digest)) != 0) {
         out_result->ack.accepted = false;
         out_result->ack.next_offset = 0U;
         tr_data_receiver_clear(receiver);
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     rc = receiver->config.sink.commit(receiver->config.sink.context);
-    if (rc != TURBO_OK) {
+    if (rc != SALTS_OK) {
         out_result->ack.accepted = false;
         out_result->ack.next_offset = 0U;
         tr_data_receiver_clear(receiver);
@@ -623,5 +619,5 @@ int tr_raft_data_stream_receiver_handle(
     receiver->committed = true;
     out_result->committed = true;
     out_result->ack.durable = true;
-    return TURBO_OK;
+    return SALTS_OK;
 }

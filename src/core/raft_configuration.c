@@ -1,6 +1,6 @@
 #include "raft_configuration.h"
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdbool.h>
 #include <string.h>
@@ -59,7 +59,7 @@ int tr_raft_conf_validate(const tr_raft_conf_t *configuration)
         configuration->member_count > TR_RAFT_MAX_MEMBERS ||
         (configuration->phase != TR_RAFT_CONF_JOINT &&
          configuration->phase != TR_RAFT_CONF_FINAL)) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     for (index = 0U; index < configuration->member_count; ++index) {
         const tr_raft_conf_member_t *member = &configuration->members[index];
@@ -68,7 +68,7 @@ int tr_raft_conf_validate(const tr_raft_conf_t *configuration)
             (index != 0U &&
              configuration->members[index - 1U].node_id >= member->node_id) ||
             !tr_raft_conf_roles_valid(configuration->phase, member->roles)) {
-            return TURBO_EINVAL;
+            return SALTS_EINVAL;
         }
         old_voter_count +=
             (member->roles & TR_RAFT_CONF_OLD_VOTER) != 0U;
@@ -76,8 +76,8 @@ int tr_raft_conf_validate(const tr_raft_conf_t *configuration)
             (member->roles & TR_RAFT_CONF_NEW_VOTER) != 0U;
     }
     return old_voter_count != 0U && new_voter_count != 0U
-               ? TURBO_OK
-               : TURBO_EINVAL;
+               ? SALTS_OK
+               : SALTS_EINVAL;
 }
 
 int tr_raft_conf_encode(const tr_raft_conf_t *configuration,
@@ -92,16 +92,16 @@ int tr_raft_conf_encode(const tr_raft_conf_t *configuration,
         *output_length = 0U;
     }
     if (configuration == NULL || output == NULL || output_length == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
-    if (tr_raft_conf_validate(configuration) != TURBO_OK) {
-        return TURBO_EINVAL;
+    if (tr_raft_conf_validate(configuration) != SALTS_OK) {
+        return SALTS_EINVAL;
     }
     required = TR_RAFT_CONF_HEADER_SIZE +
                TR_RAFT_CONF_MEMBER_SIZE * configuration->member_count;
     *output_length = required;
     if (output_capacity < required) {
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     }
 
     memset(output, 0, required);
@@ -118,7 +118,7 @@ int tr_raft_conf_encode(const tr_raft_conf_t *configuration,
                              configuration->members[index].node_id);
         output[offset + 8U] = configuration->members[index].roles;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_conf_decode(const uint8_t *input,
@@ -130,22 +130,22 @@ int tr_raft_conf_decode(const uint8_t *input,
     size_t index;
 
     if (input == NULL || configuration == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(configuration, 0, sizeof(*configuration));
     if (input_length < TR_RAFT_CONF_HEADER_SIZE ||
         memcmp(input, tr_raft_conf_magic, sizeof(tr_raft_conf_magic)) != 0 ||
         input[4] != TR_RAFT_CONF_CODEC_VERSION || input[7] != 0U) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     member_count = input[6];
     if (member_count == 0U || member_count > TR_RAFT_MAX_MEMBERS) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     expected_length = TR_RAFT_CONF_HEADER_SIZE +
                       TR_RAFT_CONF_MEMBER_SIZE * member_count;
     if (input_length != expected_length) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
 
     configuration->phase = (tr_raft_conf_phase_t) input[5];
@@ -159,11 +159,11 @@ int tr_raft_conf_decode(const uint8_t *input,
             tr_raft_conf_get_u64(input + offset);
         configuration->members[index].roles = input[offset + 8U];
     }
-    if (tr_raft_conf_validate(configuration) != TURBO_OK) {
+    if (tr_raft_conf_validate(configuration) != SALTS_OK) {
         memset(configuration, 0, sizeof(*configuration));
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 bool tr_raft_conf_entry_is_configuration(const tr_raft_entry_t *entry)
@@ -180,33 +180,33 @@ int tr_raft_conf_entry_encode(const tr_raft_conf_t *configuration,
     int result;
 
     if (configuration == NULL || index == 0U || term == 0U || entry == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(entry, 0, sizeof(*entry));
     result = tr_raft_conf_encode(configuration, entry->data,
                                  sizeof(entry->data), &encoded_length);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         memset(entry, 0, sizeof(*entry));
         return result;
     }
     entry->index = index;
     entry->term = term;
     entry->data_length = encoded_length;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_conf_entry_decode(const tr_raft_entry_t *entry,
                               tr_raft_conf_t *configuration)
 {
     if (entry == NULL || configuration == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (!tr_raft_conf_entry_is_configuration(entry)) {
-        return TURBO_ENOENT;
+        return SALTS_ENOENT;
     }
     if (entry->index == 0U || entry->term == 0U ||
         entry->data_length > sizeof(entry->data)) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     return tr_raft_conf_decode(entry->data, entry->data_length,
                                configuration);

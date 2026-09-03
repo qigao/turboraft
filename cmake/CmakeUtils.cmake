@@ -1,4 +1,4 @@
-# TurboUtils CMake Utilities
+# TurboRaft local CMake utilities
 
 function(cmake_config_target target_name)
     set(options NO_INSTALL)

@@ -1,6 +1,6 @@
 #include <turboraft/raft_peer_handshake.h>
 
-#include <turbo_error.h>
+#include <salts_error.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -85,25 +85,29 @@ static int tr_raft_handshake_message_validate(
         message->wire_major_min == 0U ||
         message->wire_major_min > message->wire_major_max ||
         message->wire_minor_min > message->wire_minor_max ||
-        (message->feature_bits &
-         TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE) == 0U ||
+        message->wire_major_min != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
+        message->wire_major_max != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
+        message->wire_minor_min != TR_RAFT_HANDSHAKE_WIRE_MINOR ||
+        message->wire_minor_max != TR_RAFT_HANDSHAKE_WIRE_MINOR ||
+        (message->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_CURRENT) !=
+            TR_RAFT_HANDSHAKE_FEATURE_CURRENT ||
         !tr_raft_handshake_bytes_nonzero(message->cluster_id.bytes,
                                          sizeof(message->cluster_id.bytes)) ||
         message->node_id == 0U ||
         !tr_raft_handshake_bytes_nonzero(
             message->process_incarnation.bytes,
             sizeof(message->process_incarnation.bytes)) ||
-        message->max_frame_size < TR_RAFT_HANDSHAKE_MIN_FRAME_SIZE ||
+        message->max_frame_size < TR_RAFT_WIRE_MAX_FRAME_SIZE ||
         message->max_snapshot_chunk_size <
-            TR_RAFT_HANDSHAKE_MIN_SNAPSHOT_CHUNK_SIZE) {
-        return TURBO_EPROTO;
+            TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
+        return SALTS_EPROTO;
     }
     if (message->type == TR_RAFT_HANDSHAKE_HELLO_ACK &&
         (message->wire_major_min != message->wire_major_max ||
          message->wire_minor_min != message->wire_minor_max)) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static int tr_raft_handshake_config_validate(
@@ -112,7 +116,7 @@ static int tr_raft_handshake_config_validate(
     tr_raft_handshake_message_t message;
 
     if (config == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     memset(&message, 0, sizeof(message));
     message.type = TR_RAFT_HANDSHAKE_HELLO;
@@ -137,10 +141,10 @@ int tr_raft_handshake_make_hello(
     int result;
 
     if (out_hello == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_handshake_config_validate(config);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     memset(out_hello, 0, sizeof(*out_hello));
@@ -156,7 +160,7 @@ int tr_raft_handshake_make_hello(
     out_hello->config_epoch = config->config_epoch;
     out_hello->max_frame_size = config->max_frame_size;
     out_hello->max_snapshot_chunk_size = config->max_snapshot_chunk_size;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_handshake_encode(const tr_raft_handshake_message_t *message,
@@ -169,10 +173,10 @@ int tr_raft_handshake_encode(const tr_raft_handshake_message_t *message,
 
     if (output == NULL || output_size == NULL ||
         output_capacity < TR_RAFT_HANDSHAKE_PACKET_SIZE) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_handshake_message_validate(message);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
 
@@ -198,7 +202,7 @@ int tr_raft_handshake_encode(const tr_raft_handshake_message_t *message,
     tr_raft_handshake_write_u32(record + 76U,
                                 message->max_snapshot_chunk_size);
     *output_size = TR_RAFT_HANDSHAKE_PACKET_SIZE;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_handshake_decode(const uint8_t *packet,
@@ -208,11 +212,11 @@ int tr_raft_handshake_decode(const uint8_t *packet,
     const uint8_t *record;
 
     if (packet == NULL || out_message == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (packet_size != TR_RAFT_HANDSHAKE_PACKET_SIZE ||
         tr_raft_handshake_read_u32(packet) != TR_RAFT_HANDSHAKE_RECORD_SIZE) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     record = packet + TR_RAFT_HANDSHAKE_LENGTH_PREFIX_SIZE;
     if (memcmp(record, tr_raft_handshake_magic,
@@ -220,7 +224,7 @@ int tr_raft_handshake_decode(const uint8_t *packet,
         tr_raft_handshake_read_u16(record + 4U) !=
             TR_RAFT_HANDSHAKE_FORMAT_VERSION ||
         tr_raft_handshake_read_u32(record + 80U) != 0U) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
 
     memset(out_message, 0, sizeof(*out_message));
@@ -258,19 +262,19 @@ int tr_raft_handshake_negotiate(
 
     if (authenticated_peer_node_id == 0U || remote_hello == NULL ||
         out_local_ack == NULL || out_result == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_handshake_config_validate(local);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     result = tr_raft_handshake_message_validate(remote_hello);
-    if (result != TURBO_OK || remote_hello->type != TR_RAFT_HANDSHAKE_HELLO ||
+    if (result != SALTS_OK || remote_hello->type != TR_RAFT_HANDSHAKE_HELLO ||
         remote_hello->node_id != authenticated_peer_node_id ||
         remote_hello->node_id == local->local_node_id ||
         memcmp(remote_hello->cluster_id.bytes, local->cluster_id.bytes,
                sizeof(local->cluster_id.bytes)) != 0) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
 
     major_min = local->wire_major_min > remote_hello->wire_major_min
@@ -286,7 +290,7 @@ int tr_raft_handshake_negotiate(
                     ? local->wire_minor_max
                     : remote_hello->wire_minor_max;
     if (major_min > major_max || minor_min > minor_max) {
-        return TURBO_EPROTONOSUPPORT;
+        return SALTS_EPROTONOSUPPORT;
     }
 
     memset(out_result, 0, sizeof(*out_result));
@@ -323,7 +327,7 @@ int tr_raft_handshake_negotiate(
     out_local_ack->max_frame_size = out_result->max_frame_size;
     out_local_ack->max_snapshot_chunk_size =
         out_result->max_snapshot_chunk_size;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_handshake_validate_ack(
@@ -333,10 +337,10 @@ int tr_raft_handshake_validate_ack(
     int validation;
 
     if (result == NULL || remote_ack == NULL || result->complete) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     validation = tr_raft_handshake_message_validate(remote_ack);
-    if (validation != TURBO_OK ||
+    if (validation != SALTS_OK ||
         remote_ack->type != TR_RAFT_HANDSHAKE_HELLO_ACK ||
         remote_ack->node_id != result->peer_node_id ||
         memcmp(remote_ack->cluster_id.bytes, result->cluster_id.bytes,
@@ -351,10 +355,10 @@ int tr_raft_handshake_validate_ack(
         remote_ack->max_frame_size != result->max_frame_size ||
         remote_ack->max_snapshot_chunk_size !=
             result->max_snapshot_chunk_size) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     result->complete = 1;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_handshake_result_validate(
@@ -364,22 +368,25 @@ int tr_raft_handshake_result_validate(
     tr_raft_node_id_t peer_node_id)
 {
     if (result == NULL || cluster_id == NULL || !result->complete ||
-        (result->feature_bits &
-         TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE) == 0U ||
         result->local_node_id != local_node_id ||
         result->peer_node_id != peer_node_id ||
-        result->wire_major == 0U ||
-        result->max_frame_size < TR_RAFT_HANDSHAKE_MIN_FRAME_SIZE ||
-        result->max_snapshot_chunk_size <
-            TR_RAFT_HANDSHAKE_MIN_SNAPSHOT_CHUNK_SIZE ||
         memcmp(result->cluster_id.bytes, cluster_id->bytes,
                sizeof(cluster_id->bytes)) != 0 ||
         !tr_raft_handshake_bytes_nonzero(
             result->peer_process_incarnation.bytes,
             sizeof(result->peer_process_incarnation.bytes))) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
-    return TURBO_OK;
+    if ((result->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_CURRENT) !=
+            TR_RAFT_HANDSHAKE_FEATURE_CURRENT ||
+        result->wire_major != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
+        result->wire_minor != TR_RAFT_HANDSHAKE_WIRE_MINOR ||
+        result->max_frame_size < TR_RAFT_WIRE_MAX_FRAME_SIZE ||
+        result->max_snapshot_chunk_size <
+            TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
+        return SALTS_EPROTONOSUPPORT;
+    }
+    return SALTS_OK;
 }
 
 int tr_raft_handshake_select_raft_wire_version(
@@ -388,34 +395,17 @@ int tr_raft_handshake_select_raft_wire_version(
     uint16_t *out_wire_version)
 {
     if (result == NULL || out_wire_version == NULL || !result->complete ||
-        (result->feature_bits &
-         TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE) == 0U) {
-        return TURBO_EINVAL;
+        entry_count > TR_RAFT_MAX_APPEND_ENTRIES) {
+        return SALTS_EINVAL;
     }
-    if ((result->feature_bits &
-         TR_RAFT_HANDSHAKE_FEATURE_RAFT_BATCH_V3) != 0U) {
-        *out_wire_version = TR_RAFT_WIRE_VERSION;
-        return TURBO_OK;
+    if ((result->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_CURRENT) !=
+            TR_RAFT_HANDSHAKE_FEATURE_CURRENT ||
+        result->wire_major != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
+        result->wire_minor != TR_RAFT_HANDSHAKE_WIRE_MINOR) {
+        return SALTS_EPROTONOSUPPORT;
     }
-    if (entry_count > 1U) {
-        return TURBO_EPROTONOSUPPORT;
-    }
-    *out_wire_version = TR_RAFT_WIRE_MIN_VERSION;
-    return TURBO_OK;
-}
-
-int tr_raft_handshake_require_snapshot_v4(
-    const tr_raft_handshake_result_t *result)
-{
-    if (result == NULL || !result->complete ||
-        (result->feature_bits &
-         TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE) == 0U) {
-        return TURBO_EINVAL;
-    }
-    return (result->feature_bits &
-            TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4) != 0U
-               ? TURBO_OK
-               : TURBO_EPROTONOSUPPORT;
+    *out_wire_version = TR_RAFT_WIRE_VERSION;
+    return SALTS_OK;
 }
 
 int tr_raft_handshake_select_snapshot_wire_version(
@@ -426,26 +416,22 @@ int tr_raft_handshake_select_snapshot_wire_version(
     uint32_t chunk_size;
 
     if (result == NULL || out_wire_version == NULL ||
-        out_chunk_size == NULL || !result->complete ||
-        (result->feature_bits &
-         TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE) == 0U) {
-        return TURBO_EINVAL;
+        out_chunk_size == NULL || !result->complete) {
+        return SALTS_EINVAL;
     }
-    if ((result->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V5) != 0U &&
-        result->max_frame_size >= TR_RAFT_WIRE_MAX_FRAME_SIZE &&
-        result->max_snapshot_chunk_size >=
+    if ((result->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_CURRENT) !=
+            TR_RAFT_HANDSHAKE_FEATURE_CURRENT ||
+        result->wire_major != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
+        result->wire_minor != TR_RAFT_HANDSHAKE_WIRE_MINOR ||
+        result->max_frame_size < TR_RAFT_WIRE_MAX_FRAME_SIZE ||
+        result->max_snapshot_chunk_size <
             TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
-        chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
-        *out_wire_version = TR_RAFT_WIRE_SNAPSHOT_VERSION;
-        *out_chunk_size = chunk_size;
-        return TURBO_OK;
+        return SALTS_EPROTONOSUPPORT;
     }
-    if ((result->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4) != 0U) {
-        *out_wire_version = TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION;
-        *out_chunk_size = TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
-        return TURBO_OK;
-    }
-    return TURBO_EPROTONOSUPPORT;
+    chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+    *out_wire_version = TR_RAFT_WIRE_SNAPSHOT_VERSION;
+    *out_chunk_size = chunk_size;
+    return SALTS_OK;
 }
 
 static int tr_raft_handshake_exchange_fault(
@@ -465,25 +451,25 @@ int tr_raft_handshake_exchange_create(
     int result;
 
     if (authenticated_peer_node_id == 0U || out_exchange == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     result = tr_raft_handshake_config_validate(local);
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return result;
     }
     if (authenticated_peer_node_id == local->local_node_id) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     exchange =
         (tr_raft_handshake_exchange_t *) calloc(1U, sizeof(*exchange));
     if (exchange == NULL) {
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     exchange->local = *local;
     exchange->authenticated_peer_node_id = authenticated_peer_node_id;
     exchange->state = TR_RAFT_HANDSHAKE_EXCHANGE_NEW;
     *out_exchange = exchange;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 void tr_raft_handshake_exchange_destroy(
@@ -502,21 +488,21 @@ int tr_raft_handshake_exchange_start(
     int result;
 
     if (exchange == NULL || output == NULL || output_size == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (exchange->state != TR_RAFT_HANDSHAKE_EXCHANGE_NEW) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     result = tr_raft_handshake_make_hello(&exchange->local, &hello);
-    if (result == TURBO_OK) {
+    if (result == SALTS_OK) {
         result = tr_raft_handshake_encode(&hello, output, output_capacity,
                                           output_size);
     }
-    if (result != TURBO_OK) {
+    if (result != SALTS_OK) {
         return tr_raft_handshake_exchange_fault(exchange, result);
     }
     exchange->state = TR_RAFT_HANDSHAKE_EXCHANGE_WAIT_HELLO;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_handshake_exchange_feed(
@@ -533,13 +519,13 @@ int tr_raft_handshake_exchange_feed(
     if (exchange == NULL || (data == NULL && size != 0U) ||
         consumed_size == NULL || output == NULL || output_size == NULL ||
         output_capacity < TR_RAFT_HANDSHAKE_PACKET_SIZE) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     *consumed_size = 0U;
     *output_size = 0U;
     if (exchange->state != TR_RAFT_HANDSHAKE_EXCHANGE_WAIT_HELLO &&
         exchange->state != TR_RAFT_HANDSHAKE_EXCHANGE_WAIT_ACK) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
 
     while (offset < size &&
@@ -559,7 +545,7 @@ int tr_raft_handshake_exchange_feed(
         if (exchange->packet_used >= TR_RAFT_HANDSHAKE_LENGTH_PREFIX_SIZE &&
             tr_raft_handshake_read_u32(exchange->packet) !=
                 TR_RAFT_HANDSHAKE_RECORD_SIZE) {
-            return tr_raft_handshake_exchange_fault(exchange, TURBO_EPROTO);
+            return tr_raft_handshake_exchange_fault(exchange, SALTS_EPROTO);
         }
         if (exchange->packet_used != TR_RAFT_HANDSHAKE_PACKET_SIZE) {
             continue;
@@ -570,7 +556,7 @@ int tr_raft_handshake_exchange_feed(
 
             result = tr_raft_handshake_decode(
                 exchange->packet, exchange->packet_used, &message);
-            if (result != TURBO_OK) {
+            if (result != SALTS_OK) {
                 return tr_raft_handshake_exchange_fault(exchange, result);
             }
             exchange->packet_used = 0U;
@@ -583,11 +569,11 @@ int tr_raft_handshake_exchange_feed(
                     &message,
                     &ack,
                     &exchange->result);
-                if (result == TURBO_OK) {
+                if (result == SALTS_OK) {
                     result = tr_raft_handshake_encode(
                         &ack, output, output_capacity, output_size);
                 }
-                if (result != TURBO_OK) {
+                if (result != SALTS_OK) {
                     return tr_raft_handshake_exchange_fault(exchange,
                                                              result);
                 }
@@ -595,7 +581,7 @@ int tr_raft_handshake_exchange_feed(
             } else {
                 result = tr_raft_handshake_validate_ack(&exchange->result,
                                                         &message);
-                if (result != TURBO_OK) {
+                if (result != SALTS_OK) {
                     return tr_raft_handshake_exchange_fault(exchange,
                                                              result);
                 }
@@ -603,7 +589,7 @@ int tr_raft_handshake_exchange_feed(
             }
         }
     }
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_handshake_exchange_get_state(
@@ -611,10 +597,10 @@ int tr_raft_handshake_exchange_get_state(
     tr_raft_handshake_exchange_state_t *out_state)
 {
     if (exchange == NULL || out_state == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     *out_state = exchange->state;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 int tr_raft_handshake_exchange_get_result(
@@ -622,12 +608,12 @@ int tr_raft_handshake_exchange_get_result(
     tr_raft_handshake_result_t *out_result)
 {
     if (exchange == NULL || out_result == NULL) {
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     }
     if (exchange->state != TR_RAFT_HANDSHAKE_EXCHANGE_COMPLETE ||
         !exchange->result.complete) {
-        return TURBO_EPROTO;
+        return SALTS_EPROTO;
     }
     *out_result = exchange->result;
-    return TURBO_OK;
+    return SALTS_OK;
 }

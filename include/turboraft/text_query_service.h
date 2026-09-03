@@ -36,7 +36,7 @@ typedef struct tr_text_query_service_sink {
  *
  * `status` receives one service status snapshot. `member` receives one call
  * for each configuration member selected by the command role. `progress`
- * receives one call for the requested node, or TURBO_ENOENT when that node is
+ * receives one call for the requested node, or SALTS_ENOENT when that node is
  * not present in the progress view.
  *
  * Snapshots and their nested views are borrowed until the sink callback

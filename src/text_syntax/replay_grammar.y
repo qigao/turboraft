@@ -73,13 +73,13 @@ statement ::= EXPECT NODE INTEGER(N) COMMIT_INDEX GE INTEGER(V) SEMICOLON. {
 }
 
 %syntax_error {
-  tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+  tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                              TR_TEXT_DIAGNOSTIC_SYNTAX,
                              "replay syntax error");
 }
 
 %parse_failure {
-  tr_text_parse_context_fail(&ctx->base, TURBO_EPROTO,
+  tr_text_parse_context_fail(&ctx->base, SALTS_EPROTO,
                              TR_TEXT_DIAGNOSTIC_SYNTAX,
                              "replay parse failure");
 }
