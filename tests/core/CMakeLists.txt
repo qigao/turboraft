@@ -399,4 +399,14 @@ if(TARGET turboraft_flowmq)
            COMMAND turboraft_flowmq_peer_service_tests)
   set_tests_properties(turboraft.flowmq_peer_service PROPERTIES TIMEOUT 30)
 endif()
+
+if(TARGET turboraft_turbodb_redis_state_machine)
+  add_executable(turboraft_turbodb_redis_state_machine_tests
+                 test_turbodb_redis_state_machine.c)
+  target_link_libraries(turboraft_turbodb_redis_state_machine_tests
+                        PRIVATE TurboRaft::TurboDbRedisStateMachine
+                                Salts::TinyTest)
+  add_test(NAME turboraft.turbodb_redis_state_machine
+           COMMAND turboraft_turbodb_redis_state_machine_tests)
+endif()
 cmake_config_directory_targets(FOLDER "tests/core")

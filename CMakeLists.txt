@@ -253,6 +253,30 @@ target_link_libraries(turboraft_wal_storage
                       PUBLIC TurboRaft::Core
                       PRIVATE Salts::Core xxHash::xxhash)
 
+if(TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE)
+  if(NOT DEFINED ENV{TURBODB_ROOT} OR
+     "$ENV{TURBODB_ROOT}" STREQUAL "" OR
+     NOT IS_DIRECTORY "$ENV{TURBODB_ROOT}")
+    message(FATAL_ERROR
+            "TURBODB_ROOT must name the TurboDB install prefix when Redis state machine support is enabled")
+  endif()
+  find_package(TurboDB CONFIG REQUIRED
+               PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
+  add_library(turboraft_turbodb_redis_state_machine STATIC
+              src/integrations/turbodb_redis_state_machine.c)
+  cmake_config_target(turboraft_turbodb_redis_state_machine
+                      NO_INSTALL
+                      ALIAS TurboRaft::TurboDbRedisStateMachine
+                      EXPORT_NAME TurboDbRedisStateMachine
+                      FOLDER "libraries/integrations")
+  target_include_directories(
+    turboraft_turbodb_redis_state_machine
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_link_libraries(turboraft_turbodb_redis_state_machine
+                        PUBLIC TurboRaft::Core TurboDB::Redis)
+endif()
+
 add_library(turboraft_snapshot_coordinator STATIC
             src/service/raft_snapshot_coordinator.c)
 target_include_directories(turboraft_snapshot_coordinator
