@@ -5,6 +5,8 @@ option(BUILD_TESTS "Build the TurboRaft test suite" ON)
 option(ENABLE_MSVC_ANALYZE "Enable MSVC static code analysis" OFF)
 option(TURBORAFT_BUILD_FUZZERS
        "Build opt-in Clang/libFuzzer protocol fuzz targets" OFF)
+option(TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE
+       "Build the optional TurboDB Redis command-journal state machine" OFF)
 
 option(BUILD_BENCHMARKS "Build TurboRaft performance benchmarks" OFF)
 option(BUILD_EXAMPLES "Build TurboRaft examples" OFF)
