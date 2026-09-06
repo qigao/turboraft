@@ -234,6 +234,10 @@ spec("TurboDB Redis state machine")
         static const char *seed_command[] = {
             "HSET", "raft:{orders}:meta", "applied_index", "41", "term", "7",
             "command_id", "4101", "journal_floor", "41"};
+        static const char *high_seed_command[] = {
+            "HSET", "raft:{orders}:meta", "applied_index", "18446744073709551613",
+            "term", "8", "command_id", "seed-high", "journal_floor",
+            "18446744073709551613"};
         static const char *floor_command[] = {
             "HGET", "raft:{orders}:meta", "journal_floor"};
         redis_io_runtime runtime = {0};
@@ -242,6 +246,7 @@ spec("TurboDB Redis state machine")
         tr_turbodb_redis_state_machine_t *adapter = NULL;
         tr_raft_state_machine_t state_machine = {0};
         tr_raft_entry_t entries[2] = {{0}};
+        tr_raft_entry_t high_entries[2] = {{0}};
         tr_turbodb_redis_compact_result_t compact_result;
         redis_reply_t *reply;
 
@@ -274,6 +279,13 @@ spec("TurboDB Redis state machine")
         check_equal(state_machine.apply_batch(state_machine.context, entries, 2U),
                     SALTS_OK);
         check_equal(tr_turbodb_redis_state_machine_compact_snapshot(
+                        adapter, 43U, 123455U, &compact_result), SALTS_EPROTO);
+        reply = tr_turbodb_redis_test_command(&connection, &runtime, 3,
+                                              floor_command);
+        check_not_null(reply);
+        check_equal(reply->str, "41", 2U);
+        redis_reply_free(reply);
+        check_equal(tr_turbodb_redis_state_machine_compact_snapshot(
                         adapter, 43U, 123456U, &compact_result), SALTS_OK);
         check_equal(compact_result, TR_TURBODB_REDIS_COMPACTED);
         reply = tr_turbodb_redis_test_command(&connection, &runtime, 3,
@@ -283,6 +295,39 @@ spec("TurboDB Redis state machine")
         redis_reply_free(reply);
         check_equal(tr_turbodb_redis_state_machine_compact_snapshot(
                         adapter, 43U, 123456U, &compact_result), SALTS_OK);
+        check_equal(compact_result, TR_TURBODB_REDIS_COMPACT_REPLAYED);
+
+        reply = tr_turbodb_redis_test_command(&connection, &runtime, 5,
+                                              delete_command);
+        check_not_null(reply);
+        redis_reply_free(reply);
+        reply = tr_turbodb_redis_test_command(&connection, &runtime, 10,
+                                              high_seed_command);
+        check_not_null(reply);
+        redis_reply_free(reply);
+        high_entries[0].index = UINT64_MAX - UINT64_C(1);
+        high_entries[0].term = 8U;
+        high_entries[0].command_id = 18446744073709551613ULL;
+        high_entries[0].data_length = 10U;
+        memcpy(high_entries[0].data, "high-first", 10U);
+        high_entries[1].index = UINT64_MAX;
+        high_entries[1].term = 8U;
+        high_entries[1].command_id = 18446744073709551614ULL;
+        high_entries[1].data_length = 9U;
+        memcpy(high_entries[1].data, "high-last", 9U);
+        check_equal(state_machine.apply_batch(state_machine.context,
+                                              high_entries, 2U),
+                    SALTS_OK);
+        check_equal(tr_turbodb_redis_state_machine_compact_snapshot(
+                        adapter, UINT64_MAX, 8U, &compact_result), SALTS_OK);
+        check_equal(compact_result, TR_TURBODB_REDIS_COMPACTED);
+        reply = tr_turbodb_redis_test_command(&connection, &runtime, 3,
+                                              floor_command);
+        check_not_null(reply);
+        check_equal(reply->str, "18446744073709551615", 20U);
+        redis_reply_free(reply);
+        check_equal(tr_turbodb_redis_state_machine_compact_snapshot(
+                        adapter, UINT64_MAX, 8U, &compact_result), SALTS_OK);
         check_equal(compact_result, TR_TURBODB_REDIS_COMPACT_REPLAYED);
         check_equal(tr_turbodb_redis_state_machine_close(adapter), SALTS_OK);
         check_equal(redis_cflow_connection_destroy(&connection), SALTS_OK);

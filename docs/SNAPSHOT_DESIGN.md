@@ -18,11 +18,13 @@ The trigger runs only after Runtime has durably processed, applied, and advanced
 a Ready. Core exports a snapshot point only when `applied_index == commit_index`
 and no Ready is outstanding; the point contains the exact index, term, and
 ConfState for that application boundary. The operation order is application
-create, durable store, then in-memory Core compaction. A create or store failure
-faults Service and leaves the live log prefix intact. A failure after durable
-store also faults Service; authoritative recovery can reconstruct Core from the
-stored snapshot. Snapshot transport remains a separate consumer and does not
-own local snapshot or application state.
+create, durable store, optional derived-journal compaction, then in-memory Core
+compaction. A create or store failure faults Service and leaves the live log
+prefix intact. When the optional journal callback returns `SALTS_EIO`, Service
+retains the one durable snapshot and retries its exact `(index, term)` without
+recreating or storing it; other callback failures fault Service before Core
+compaction. Snapshot transport remains a separate consumer and does not own
+local snapshot or application state.
 
 After compaction, a leader never constructs AppendEntries from an index at or
 before its log base. Core emits a bounded snapshot request containing the peer

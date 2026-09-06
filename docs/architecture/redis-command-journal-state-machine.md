@@ -125,6 +125,24 @@ documented lower-bound index is retained in Redis metadata. Compaction is a
 control-plane operation while the adapter is quiescent; it must be atomic with
 its lower-bound metadata update.
 
+When local snapshot policy configures `journal_compact`, Service owns the order:
+
+1. create the application snapshot;
+2. make that exact index, term, configuration and payload durable through
+   `store`;
+3. invoke `tr_turbodb_redis_state_machine_compact_snapshot_callback` with the
+   durable index and term; and
+4. compact the in-memory Core only after that callback completes.
+
+The durable WAL snapshot remains the recovery fact source; Redis metadata's
+`journal_floor` is the sole fact source for the derived journal retention
+boundary. The callback never trims the outbox Stream. If it returns
+`SALTS_EIO`, Service retains exactly one pending snapshot and later
+`poll`, `tick`, or `step` retries only that same `(index, term)` compaction.
+This covers an unknown Redis reply without creating or storing a second
+snapshot. Any other callback failure faults Service and leaves Core's live log
+prefix untrimmed.
+
 ## Build and Deployment
 
 The adapter is opt-in. When enabled, the installed TurboRaft package exports
@@ -144,10 +162,11 @@ CTest can load the DLLs from the selected package prefix.
 
 ## Migration
 
-The initial adapter introduces no change to the existing Core, Runtime, Service
-or WAL public APIs. It is a new optional target and a new state-machine factory.
+The adapter introduces no change to Core, Runtime, WAL, wire, or transport
+public APIs. `tr_raft_snapshot_policy_t` adds an optional journal-compaction
+callback; zero-initialized and existing policies retain their previous behavior.
 Existing callers remain unaffected unless they explicitly link and configure
-the Redis adapter.
+the Redis adapter and that callback.
 
 TurboDB must provide the installed atomic batch and reconciliation headers.
 The selected user preset supplies a current package, and CMake fails fast if
