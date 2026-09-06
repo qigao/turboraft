@@ -17,6 +17,8 @@
 #define TR_CHAOS_IO_TIMEOUT_MS 5000U
 #define TR_CHAOS_MAX_TRACKED_INDEX 512U
 #define TR_CHAOS_MAX_TRACKED_TERM 256U
+#define TR_CHAOS_RECOVERY_ROUND_COUNT 48U
+#define TR_CHAOS_RECOVERY_DELIVERY_LIMIT 64U
 
 typedef struct tr_chaos_response {
     int operation_result;
@@ -460,6 +462,32 @@ static int tr_chaos_collect_command(
     tr_raft_wire_codec_t *codec,
     tr_chaos_safety_t *safety,
     uint8_t *response_payload,
+    int *out_operation_result);
+
+static int tr_chaos_node_backup_handoff(
+    tr_chaos_process_node_t *node,
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload)
+{
+    int operation_result = SALTS_OK;
+    int result = tr_chaos_collect_command(
+        node, TR_CHAOS_COMMAND_BACKUP_HANDOFF, NULL, 0U, network, codec,
+        safety, response_payload, &operation_result);
+
+    return result != SALTS_OK ? result : operation_result;
+}
+
+static int tr_chaos_collect_command(
+    tr_chaos_process_node_t *node,
+    tr_chaos_command_kind_t kind,
+    const uint8_t *command_payload,
+    size_t command_size,
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload,
     int *out_operation_result)
 {
     tr_chaos_response_t response;
@@ -545,6 +573,96 @@ static int tr_chaos_deliver_one(
     return SALTS_OK;
 }
 
+static int tr_chaos_recover_after_handoff(
+    tr_chaos_process_node_t nodes[3],
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload,
+    uint32_t *random_state,
+    tr_raft_index_t target_applied_index)
+{
+    tr_raft_index_t final_applied_index = 0U;
+    uint64_t final_applied_hash = 0U;
+    uint32_t round;
+    size_t index;
+
+    if (network == NULL || codec == NULL || safety == NULL ||
+        response_payload == NULL || random_state == NULL ||
+        target_applied_index == 0U) {
+        return SALTS_EINVAL;
+    }
+    for (round = 0U; round < TR_CHAOS_RECOVERY_ROUND_COUNT; ++round) {
+        uint8_t tick[8];
+        size_t delivery;
+
+        for (index = 0U; index < 3U; ++index) {
+            int operation_result = SALTS_OK;
+            int result;
+
+            if (!nodes[index].alive) {
+                return SALTS_EPROTO;
+            }
+            tr_chaos_put_u32(tick, 1U);
+            tr_chaos_put_u32(tick + 4U, 3U + (uint32_t) index);
+            result = tr_chaos_collect_command(
+                &nodes[index], TR_CHAOS_COMMAND_TICK, tick, sizeof(tick),
+                network, codec, safety, response_payload,
+                &operation_result);
+            if (result != SALTS_OK || operation_result != SALTS_OK) {
+                return result != SALTS_OK ? result : operation_result;
+            }
+        }
+        for (delivery = 0U;
+             delivery < TR_CHAOS_RECOVERY_DELIVERY_LIMIT &&
+             network->count != 0U;
+             ++delivery) {
+            int result = tr_chaos_deliver_one(
+                nodes, network, codec, safety, response_payload,
+                random_state, 0, 0U);
+
+            if (result != SALTS_OK) {
+                return result;
+            }
+        }
+        if (network->count == 0U) {
+            int converged = 1;
+
+            for (index = 0U; index < 3U; ++index) {
+                int operation_result = SALTS_OK;
+                int result = tr_chaos_collect_command(
+                    &nodes[index], TR_CHAOS_COMMAND_STATUS, NULL, 0U,
+                    network, codec, safety, response_payload,
+                    &operation_result);
+
+                if (result != SALTS_OK) {
+                    return result;
+                }
+                if (operation_result != SALTS_OK) {
+                    return operation_result;
+                }
+                if (index == 0U) {
+                    final_applied_index =
+                        nodes[index].status.applied_index;
+                    final_applied_hash = nodes[index].status.applied_hash;
+                }
+                if (nodes[index].status.applied_index <
+                        target_applied_index ||
+                    nodes[index].status.applied_index !=
+                        final_applied_index ||
+                    nodes[index].status.applied_hash !=
+                        final_applied_hash) {
+                    converged = 0;
+                }
+            }
+            if (converged) {
+                return SALTS_OK;
+            }
+        }
+    }
+    return SALTS_EPROTO;
+}
+
 static int tr_chaos_run_seed(const char *program,
                              const char *directory,
                              uint32_t seed)
@@ -557,6 +675,9 @@ static int tr_chaos_run_seed(const char *program,
     uint32_t random_state = seed * 0x9e3779b9U + 1U;
     int killed_node = -1;
     int accepted_proposals = 0;
+    int leader_handoffs = 0;
+    int follower_handoffs = 0;
+    tr_raft_index_t post_handoff_target = 0U;
     uint32_t round = 0U;
     size_t index;
     int result = SALTS_OK;
@@ -622,6 +743,30 @@ static int tr_chaos_run_seed(const char *program,
                 goto cleanup;
             }
         }
+        if (round == 12U || round == 24U) {
+            tr_raft_role_t wanted_role = round == 12U
+                                             ? TR_RAFT_LEADER
+                                             : TR_RAFT_FOLLOWER;
+
+            stage = round == 12U ? "backup-leader" : "backup-follower";
+            for (index = 0U; index < 3U; ++index) {
+                if (nodes[index].alive &&
+                    nodes[index].status.role == wanted_role) {
+                    result = tr_chaos_node_backup_handoff(
+                        &nodes[index], &network, codec, &safety,
+                        response_payload);
+                    if (result != SALTS_OK) {
+                        goto cleanup;
+                    }
+                    if (round == 12U) {
+                        leader_handoffs++;
+                    } else {
+                        follower_handoffs++;
+                    }
+                    break;
+                }
+            }
+        }
 
         for (index = 0U; index < 3U; ++index) {
             int operation_result = SALTS_OK;
@@ -678,6 +823,10 @@ static int tr_chaos_run_seed(const char *program,
                     }
                     if (operation_result == SALTS_OK) {
                         accepted_proposals++;
+                        if (round > 24U) {
+                            post_handoff_target =
+                                nodes[index].status.last_log_index;
+                        }
                     }
                     break;
                 }
@@ -685,15 +834,20 @@ static int tr_chaos_run_seed(const char *program,
         }
     }
 
-    for (round = 0U; round < 48U && network.count != 0U; ++round) {
-        stage = "drain";
-        result = tr_chaos_deliver_one(nodes, &network, codec, &safety,
-                                      response_payload, &random_state, 0, 0U);
-        if (result != SALTS_OK) {
-            goto cleanup;
-        }
+    if (post_handoff_target == 0U) {
+        stage = "post-handoff-proposal";
+        result = SALTS_EPROTO;
+        goto cleanup;
     }
-    if (accepted_proposals == 0 || safety.max_user_apply_count == 0U) {
+    stage = "post-handoff-recovery";
+    result = tr_chaos_recover_after_handoff(
+        nodes, &network, codec, &safety, response_payload, &random_state,
+        post_handoff_target);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+    if (accepted_proposals == 0 || safety.max_user_apply_count == 0U ||
+        leader_handoffs == 0 || follower_handoffs == 0) {
         stage = "liveness";
         result = SALTS_EPROTO;
     }
@@ -736,6 +890,64 @@ cleanup:
 
 spec("raft multi-process deterministic chaos")
 {
+    it("stops a node when WAL reopen fails after prepare")
+    {
+        const char *program = getenv("TURBORAFT_CHAOS_NODE");
+        char *directory = tt_make_temp_dir("turboraft-backup-failure");
+        tr_chaos_process_node_t node;
+        tr_chaos_safety_t safety;
+        tr_chaos_response_t response;
+        salts_process_result_t process_result;
+        uint8_t fail_reopen[4];
+        uint8_t *response_payload =
+            (uint8_t *) malloc(TR_CHAOS_MAX_RESPONSE_BYTES);
+        int result = SALTS_EINVAL;
+
+        memset(&node, 0, sizeof(node));
+        memset(&safety, 0, sizeof(safety));
+        memset(&response, 0, sizeof(response));
+        memset(&process_result, 0, sizeof(process_result));
+        check_not_null(program);
+        check_not_null(directory);
+        check_not_null(response_payload);
+        if (program != NULL && directory != NULL &&
+            response_payload != NULL) {
+            node.id = 1U;
+            snprintf(node.database_path, sizeof(node.database_path),
+                     "%s/node.db", directory);
+            result = tr_chaos_node_spawn(&node, program, &safety,
+                                         response_payload);
+            check_equal(result, SALTS_OK);
+        }
+        if (result == SALTS_OK) {
+            tr_chaos_put_u32(fail_reopen,
+                             TR_CHAOS_BACKUP_HANDOFF_FAIL_REOPEN);
+            result = tr_chaos_node_command(
+                &node, TR_CHAOS_COMMAND_BACKUP_HANDOFF, fail_reopen,
+                sizeof(fail_reopen), response_payload, &response);
+            check_equal(result, SALTS_OK);
+            check_equal(response.operation_result, SALTS_EIO);
+        }
+        if (result == SALTS_OK &&
+            response.operation_result == SALTS_EIO) {
+            result = salts_process_wait(node.process, &process_result);
+            check_equal(result, SALTS_OK);
+            check_equal(process_result.state, SALTS_PROCESS_EXITED);
+            check_not_equal(process_result.exit_code, 0);
+            salts_process_destroy(node.process);
+            node.process = NULL;
+            node.alive = 0;
+        }
+        if (node.alive) {
+            check_equal(tr_chaos_node_terminate(&node), SALTS_OK);
+        }
+        if (directory != NULL) {
+            check_equal(tt_remove_tree(directory), 0);
+        }
+        free(response_payload);
+        free(directory);
+    }
+
     it("preserves durable election and committed-log safety across faults")
     {
         const char *program = getenv("TURBORAFT_CHAOS_NODE");

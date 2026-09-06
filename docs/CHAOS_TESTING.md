@@ -11,12 +11,19 @@ The deterministic scripts cover:
 - a minority partition;
 - termination of the observed leader;
 - restart from the same WAL prefix;
+- online WAL backup handoff on an elected leader and follower: Service
+  prepares, the node owner closes and reopens its WAL, binds the new adapter,
+  then resumes before the next command turn;
+- an injected WAL reopen failure after prepare/close: the child returns the
+  original I/O error and exits instead of serving with a detached adapter;
 - stable recovery periods before and after faults.
 
 For every child response the runner checks term and commit monotonicity,
 `applied <= commit <= last_log`, one leader per observed term, and identical
-application hashes at equal applied indexes. At least one user proposal must be
-accepted and applied for every seed.
+application hashes at equal applied indexes. Every seed records an accepted
+proposal after the follower handoff, then runs a bounded fault-free recovery
+window and requires all three nodes to reach that index with an identical final
+applied index and hash.
 
 Run the test with the normal preset:
 

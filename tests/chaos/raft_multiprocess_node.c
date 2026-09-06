@@ -22,6 +22,7 @@
 typedef struct tr_chaos_node {
     tr_raft_node_id_t node_id;
     tr_raft_cluster_id_t cluster_id;
+    tr_raft_wal_storage_config_t storage_config;
     tr_raft_wal_storage_t *storage;
     tr_raft_service_t *service;
     tr_raft_wire_codec_t *codec;
@@ -151,14 +152,13 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
                               const char *database_path)
 {
     static const tr_raft_node_id_t voters[] = {1U, 2U, 3U};
-    tr_raft_wal_storage_config_t storage_config;
     tr_raft_wal_recovery_t recovery;
     tr_raft_storage_t storage_adapter;
     tr_raft_service_config_t service_config;
     int result;
 
     memset(node, 0, sizeof(*node));
-    memset(&storage_config, 0, sizeof(storage_config));
+    memset(&node->storage_config, 0, sizeof(node->storage_config));
     memset(&recovery, 0, sizeof(recovery));
     memset(&storage_adapter, 0, sizeof(storage_adapter));
     memset(&service_config, 0, sizeof(service_config));
@@ -177,14 +177,14 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
         return result;
     }
 
-    storage_config.path_prefix = database_path;
-    storage_config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
-    storage_config.max_transaction_bytes = 32U * 1024U;
-    storage_config.max_segments = 64U;
-    storage_config.max_log_entries = TR_CHAOS_NODE_MAX_LOG_ENTRIES;
-    storage_config.create_if_missing = true;
-    storage_config.max_snapshot_bytes = 1024U * 1024U;
-    result = tr_raft_wal_storage_open(&storage_config, &node->storage);
+    node->storage_config.path_prefix = database_path;
+    node->storage_config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
+    node->storage_config.max_transaction_bytes = 32U * 1024U;
+    node->storage_config.max_segments = 64U;
+    node->storage_config.max_log_entries = TR_CHAOS_NODE_MAX_LOG_ENTRIES;
+    node->storage_config.create_if_missing = true;
+    node->storage_config.max_snapshot_bytes = 1024U * 1024U;
+    result = tr_raft_wal_storage_open(&node->storage_config, &node->storage);
     if (result == SALTS_OK) {
         result = tr_raft_wal_storage_bind(node->storage, &storage_adapter);
     }
@@ -255,6 +255,45 @@ static void tr_chaos_node_close(tr_chaos_node_t *node)
     memset(node, 0, sizeof(*node));
 }
 
+static int tr_chaos_node_backup_handoff(
+    tr_chaos_node_t *node,
+    tr_chaos_backup_handoff_mode_t mode)
+{
+    tr_raft_wal_storage_t *replacement = NULL;
+    tr_raft_storage_t replacement_adapter;
+    int result;
+
+    memset(&replacement_adapter, 0, sizeof(replacement_adapter));
+    result = tr_raft_service_prepare_backup(node->service);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    result = tr_raft_wal_storage_close(node->storage);
+    node->storage = NULL;
+    if (result != SALTS_OK) {
+        return result;
+    }
+    result = mode == TR_CHAOS_BACKUP_HANDOFF_FAIL_REOPEN
+                 ? SALTS_EIO
+                 : tr_raft_wal_storage_open(&node->storage_config,
+                                            &replacement);
+    if (result == SALTS_OK) {
+        result = tr_raft_wal_storage_bind(replacement, &replacement_adapter);
+    }
+    if (result == SALTS_OK) {
+        result = tr_raft_service_resume_backup(node->service,
+                                               &replacement_adapter);
+    }
+    if (result != SALTS_OK) {
+        if (replacement != NULL) {
+            tr_raft_wal_storage_close(replacement);
+        }
+        return result;
+    }
+    node->storage = replacement;
+    return SALTS_OK;
+}
+
 static int tr_chaos_execute(tr_chaos_node_t *node,
                             tr_chaos_command_kind_t kind,
                             const uint8_t *payload,
@@ -297,6 +336,18 @@ static int tr_chaos_execute(tr_chaos_node_t *node,
             proposal.data_length = tr_chaos_get_u32(payload + 8U);
             proposal.data = payload + 12U;
             return tr_raft_service_propose(node->service, &proposal);
+        }
+        return SALTS_EINVAL;
+    case TR_CHAOS_COMMAND_BACKUP_HANDOFF:
+        if (payload_size == 0U) {
+            return tr_chaos_node_backup_handoff(
+                node, TR_CHAOS_BACKUP_HANDOFF_NORMAL);
+        }
+        if (payload_size == sizeof(uint32_t) &&
+            tr_chaos_get_u32(payload) ==
+                TR_CHAOS_BACKUP_HANDOFF_FAIL_REOPEN) {
+            return tr_chaos_node_backup_handoff(
+                node, TR_CHAOS_BACKUP_HANDOFF_FAIL_REOPEN);
         }
         return SALTS_EINVAL;
     case TR_CHAOS_COMMAND_STATUS:
@@ -406,6 +457,11 @@ int main(int argc, char **argv)
         result = tr_chaos_execute(&node, kind, payload, payload_size);
         if (tr_chaos_respond(&node, request_id, result) != SALTS_OK) {
             exit_code = 8;
+            break;
+        }
+        if (kind == TR_CHAOS_COMMAND_BACKUP_HANDOFF &&
+            result != SALTS_OK && node.storage == NULL) {
+            exit_code = 9;
             break;
         }
         if (kind == TR_CHAOS_COMMAND_STOP) {
