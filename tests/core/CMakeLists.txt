@@ -209,7 +209,7 @@ add_test(NAME turboraft.service_wal_reload
     turboraft.multiprocess_chaos
     PROPERTIES ENVIRONMENT
                "TURBORAFT_CHAOS_NODE=$<TARGET_FILE:turboraft_multiprocess_node>"
-               TIMEOUT 180
+               TIMEOUT 600
                LABELS "chaos;multiprocess")
 
 add_executable(turboraft_wire_tests test_raft_wire_codec.c)

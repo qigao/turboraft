@@ -31,6 +31,36 @@ Run the test with the normal preset:
 ctest --preset win-release-user -R turboraft.multiprocess_chaos --output-on-failure
 ```
 
+With no additional environment configuration, the runner executes seeds 1
+through 4. A bounded campaign can select a different contiguous range:
+
+```powershell
+$env:TURBORAFT_CHAOS_FIRST_SEED = "17"
+$env:TURBORAFT_CHAOS_SEED_COUNT = "8"
+try {
+  ctest --preset win-release-user -R "^turboraft\.multiprocess_chaos$" --output-on-failure
+} finally {
+  Remove-Item Env:TURBORAFT_CHAOS_FIRST_SEED -ErrorAction SilentlyContinue
+  Remove-Item Env:TURBORAFT_CHAOS_SEED_COUNT -ErrorAction SilentlyContinue
+}
+```
+
+`TURBORAFT_CHAOS_FIRST_SEED` accepts decimal values from 1 through
+`4294967295`. `TURBORAFT_CHAOS_SEED_COUNT` accepts 1 through 16, and the final
+seed must remain within that same 32-bit range. Empty, signed, non-decimal,
+zero, oversized, or overflowing values fail before the runner creates a chaos
+workspace or starts child nodes. Split longer campaigns into ranges of at most
+16 seeds so each CTest invocation remains bounded.
+
+The runner prints a `reproduce_env` line before each seed. Use those two values
+to reproduce only that seed:
+
+```powershell
+$env:TURBORAFT_CHAOS_FIRST_SEED = "23"
+$env:TURBORAFT_CHAOS_SEED_COUNT = "1"
+ctest --preset win-release-user -R "^turboraft\.multiprocess_chaos$" --output-on-failure
+```
+
 This runner validates process isolation, WAL restart, Service durability
 ordering, and deterministic network faults. It does not replace the CNet/FlowMQ
 mTLS tests: the parent deliberately owns routing so every fault decision is
