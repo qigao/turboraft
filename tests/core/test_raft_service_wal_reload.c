@@ -172,4 +172,66 @@ spec("raft service WAL reload")
         check_equal(tt_remove_file(path_prefix), 0);
         free(path_prefix);
     }
+
+    it("rebinds Service only after its WAL has been reopened")
+    {
+        const tr_raft_node_id_t voters[] = {1U};
+        tr_raft_wal_storage_config_t storage_config;
+        tr_raft_wal_storage_t *storage = NULL;
+        tr_raft_storage_t storage_adapter;
+        tr_raft_service_config_t service_config;
+        tr_raft_service_t *service = NULL;
+        tr_raft_service_status_t status;
+        tr_raft_tick_t tick = {3U, 4U};
+        char *path_prefix = tt_make_temp_file("turboraft-backup-handoff",
+                                              ".data");
+        char path[SALTS_FS_MAX_PATH];
+
+        memset(&storage_config, 0, sizeof(storage_config));
+        memset(&storage_adapter, 0, sizeof(storage_adapter));
+        memset(&service_config, 0, sizeof(service_config));
+        storage_config.path_prefix = path_prefix;
+        storage_config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
+        storage_config.max_transaction_bytes = 8192U;
+        storage_config.max_segments = 2U;
+        storage_config.max_log_entries = 16U;
+        storage_config.max_snapshot_bytes = 1024U;
+        storage_config.create_if_missing = true;
+        check_equal(tr_raft_wal_storage_open(&storage_config, &storage),
+                    SALTS_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &storage_adapter),
+                    SALTS_OK);
+        service_config.core.self_id = 1U;
+        service_config.core.voters = voters;
+        service_config.core.voter_count = 1U;
+        service_config.core.heartbeat_ticks = 1U;
+        service_config.core.election_min_ticks = 3U;
+        service_config.core.election_max_ticks = 5U;
+        service_config.core.initial_election_timeout_ticks = 3U;
+        service_config.core.max_log_entries = 16U;
+        service_config.storage = storage_adapter;
+        check_equal(tr_raft_service_create(&service_config, &service),
+                    SALTS_OK);
+        check_equal(tr_raft_service_prepare_backup(service), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check(status.backup_prepared);
+        check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+        storage = NULL;
+        check_equal(tr_raft_wal_storage_open(&storage_config, &storage),
+                    SALTS_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &storage_adapter),
+                    SALTS_OK);
+        check_equal(tr_raft_service_resume_backup(service, &storage_adapter),
+                    SALTS_OK);
+        check_equal(tr_raft_service_tick(service, &tick), SALTS_OK);
+
+        tr_raft_service_destroy(service);
+        check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+        snprintf(path, sizeof(path), "%s.00000001.wal", path_prefix);
+        check_equal(tt_remove_file(path), 0);
+        snprintf(path, sizeof(path), "%s.lock", path_prefix);
+        check_equal(tt_remove_file(path), 0);
+        check_equal(tt_remove_file(path_prefix), 0);
+        free(path_prefix);
+    }
 }

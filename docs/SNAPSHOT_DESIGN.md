@@ -26,6 +26,13 @@ recreating or storing it; other callback failures fault Service before Core
 compaction. Snapshot transport remains a separate consumer and does not own
 local snapshot or application state.
 
+Online backup cannot race this sequence. `tr_raft_service_prepare_backup()`
+rejects preparation while journal compaction is pending, so a caller only
+closes and copies its WAL after the durable snapshot and derived journal have
+reached the same boundary. The caller later supplies the adapter for the
+reopened WAL through `tr_raft_service_resume_backup()`; this changes no Core
+state and does not transfer WAL file ownership to Service.
+
 After compaction, a leader never constructs AppendEntries from an index at or
 before its log base. Core emits a bounded snapshot request containing the peer
 identity and required snapshot boundary. Runtime submits that request through

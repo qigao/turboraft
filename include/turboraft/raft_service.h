@@ -59,7 +59,9 @@ typedef struct tr_raft_service_config {
 typedef struct tr_raft_service_status {
     bool faulted;
     int cause;
+    bool backup_prepared;
     bool read_state_available;
+    bool journal_compaction_pending;
     tr_raft_runtime_result_t runtime;
     tr_raft_status_t core;
 } tr_raft_service_status_t;
@@ -70,6 +72,21 @@ int tr_raft_service_create(
     tr_raft_service_t **out_service);
 
 void tr_raft_service_destroy(tr_raft_service_t *service);
+
+/*
+ * Freezes Service after confirming there is no outstanding Ready, unread read
+ * state, or pending journal compaction. The caller then owns closing and
+ * copying its WAL/snapshot files; mutation APIs return SALTS_EBUSY until
+ * tr_raft_service_resume_backup() succeeds.
+ */
+int tr_raft_service_prepare_backup(tr_raft_service_t *service);
+
+/*
+ * Binds the storage adapter for the reopened WAL after prepare_backup().
+ * Service borrows the adapter callbacks and context exactly as at creation.
+ */
+int tr_raft_service_resume_backup(tr_raft_service_t *service,
+                                  const tr_raft_storage_t *storage);
 
 int tr_raft_service_tick(
     tr_raft_service_t *service,
