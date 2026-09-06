@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed. This document defines the optional TurboDB-backed Redis state-machine
-adapter for TurboRaft.
+Implemented. This document defines the optional TurboDB-backed Redis
+state-machine adapter for TurboRaft.
 
 ## Context
 
@@ -30,9 +30,9 @@ payload, records its Raft identity, advances the applied metadata, and appends
 an outbox event. An application consumes the journal or the outbox through a
 separate adapter; the Redis Stream never drives consensus progress.
 
-The adapter requires a new TurboDB atomic batch primitive. It invokes one Lua
-script per TurboRaft apply_batch callback. The script either commits every
-entry and metadata update or commits none of them.
+The adapter invokes one TurboDB Lua batch script per TurboRaft apply_batch
+callback. It validates all inputs before the first write, prepares journal and
+outbox data, then advances metadata as its sole commit marker.
 
 ## Redis Model
 
@@ -93,10 +93,20 @@ unexpected Redis server error is commit-unknown and requires reconciliation.
 | validation or Redis error | Return an error; Runtime enters its fault path. |
 | COMMIT_UNKNOWN | Return an error; never retry blindly. |
 
-COMMIT_UNKNOWN is deliberately fail-fast. Recovery requires rebuilding
-TurboRaft from WAL, reconnecting Redis, and reconciling the requested command
-range against the journal and metadata with an explicit TurboDB recovery API.
-Only a verified identical range may be treated as applied.
+COMMIT_UNKNOWN is deliberately fail-fast. The Runtime faults and leaves Core
+unadvanced. Its owner must replace the Redis connection, rebuild the exact
+unconfirmed range from WAL, and call
+`tr_turbodb_redis_state_machine_reconcile_batch` before applying that range
+again. The explicit API returns one of two successful verification results:
+
+| Recovery result | Owner action |
+| --- | --- |
+| REPLAYED | Treat the exact range as committed; do not apply it again. |
+| PENDING | Apply the identical recovered entries exactly once. |
+
+GAP, CONFLICT, COMMIT_UNKNOWN, malformed replies, timeouts, and I/O errors
+remain failures. The adapter never reconnects, reconstructs a WAL range,
+retries a batch, or advances Raft progress by itself.
 
 ## Outbox and TurboFlow
 
@@ -133,7 +143,6 @@ or WAL public APIs. It is a new optional target and a new state-machine factory.
 Existing callers remain unaffected unless they explicitly link and configure
 the Redis adapter.
 
-Before implementation, TurboDB must publish and install the atomic batch
-primitive. The installed package inspected during this design pass exports
-TurboDB::Redis but does not contain redis_lua_apply.h, so it is older than the
-single-record outbox feature and cannot support this adapter yet.
+TurboDB must provide the installed atomic batch and reconciliation headers.
+The selected user preset supplies a current package, and CMake fails fast if
+that package is absent or does not export the required target.

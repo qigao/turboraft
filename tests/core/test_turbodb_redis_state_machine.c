@@ -9,6 +9,7 @@
 
 #define TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS UINT64_C(5000000000)
 #define TR_TURBODB_REDIS_TEST_MAX_STEPS 16U
+#define TR_TURBODB_REDIS_TEST_MAX_COMMAND_BYTES 8192U
 
 static cflow_io_native_backend_kind tr_turbodb_redis_test_backend(void)
 {
@@ -89,6 +90,9 @@ spec("TurboDB Redis state machine")
                     SALTS_OK);
         check_equal(tr_turbodb_redis_state_machine_bind(
                         adapter, &state_machine), SALTS_OK);
+        check_equal(tr_turbodb_redis_state_machine_reconcile_batch(
+                        adapter, &entry, 1U, NULL),
+                    SALTS_EINVAL);
         check_equal(state_machine.apply_batch(state_machine.context, &entry, 1U),
                     SALTS_EINVAL);
         check_equal(tr_turbodb_redis_state_machine_close(adapter), SALTS_OK);
@@ -114,6 +118,7 @@ spec("TurboDB Redis state machine")
         tr_turbodb_redis_state_machine_t *adapter = NULL;
         tr_raft_state_machine_t state_machine = {0};
         tr_raft_entry_t entries[2] = {{0}};
+        tr_turbodb_redis_reconcile_result_t reconcile_result;
         redis_reply_t *reply;
         char *port_end = NULL;
         unsigned long port;
@@ -124,7 +129,8 @@ spec("TurboDB Redis state machine")
                    port <= UINT16_MAX);
         check_equal(redis_io_runtime_init(&runtime, &runtime_config), SALTS_OK);
         connection_config = (redis_cflow_open_config){
-            &runtime, "127.0.0.1", (uint16_t)port, 1U, 4096U, 64U, 4096U, 64U,
+            &runtime, "127.0.0.1", (uint16_t)port, 1U,
+            TR_TURBODB_REDIS_TEST_MAX_COMMAND_BYTES, 64U, 4096U, 64U,
             TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS};
         check_equal(redis_cflow_connection_open(&connection, &connection_config),
                     SALTS_OK);
@@ -158,10 +164,18 @@ spec("TurboDB Redis state machine")
                     SALTS_OK);
         check_equal(tr_turbodb_redis_state_machine_bind(adapter, &state_machine),
                     SALTS_OK);
+        check_equal(tr_turbodb_redis_state_machine_reconcile_batch(
+                        adapter, entries, 2U, &reconcile_result),
+                    SALTS_OK);
+        check_equal(reconcile_result, TR_TURBODB_REDIS_RECONCILE_PENDING);
         check_equal(state_machine.apply_batch(state_machine.context, entries, 2U),
                     SALTS_OK);
         check_equal(state_machine.apply_batch(state_machine.context, entries, 2U),
                     SALTS_OK);
+        check_equal(tr_turbodb_redis_state_machine_reconcile_batch(
+                        adapter, entries, 2U, &reconcile_result),
+                    SALTS_OK);
+        check_equal(reconcile_result, TR_TURBODB_REDIS_RECONCILE_REPLAYED);
         reply = tr_turbodb_redis_test_command(&connection, &runtime, 3,
                                               meta_command);
         check_not_null(reply);
@@ -175,6 +189,9 @@ spec("TurboDB Redis state machine")
 
         memcpy(entries[0].data, "bad", 3U);
         check_equal(state_machine.apply_batch(state_machine.context, entries, 2U),
+                    SALTS_EPROTO);
+        check_equal(tr_turbodb_redis_state_machine_reconcile_batch(
+                        adapter, entries, 2U, &reconcile_result),
                     SALTS_EPROTO);
         reply = tr_turbodb_redis_test_command(&connection, &runtime, 2,
                                               outbox_command);
