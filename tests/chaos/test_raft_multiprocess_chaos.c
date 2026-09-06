@@ -8,17 +8,79 @@
 #include <salts_process.h>
 #include <salts_thread.h>
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define TR_CHAOS_SEED_COUNT 4U
+#define TR_CHAOS_DEFAULT_FIRST_SEED 1U
+#define TR_CHAOS_DEFAULT_SEED_COUNT 4U
+#define TR_CHAOS_MAX_SEED_COUNT 16U
 #define TR_CHAOS_ROUND_COUNT 112U
 #define TR_CHAOS_IO_TIMEOUT_MS 5000U
 #define TR_CHAOS_MAX_TRACKED_INDEX 512U
 #define TR_CHAOS_MAX_TRACKED_TERM 256U
 #define TR_CHAOS_RECOVERY_ROUND_COUNT 48U
 #define TR_CHAOS_RECOVERY_DELIVERY_LIMIT 64U
+
+typedef struct tr_chaos_seed_range {
+    uint32_t first;
+    uint32_t count;
+} tr_chaos_seed_range_t;
+
+static int tr_chaos_parse_positive_u32(const char *text,
+                                       uint32_t default_value,
+                                       uint32_t maximum,
+                                       uint32_t *out_value)
+{
+    const char *cursor;
+    char *end = NULL;
+    unsigned long value;
+
+    if (out_value == NULL) return SALTS_EINVAL;
+    if (text == NULL) {
+        *out_value = default_value;
+        return SALTS_OK;
+    }
+    if (text[0] == '\0') return SALTS_EINVAL;
+    for (cursor = text; *cursor != '\0'; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') return SALTS_EINVAL;
+    }
+
+    errno = 0;
+    value = strtoul(text, &end, 10);
+    if (errno == ERANGE || value > maximum) return SALTS_ERANGE;
+    if (end == text || *end != '\0' || value == 0U) return SALTS_EINVAL;
+    *out_value = (uint32_t) value;
+    return SALTS_OK;
+}
+
+static int tr_chaos_parse_seed_range(const char *first_text,
+                                     const char *count_text,
+                                     tr_chaos_seed_range_t *out_range)
+{
+    tr_chaos_seed_range_t range;
+    int result;
+
+    if (out_range == NULL) return SALTS_EINVAL;
+    result = tr_chaos_parse_positive_u32(first_text,
+                                         TR_CHAOS_DEFAULT_FIRST_SEED,
+                                         UINT32_MAX, &range.first);
+    if (result != SALTS_OK) return result;
+    result = tr_chaos_parse_positive_u32(count_text,
+                                         TR_CHAOS_DEFAULT_SEED_COUNT,
+                                         TR_CHAOS_MAX_SEED_COUNT,
+                                         &range.count);
+    if (result != SALTS_OK) return result;
+    if (range.first > UINT32_MAX - (range.count - 1U)) return SALTS_ERANGE;
+    *out_range = range;
+    return SALTS_OK;
+}
+
+static tr_chaos_seed_range_t tr_chaos_configured_seed_range;
+static int tr_chaos_configuration_status = SALTS_EINVAL;
+static const char *tr_chaos_configured_first_text;
+static const char *tr_chaos_configured_count_text;
 
 typedef struct tr_chaos_response {
     int operation_result;
@@ -890,26 +952,121 @@ cleanup:
 
 spec("raft multi-process deterministic chaos")
 {
+    before_all()
+    {
+        tr_chaos_configured_first_text =
+            getenv("TURBORAFT_CHAOS_FIRST_SEED");
+        tr_chaos_configured_count_text =
+            getenv("TURBORAFT_CHAOS_SEED_COUNT");
+        tr_chaos_configuration_status = tr_chaos_parse_seed_range(
+            tr_chaos_configured_first_text, tr_chaos_configured_count_text,
+            &tr_chaos_configured_seed_range);
+        if (tr_chaos_configuration_status != SALTS_OK) {
+            fprintf(stderr,
+                    "invalid chaos seed range: first=%s count=%s status=%d\n",
+                    tr_chaos_configured_first_text != NULL
+                        ? tr_chaos_configured_first_text
+                        : "<default>",
+                    tr_chaos_configured_count_text != NULL
+                        ? tr_chaos_configured_count_text
+                        : "<default>",
+                    tr_chaos_configuration_status);
+        }
+        check_equal(tr_chaos_configuration_status, SALTS_OK);
+    }
+
+    it("uses the bounded default seed range when configuration is absent")
+    {
+        tr_chaos_seed_range_t range;
+
+        check_equal(tr_chaos_parse_seed_range(NULL, NULL, &range), SALTS_OK);
+        check_equal(range.first, UINT32_C(1));
+        check_equal(range.count, UINT32_C(4));
+    }
+
+    it("accepts an explicit seed range")
+    {
+        tr_chaos_seed_range_t range;
+
+        check_equal(tr_chaos_parse_seed_range("41", "2", &range), SALTS_OK);
+        check_equal(range.first, UINT32_C(41));
+        check_equal(range.count, UINT32_C(2));
+    }
+
+    it("rejects malformed and zero seed range values")
+    {
+        tr_chaos_seed_range_t range;
+
+        check_equal(tr_chaos_parse_seed_range("", "1", &range),
+                    SALTS_EINVAL);
+        check_equal(tr_chaos_parse_seed_range("+1", "1", &range),
+                    SALTS_EINVAL);
+        check_equal(tr_chaos_parse_seed_range("-1", "1", &range),
+                    SALTS_EINVAL);
+        check_equal(tr_chaos_parse_seed_range(" 1", "1", &range),
+                    SALTS_EINVAL);
+        check_equal(tr_chaos_parse_seed_range("1 ", "1", &range),
+                    SALTS_EINVAL);
+        check_equal(tr_chaos_parse_seed_range("0", "1", &range),
+                    SALTS_EINVAL);
+        check_equal(tr_chaos_parse_seed_range("1x", "1", &range),
+                    SALTS_EINVAL);
+        check_equal(tr_chaos_parse_seed_range("1", "0", &range),
+                    SALTS_EINVAL);
+    }
+
+    it("rejects seed counts and ranges beyond their hard bounds")
+    {
+        tr_chaos_seed_range_t range;
+
+        check_equal(tr_chaos_parse_seed_range("1", "17", &range),
+                    SALTS_ERANGE);
+        check_equal(tr_chaos_parse_seed_range("4294967296", "1", &range),
+                    SALTS_ERANGE);
+        check_equal(
+            tr_chaos_parse_seed_range("4294967295", "2", &range),
+            SALTS_ERANGE);
+    }
+
+    it("accepts the maximum bounded seed ranges")
+    {
+        tr_chaos_seed_range_t range;
+
+        check_equal(tr_chaos_parse_seed_range("1", "16", &range),
+                    SALTS_OK);
+        check_equal(range.first, UINT32_C(1));
+        check_equal(range.count, UINT32_C(16));
+        check_equal(
+            tr_chaos_parse_seed_range("4294967295", "1", &range),
+            SALTS_OK);
+        check_equal(range.first, UINT32_MAX);
+        check_equal(range.count, UINT32_C(1));
+    }
+
     it("stops a node when WAL reopen fails after prepare")
     {
         const char *program = getenv("TURBORAFT_CHAOS_NODE");
-        char *directory = tt_make_temp_dir("turboraft-backup-failure");
+        char *directory = NULL;
         tr_chaos_process_node_t node;
         tr_chaos_safety_t safety;
         tr_chaos_response_t response;
         salts_process_result_t process_result;
         uint8_t fail_reopen[4];
-        uint8_t *response_payload =
-            (uint8_t *) malloc(TR_CHAOS_MAX_RESPONSE_BYTES);
+        uint8_t *response_payload = NULL;
         int result = SALTS_EINVAL;
 
         memset(&node, 0, sizeof(node));
         memset(&safety, 0, sizeof(safety));
         memset(&response, 0, sizeof(response));
         memset(&process_result, 0, sizeof(process_result));
-        check_not_null(program);
-        check_not_null(directory);
-        check_not_null(response_payload);
+        if (tr_chaos_configuration_status == SALTS_OK) {
+            check_not_null(program);
+            directory = tt_make_temp_dir("turboraft-backup-failure");
+            response_payload =
+                (uint8_t *) malloc(TR_CHAOS_MAX_RESPONSE_BYTES);
+            check_not_null(directory);
+            check_not_null(response_payload);
+        }
         if (program != NULL && directory != NULL &&
             response_payload != NULL) {
             node.id = 1U;
@@ -951,17 +1108,32 @@ spec("raft multi-process deterministic chaos")
     it("preserves durable election and committed-log safety across faults")
     {
         const char *program = getenv("TURBORAFT_CHAOS_NODE");
-        char *directory = tt_make_temp_dir("turboraft-multiprocess-chaos");
+        char *directory = NULL;
+        uint32_t offset;
         uint32_t seed;
 
-        check_not_null(program);
-        check_not_null(directory);
-        for (seed = 1U; seed <= TR_CHAOS_SEED_COUNT; ++seed) {
-            check_equal(tr_chaos_run_seed(program, directory, seed),
-                         SALTS_OK);
-            fprintf(stderr, "chaos seed=%u completed\n", seed);
+        if (tr_chaos_configuration_status == SALTS_OK) {
+            check_not_null(program);
         }
-        check_equal(tt_remove_tree(directory), 0);
+        if (program != NULL && tr_chaos_configuration_status == SALTS_OK) {
+            directory = tt_make_temp_dir("turboraft-multiprocess-chaos");
+            check_not_null(directory);
+        }
+        if (directory != NULL) {
+            for (offset = 0U; offset < tr_chaos_configured_seed_range.count;
+                 ++offset) {
+                seed = tr_chaos_configured_seed_range.first + offset;
+                fprintf(stderr,
+                        "chaos seed=%u started "
+                        "reproduce_env=TURBORAFT_CHAOS_FIRST_SEED=%u,"
+                        "TURBORAFT_CHAOS_SEED_COUNT=1\n",
+                        seed, seed);
+                check_equal(tr_chaos_run_seed(program, directory, seed),
+                            SALTS_OK);
+                fprintf(stderr, "chaos seed=%u completed\n", seed);
+            }
+            check_equal(tt_remove_tree(directory), 0);
+        }
         free(directory);
     }
 }
