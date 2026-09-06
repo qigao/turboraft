@@ -10,6 +10,7 @@ extern "C" {
 #endif
 
 #define TR_RAFT_FLOWMQ_MAX_IDENTITY_SIZE 255U
+#define TR_RAFT_FLOWMQ_MAX_CERTIFICATES_PER_PEER 4U
 #define TR_RAFT_FLOWMQ_MAX_OUTBOUND_QUEUE_CAPACITY 65536U
 #define TR_RAFT_FLOWMQ_RECOMMENDED_SEND_BATCH_ITEMS 16U
 #define TR_RAFT_FLOWMQ_RECOMMENDED_RECEIVE_BATCH_ITEMS 64U
@@ -32,6 +33,14 @@ typedef struct tr_raft_flowmq_peer_config {
     const tr_raft_handshake_result_t *handshake;
     /** Exact ROUTER identity presented by this peer. */
     const char *identity;
+    /**
+     * Borrowed canonical SHA-256 fingerprints authorized for this identity.
+     * Service creation copies them into FlowMQ's immutable listener policy.
+     * A TLS listener requires 1..TR_RAFT_FLOWMQ_MAX_CERTIFICATES_PER_PEER;
+     * a plaintext listener requires NULL and zero.
+     */
+    const char *const *client_certificate_sha256;
+    size_t client_certificate_sha256_count;
     /** FlowMQ endpoint URI, for example tcp://127.0.0.1:9002. */
     const char *endpoint;
     tr_raft_flowmq_tls_config_t tls;
@@ -79,6 +88,7 @@ typedef struct tr_raft_flowmq_peer_service_status {
     size_t max_inflight_data_bytes;
     uint64_t frames_sent;
     uint64_t frames_received;
+    uint64_t tls_identity_rejections;
     int started;
     int stopping;
     int step_active;
@@ -89,6 +99,10 @@ typedef struct tr_raft_flowmq_peer_service_status {
  * Creates a caller-driven service with one ROUTER and one DEALER per peer.
  * No worker thread is created. Every lifecycle, enqueue, and step call belongs
  * to one owner thread. FlowMQ copies a frame before a successful send returns.
+ * TLS listeners require client certificates and an exact fingerprint policy
+ * for every peer. Configuration errors return SALTS_EINVAL/SALTS_ERANGE;
+ * allocation failures return SALTS_ENOMEM; incompatible negotiated protocol
+ * settings return SALTS_EPROTONOSUPPORT.
  */
 int tr_raft_flowmq_peer_service_create(
     const tr_raft_flowmq_peer_service_config_t *config,
@@ -115,6 +129,7 @@ int tr_raft_flowmq_peer_service_enqueue_payload(
     tr_raft_flowmq_peer_service_t *service,
     const tr_raft_transport_payload_t *payload);
 
+/** Copies status without advancing transport progress. */
 int tr_raft_flowmq_peer_service_get_status(
     const tr_raft_flowmq_peer_service_t *service,
     tr_raft_flowmq_peer_service_status_t *out_status);

@@ -9,7 +9,7 @@ endif()
 
 project(
   TurboRaft
-  VERSION 0.1.0
+  VERSION 0.2.0
   DESCRIPTION "Raft consensus library for the Salts ecosystem"
   HOMEPAGE_URL "https://github.com/qigao/turboraft"
   LANGUAGES C)
@@ -78,7 +78,7 @@ find_package(Salts CONFIG REQUIRED
              PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
 find_package(SaltsUtils CONFIG REQUIRED
              PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
-find_package(FlowMQ CONFIG REQUIRED
+find_package(FlowMQ 1.1.0 CONFIG REQUIRED
              PATHS "$ENV{FLOWMQ_ROOT}" NO_DEFAULT_PATH)
 find_package(OpenSSL REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
@@ -560,7 +560,7 @@ configure_package_config_file(
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/TurboRaftConfigVersion.cmake"
   VERSION "${PROJECT_VERSION}"
-  COMPATIBILITY SameMajorVersion)
+  COMPATIBILITY SameMinorVersion)
 
 install(
   TARGETS ${TURBORAFT_INSTALL_TARGETS}

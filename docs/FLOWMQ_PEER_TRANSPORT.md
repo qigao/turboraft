@@ -23,9 +23,11 @@ and transient disconnects preserve FIFO ownership.
 
 ROUTER identities are matched exactly against configured peer identities.
 Decoded frames additionally validate cluster ID, source node, destination node,
-wire version, and strictly increasing message ID. TLS endpoints configure CA,
-certificate, key, server name, and optional client-certificate enforcement
-through FlowMQ socket options before bind/connect.
+wire version, and strictly increasing message ID. A TLS listener requires mutual
+TLS and one to four canonical certificate SHA-256 fingerprints for every peer.
+Before a HELLO identity enters the ROUTER peer table, FlowMQ binds it to the
+verified client certificate. See [TLS identity binding](FLOWMQ_TLS_IDENTITY_BINDING.md)
+for configuration, ownership, migration, and rotation rules.
 
 The `turboraft.flowmq_peer_service` integration test drives two real services
 over loopback mTLS. Node 1 uses `node1-cert.pem` as its client credential, node
@@ -33,8 +35,11 @@ over loopback mTLS. Node 1 uses `node1-cert.pem` as its client credential, node
 `ca.pem`. The positive case verifies one exact Raft heartbeat crosses the wire.
 The negative case connects a CNet TLS probe without a client certificate to the
 same FlowMQ ROUTER and requires the explicit TLS read failure while verifying
-that no Raft callback runs. The fixture keys are test data and must not be used
-outside loopback tests.
+that no Raft callback runs. A second negative case completes mTLS with the
+CA-valid node 1 certificate while the listener binds node 1's HELLO identity to
+the node 2 fingerprint; it requires `tls_identity_rejections` to increase and no
+Raft callback to run. The fixture keys are test data and must not be used outside
+loopback tests.
 
 The caller stops producers first, calls `tr_raft_flowmq_peer_service_stop()`,
 then destroys the service. Sockets close DEALER-first, followed by ROUTER and
