@@ -18,23 +18,21 @@ struct tr_turbodb_redis_state_machine {
     size_t outbox_key_length;
 };
 
-static int tr_turbodb_redis_apply(void *context,
-                                  const tr_raft_entry_t *entries,
-                                  size_t entry_count)
+static int tr_turbodb_redis_request_prepare(
+    const tr_turbodb_redis_state_machine_t *state_machine,
+    const tr_raft_entry_t *entries,
+    size_t entry_count,
+    redis_lua_apply_batch_request *out_request,
+    redis_lua_apply_batch_record **out_records,
+    char **out_command_ids)
 {
-    tr_turbodb_redis_state_machine_t *state_machine =
-        (tr_turbodb_redis_state_machine_t *)context;
     redis_lua_apply_batch_record *records = NULL;
-    redis_lua_apply_batch_request request =
-        REDIS_LUA_APPLY_BATCH_REQUEST_INIT;
-    redis_lua_apply_batch operation = {0};
-    redis_lua_apply_batch_step step;
     char *command_ids = NULL;
     size_t index;
-    int result;
 
     if (state_machine == NULL || entries == NULL || entry_count == 0U ||
-        entry_count > state_machine->config.max_batch_entries)
+        entry_count > state_machine->config.max_batch_entries ||
+        out_request == NULL || out_records == NULL || out_command_ids == NULL)
         return SALTS_EINVAL;
     records = (redis_lua_apply_batch_record *)calloc(entry_count,
                                                       sizeof(*records));
@@ -52,17 +50,13 @@ static int tr_turbodb_redis_apply(void *context,
 
         if (entries[index].command_id == 0U ||
             entries[index].data_length > TR_RAFT_MAX_ENTRY_BYTES) {
-            free(command_ids);
-            free(records);
-            return SALTS_EINVAL;
+            goto invalid;
         }
         written = snprintf(command_id, TR_TURBODB_REDIS_COMMAND_ID_TEXT_BYTES,
                            "%" PRIu64, entries[index].command_id);
         if (written < 0 ||
             (size_t)written >= TR_TURBODB_REDIS_COMMAND_ID_TEXT_BYTES) {
-            free(command_ids);
-            free(records);
-            return SALTS_ERANGE;
+            goto range;
         }
         records[index].index = entries[index].index;
         records[index].term = entries[index].term;
@@ -71,23 +65,37 @@ static int tr_turbodb_redis_apply(void *context,
         records[index].payload = (const char *)entries[index].data;
         records[index].payload_length = entries[index].data_length;
     }
-    request.metadata_key = state_machine->config.metadata_key;
-    request.metadata_key_length = state_machine->metadata_key_length;
-    request.journal_key = state_machine->config.journal_key;
-    request.journal_key_length = state_machine->journal_key_length;
-    request.identity_key = state_machine->config.identity_key;
-    request.identity_key_length = state_machine->identity_key_length;
-    request.outbox_key = state_machine->config.outbox_key;
-    request.outbox_key_length = state_machine->outbox_key_length;
-    request.records = records;
-    request.record_count = entry_count;
-    result = redis_lua_apply_batch_open(state_machine->config.connection,
-                                        &request, &operation);
+    *out_request = (redis_lua_apply_batch_request){
+        state_machine->config.metadata_key, state_machine->metadata_key_length,
+        state_machine->config.journal_key, state_machine->journal_key_length,
+        state_machine->config.identity_key, state_machine->identity_key_length,
+        state_machine->config.outbox_key, state_machine->outbox_key_length,
+        records, entry_count};
+    *out_records = records;
+    *out_command_ids = command_ids;
+    return SALTS_OK;
+
+range:
     free(command_ids);
     free(records);
-    if (result != SALTS_OK) return result;
+    return SALTS_ERANGE;
+invalid:
+    free(command_ids);
+    free(records);
+    return SALTS_EINVAL;
+}
+
+static int tr_turbodb_redis_operation_complete(
+    const tr_turbodb_redis_state_machine_t *state_machine,
+    redis_lua_apply_batch *operation,
+    redis_lua_apply_receipt *out_receipt)
+{
+    redis_lua_apply_batch_step step = REDIS_LUA_APPLY_BATCH_STEP_INIT;
+    size_t index;
+    int result = SALTS_ETIMEDOUT;
+
     for (index = 0U; index < state_machine->config.max_wait_steps; ++index) {
-        step = redis_lua_apply_batch_next(&operation);
+        step = redis_lua_apply_batch_next(operation);
         if (step.kind == REDIS_LUA_APPLY_BATCH_WAIT) {
             result = redis_io_runtime_wait_idle(
                 state_machine->config.io_runtime,
@@ -95,21 +103,63 @@ static int tr_turbodb_redis_apply(void *context,
             if (result != SALTS_OK) break;
             continue;
         }
-        result = step.kind == REDIS_LUA_APPLY_BATCH_DONE &&
-                         (step.receipt.kind == REDIS_LUA_APPLY_APPLIED ||
-                          step.receipt.kind == REDIS_LUA_APPLY_REPLAYED)
-                     ? SALTS_OK
-                     : step.receipt.status != SALTS_OK
-                         ? step.receipt.status
-                         : SALTS_EPROTO;
+        if (step.kind == REDIS_LUA_APPLY_BATCH_DONE) {
+            *out_receipt = step.receipt;
+            result = SALTS_OK;
+        } else {
+            result = step.receipt.status != SALTS_OK ? step.receipt.status
+                                                      : SALTS_EPROTO;
+        }
         break;
     }
-    if (index == state_machine->config.max_wait_steps) result = SALTS_ETIMEDOUT;
-    {
-        int destroy_result = redis_lua_apply_batch_destroy(&operation);
-        if (result == SALTS_OK) result = destroy_result;
-    }
     return result;
+}
+
+static int tr_turbodb_redis_execute(
+    const tr_turbodb_redis_state_machine_t *state_machine,
+    const redis_lua_apply_batch_request *request,
+    int reconcile,
+    redis_lua_apply_receipt *out_receipt)
+{
+    redis_lua_apply_batch operation = {0};
+    int result;
+    int destroy_result;
+
+    result = reconcile
+                 ? redis_lua_apply_batch_reconcile_open(
+                       state_machine->config.connection, request, &operation)
+                 : redis_lua_apply_batch_open(state_machine->config.connection,
+                                              request, &operation);
+    if (result != SALTS_OK) return result;
+    result = tr_turbodb_redis_operation_complete(state_machine, &operation,
+                                                  out_receipt);
+    destroy_result = redis_lua_apply_batch_destroy(&operation);
+    return result == SALTS_OK ? destroy_result : result;
+}
+
+static int tr_turbodb_redis_apply(void *context,
+                                  const tr_raft_entry_t *entries,
+                                  size_t entry_count)
+{
+    tr_turbodb_redis_state_machine_t *state_machine =
+        (tr_turbodb_redis_state_machine_t *)context;
+    redis_lua_apply_batch_request request = REDIS_LUA_APPLY_BATCH_REQUEST_INIT;
+    redis_lua_apply_batch_record *records = NULL;
+    redis_lua_apply_receipt receipt = {0};
+    char *command_ids = NULL;
+    int result;
+
+    result = tr_turbodb_redis_request_prepare(state_machine, entries, entry_count,
+                                              &request, &records, &command_ids);
+    if (result != SALTS_OK) return result;
+    result = tr_turbodb_redis_execute(state_machine, &request, 0, &receipt);
+    free(command_ids);
+    free(records);
+    if (result != SALTS_OK) return result;
+    if (receipt.kind == REDIS_LUA_APPLY_APPLIED ||
+        receipt.kind == REDIS_LUA_APPLY_REPLAYED)
+        return SALTS_OK;
+    return receipt.status != SALTS_OK ? receipt.status : SALTS_EPROTO;
 }
 
 int tr_turbodb_redis_state_machine_open(
@@ -150,6 +200,37 @@ int tr_turbodb_redis_state_machine_close(
     if (state_machine == NULL) return SALTS_EINVAL;
     free(state_machine);
     return SALTS_OK;
+}
+
+int tr_turbodb_redis_state_machine_reconcile_batch(
+    tr_turbodb_redis_state_machine_t *state_machine,
+    const tr_raft_entry_t *entries,
+    size_t entry_count,
+    tr_turbodb_redis_reconcile_result_t *out_result)
+{
+    redis_lua_apply_batch_request request = REDIS_LUA_APPLY_BATCH_REQUEST_INIT;
+    redis_lua_apply_batch_record *records = NULL;
+    redis_lua_apply_receipt receipt = {0};
+    char *command_ids = NULL;
+    int result;
+
+    if (out_result == NULL) return SALTS_EINVAL;
+    result = tr_turbodb_redis_request_prepare(state_machine, entries, entry_count,
+                                              &request, &records, &command_ids);
+    if (result != SALTS_OK) return result;
+    result = tr_turbodb_redis_execute(state_machine, &request, 1, &receipt);
+    free(command_ids);
+    free(records);
+    if (result != SALTS_OK) return result;
+    if (receipt.kind == REDIS_LUA_APPLY_REPLAYED) {
+        *out_result = TR_TURBODB_REDIS_RECONCILE_REPLAYED;
+        return SALTS_OK;
+    }
+    if (receipt.kind == REDIS_LUA_APPLY_PENDING) {
+        *out_result = TR_TURBODB_REDIS_RECONCILE_PENDING;
+        return SALTS_OK;
+    }
+    return receipt.status != SALTS_OK ? receipt.status : SALTS_EPROTO;
 }
 
 int tr_turbodb_redis_state_machine_bind(
