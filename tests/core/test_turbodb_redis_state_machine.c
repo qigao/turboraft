@@ -59,6 +59,49 @@ static redis_reply_t *tr_turbodb_redis_test_command(
     return NULL;
 }
 
+static int tr_turbodb_redis_test_open_connection(
+    redis_io_runtime *runtime, redis_cflow_connection *connection,
+    const char *port_text)
+{
+    redis_io_runtime_config runtime_config = {
+        tr_turbodb_redis_test_backend(), 1U, 1U};
+    redis_cflow_open_config connection_config;
+    redis_cflow_connect_step connect_step;
+    char *port_end = NULL;
+    unsigned long port;
+
+    if (port_text == NULL || port_text[0] == '\0') return SALTS_EINVAL;
+    port = strtoul(port_text, &port_end, 10);
+    if (port_end == port_text || *port_end != '\0' || port == 0U ||
+        port > UINT16_MAX)
+        return SALTS_EINVAL;
+    if (redis_io_runtime_init(runtime, &runtime_config) != SALTS_OK)
+        return SALTS_EIO;
+    connection_config = (redis_cflow_open_config){
+        runtime, "127.0.0.1", (uint16_t)port, 1U,
+        TR_TURBODB_REDIS_TEST_MAX_COMMAND_BYTES, 64U, 4096U, 64U,
+        TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS};
+    if (redis_cflow_connection_open(connection, &connection_config) != SALTS_OK)
+        return SALTS_EIO;
+    connect_step = redis_cflow_connection_connect_next(connection);
+    if (connect_step.kind != REDIS_CFLOW_CONNECT_WAIT ||
+        redis_io_runtime_wait_idle(runtime,
+                                   TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS) != SALTS_OK)
+        return SALTS_EIO;
+    connect_step = redis_cflow_connection_connect_next(connection);
+    return connect_step.kind == REDIS_CFLOW_CONNECT_DONE ? SALTS_OK : SALTS_EIO;
+}
+
+static tr_turbodb_redis_state_machine_config_t
+tr_turbodb_redis_test_config(redis_cflow_connection *connection,
+                             redis_io_runtime *runtime)
+{
+    return (tr_turbodb_redis_state_machine_config_t){
+        connection, runtime, TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS, 16U, 2U,
+        "raft:{orders}:meta", "raft:{orders}:journal",
+        "raft:{orders}:identity", "raft:{orders}:outbox"};
+}
+
 spec("TurboDB Redis state machine")
 {
     it("rejects an incomplete configuration before constructing an adapter")
@@ -91,11 +134,18 @@ spec("TurboDB Redis state machine")
         check_equal(tr_turbodb_redis_state_machine_bind(
                         adapter, &state_machine), SALTS_OK);
         check_equal(tr_turbodb_redis_state_machine_reconcile_batch(
-                        adapter, &entry, 1U, NULL),
-                    SALTS_EINVAL);
+                        adapter, &entry, 1U, NULL), SALTS_EINVAL);
         check_equal(state_machine.apply_batch(state_machine.context, &entry, 1U),
                     SALTS_EINVAL);
         check_equal(tr_turbodb_redis_state_machine_close(adapter), SALTS_OK);
+    }
+
+    it("rejects an invalid snapshot compaction request before I/O")
+    {
+        tr_turbodb_redis_state_machine_t *adapter = NULL;
+
+        check_equal(tr_turbodb_redis_state_machine_compact_snapshot(
+                        adapter, 0U, 1U, NULL), SALTS_EINVAL);
     }
 
     it("commits, replays, and rejects a conflicting Raft batch against Redis")
@@ -109,47 +159,22 @@ spec("TurboDB Redis state machine")
         static const char *outbox_command[] = {
             "XLEN", "raft:{orders}:outbox"};
         redis_io_runtime runtime = {0};
-        redis_io_runtime_config runtime_config = {
-            tr_turbodb_redis_test_backend(), 1U, 1U};
         redis_cflow_connection connection = {0};
-        redis_cflow_open_config connection_config;
-        redis_cflow_connect_step connect_step;
         tr_turbodb_redis_state_machine_config_t config;
         tr_turbodb_redis_state_machine_t *adapter = NULL;
         tr_raft_state_machine_t state_machine = {0};
         tr_raft_entry_t entries[2] = {{0}};
         tr_turbodb_redis_reconcile_result_t reconcile_result;
         redis_reply_t *reply;
-        char *port_end = NULL;
-        unsigned long port;
 
         if (port_text == NULL || port_text[0] == '\0') return;
-        port = strtoul(port_text, &port_end, 10);
-        check_true(port_end != port_text && *port_end == '\0' && port > 0U &&
-                   port <= UINT16_MAX);
-        check_equal(redis_io_runtime_init(&runtime, &runtime_config), SALTS_OK);
-        connection_config = (redis_cflow_open_config){
-            &runtime, "127.0.0.1", (uint16_t)port, 1U,
-            TR_TURBODB_REDIS_TEST_MAX_COMMAND_BYTES, 64U, 4096U, 64U,
-            TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS};
-        check_equal(redis_cflow_connection_open(&connection, &connection_config),
-                    SALTS_OK);
-        connect_step = redis_cflow_connection_connect_next(&connection);
-        check_equal(connect_step.kind, REDIS_CFLOW_CONNECT_WAIT);
-        check_equal(redis_io_runtime_wait_idle(
-                        &runtime, TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS),
-                    SALTS_OK);
-        connect_step = redis_cflow_connection_connect_next(&connection);
-        check_equal(connect_step.kind, REDIS_CFLOW_CONNECT_DONE);
+        check_equal(tr_turbodb_redis_test_open_connection(
+                        &runtime, &connection, port_text), SALTS_OK);
         reply = tr_turbodb_redis_test_command(&connection, &runtime, 5,
                                               delete_command);
         check_not_null(reply);
         redis_reply_free(reply);
-
-        config = (tr_turbodb_redis_state_machine_config_t){
-            &connection, &runtime, TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS, 16U,
-            2U, "raft:{orders}:meta", "raft:{orders}:journal",
-            "raft:{orders}:identity", "raft:{orders}:outbox"};
+        config = tr_turbodb_redis_test_config(&connection, &runtime);
         entries[0].index = 1U;
         entries[0].term = 1U;
         entries[0].command_id = 101U;
@@ -165,16 +190,14 @@ spec("TurboDB Redis state machine")
         check_equal(tr_turbodb_redis_state_machine_bind(adapter, &state_machine),
                     SALTS_OK);
         check_equal(tr_turbodb_redis_state_machine_reconcile_batch(
-                        adapter, entries, 2U, &reconcile_result),
-                    SALTS_OK);
+                        adapter, entries, 2U, &reconcile_result), SALTS_OK);
         check_equal(reconcile_result, TR_TURBODB_REDIS_RECONCILE_PENDING);
         check_equal(state_machine.apply_batch(state_machine.context, entries, 2U),
                     SALTS_OK);
         check_equal(state_machine.apply_batch(state_machine.context, entries, 2U),
                     SALTS_OK);
         check_equal(tr_turbodb_redis_state_machine_reconcile_batch(
-                        adapter, entries, 2U, &reconcile_result),
-                    SALTS_OK);
+                        adapter, entries, 2U, &reconcile_result), SALTS_OK);
         check_equal(reconcile_result, TR_TURBODB_REDIS_RECONCILE_REPLAYED);
         reply = tr_turbodb_redis_test_command(&connection, &runtime, 3,
                                               meta_command);
@@ -186,18 +209,81 @@ spec("TurboDB Redis state machine")
         check_not_null(reply);
         check_equal(reply->integer, 2);
         redis_reply_free(reply);
-
         memcpy(entries[0].data, "bad", 3U);
         check_equal(state_machine.apply_batch(state_machine.context, entries, 2U),
                     SALTS_EPROTO);
         check_equal(tr_turbodb_redis_state_machine_reconcile_batch(
-                        adapter, entries, 2U, &reconcile_result),
-                    SALTS_EPROTO);
+                        adapter, entries, 2U, &reconcile_result), SALTS_EPROTO);
         reply = tr_turbodb_redis_test_command(&connection, &runtime, 2,
                                               outbox_command);
         check_not_null(reply);
         check_equal(reply->integer, 2);
         redis_reply_free(reply);
+        check_equal(tr_turbodb_redis_state_machine_close(adapter), SALTS_OK);
+        check_equal(redis_cflow_connection_destroy(&connection), SALTS_OK);
+        check_equal(redis_io_runtime_close(&runtime), SALTS_OK);
+        check_equal(redis_io_runtime_destroy(&runtime), SALTS_OK);
+    }
+
+    it("compacts a durable journal and replays the same snapshot request")
+    {
+        const char *port_text = getenv("TURBODB_REDIS_TEST_PORT");
+        static const char *delete_command[] = {
+            "DEL", "raft:{orders}:meta", "raft:{orders}:journal",
+            "raft:{orders}:identity", "raft:{orders}:outbox"};
+        static const char *seed_command[] = {
+            "HSET", "raft:{orders}:meta", "applied_index", "41", "term", "7",
+            "command_id", "4101", "journal_floor", "41"};
+        static const char *floor_command[] = {
+            "HGET", "raft:{orders}:meta", "journal_floor"};
+        redis_io_runtime runtime = {0};
+        redis_cflow_connection connection = {0};
+        tr_turbodb_redis_state_machine_config_t config;
+        tr_turbodb_redis_state_machine_t *adapter = NULL;
+        tr_raft_state_machine_t state_machine = {0};
+        tr_raft_entry_t entries[2] = {{0}};
+        tr_turbodb_redis_compact_result_t compact_result;
+        redis_reply_t *reply;
+
+        if (port_text == NULL || port_text[0] == '\0') return;
+        check_equal(tr_turbodb_redis_test_open_connection(
+                        &runtime, &connection, port_text), SALTS_OK);
+        reply = tr_turbodb_redis_test_command(&connection, &runtime, 5,
+                                              delete_command);
+        check_not_null(reply);
+        redis_reply_free(reply);
+        reply = tr_turbodb_redis_test_command(&connection, &runtime, 10,
+                                              seed_command);
+        check_not_null(reply);
+        redis_reply_free(reply);
+        config = tr_turbodb_redis_test_config(&connection, &runtime);
+        entries[0].index = 42U;
+        entries[0].term = 123456U;
+        entries[0].command_id = 4201U;
+        entries[0].data_length = 5U;
+        memcpy(entries[0].data, "first", 5U);
+        entries[1].index = 43U;
+        entries[1].term = 123456U;
+        entries[1].command_id = 4301U;
+        entries[1].data_length = 6U;
+        memcpy(entries[1].data, "second", 6U);
+        check_equal(tr_turbodb_redis_state_machine_open(&config, &adapter),
+                    SALTS_OK);
+        check_equal(tr_turbodb_redis_state_machine_bind(adapter, &state_machine),
+                    SALTS_OK);
+        check_equal(state_machine.apply_batch(state_machine.context, entries, 2U),
+                    SALTS_OK);
+        check_equal(tr_turbodb_redis_state_machine_compact_snapshot(
+                        adapter, 43U, 123456U, &compact_result), SALTS_OK);
+        check_equal(compact_result, TR_TURBODB_REDIS_COMPACTED);
+        reply = tr_turbodb_redis_test_command(&connection, &runtime, 3,
+                                              floor_command);
+        check_not_null(reply);
+        check_equal(reply->str, "43", 2U);
+        redis_reply_free(reply);
+        check_equal(tr_turbodb_redis_state_machine_compact_snapshot(
+                        adapter, 43U, 123456U, &compact_result), SALTS_OK);
+        check_equal(compact_result, TR_TURBODB_REDIS_COMPACT_REPLAYED);
         check_equal(tr_turbodb_redis_state_machine_close(adapter), SALTS_OK);
         check_equal(redis_cflow_connection_destroy(&connection), SALTS_OK);
         check_equal(redis_io_runtime_close(&runtime), SALTS_OK);
