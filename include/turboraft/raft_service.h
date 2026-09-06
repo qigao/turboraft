@@ -66,7 +66,15 @@ typedef struct tr_raft_service_status {
     tr_raft_status_t core;
 } tr_raft_service_status_t;
 
-/* Service is single-owner; callers must serialize every operation. */
+/*
+ * Service is single-owner; callers must serialize every operation.
+ *
+ * When transport enqueue first returns SALTS_ENOSPC, Service retains the
+ * unsent suffix of that Ready in bounded local storage and returns success for
+ * the accepted operation. Before consuming a later operation it retries that
+ * suffix; if the transport is still full, the later operation returns
+ * SALTS_ENOSPC without being consumed. Other transport errors fault Service.
+ */
 int tr_raft_service_create(
     const tr_raft_service_config_t *config,
     tr_raft_service_t **out_service);
@@ -149,7 +157,8 @@ int tr_raft_service_snapshot_complete_callback(void *context,
 
 /*
  * Replaces Core from an authoritative recovery configuration. A successful
- * reload clears a prior Service fault; failure leaves Service faulted.
+ * reload clears a prior Service fault and discards any transport suffix from
+ * the replaced Core; failure leaves Service faulted.
  */
 int tr_raft_service_reload(
     tr_raft_service_t *service,

@@ -43,6 +43,11 @@ pwsh -File .\formal\verify_spin.ps1 -Model snapshot_meta.pml
 5. Snapshot point 只在 `applied == commit` 且没有 outstanding Ready 时产生。
 6. Snapshot metadata 的 configuration 必须是该 boundary 的 committed configuration。
 
+第 4 条是直接使用 Runtime 的契约。Service 在 Runtime 与实际 transport 之间增加了
+一个固定容量适配层：实际 transport 返回 `SALTS_ENOSPC` 时，仅暂存当前 Ready
+尚未接受的后缀并让 Runtime 完成；在后缀排空前，Service 不向 Core 提交新输入。
+其他 transport 错误仍按第 4 条 fail fast。该适配不改变 Runtime 的公开语义。
+
 这些契约与现有 `tr_raft_runtime_process()`、`tr_raft_core_snapshot_point()`
 和 `tr_raft_core_compact()` 的边界对应。模型不是生产代码的替代品；C 单元测试、
 chaos、fuzzing 和恢复测试仍然必须运行。
