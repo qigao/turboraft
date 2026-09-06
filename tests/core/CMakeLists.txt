@@ -382,19 +382,10 @@ if(TARGET turboraft_flowmq)
   add_executable(turboraft_flowmq_peer_service_tests
                  test_raft_flowmq_peer_service.c)
   target_link_libraries(turboraft_flowmq_peer_service_tests
-                        PRIVATE TurboRaft::FlowMQ Salts::TinyTest)
-  if(WIN32)
-    add_custom_command(
-      TARGET turboraft_flowmq_peer_service_tests
-      POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              $<TARGET_FILE:Salts::Core>
-              $<TARGET_FILE:Salts::JsonParser>
-              $<TARGET_FILE:Salts::DataBind>
-              $<TARGET_FILE:Salts::CNet>
-              $<TARGET_FILE:FlowMQ::FlowMQ>
-              $<TARGET_FILE_DIR:turboraft_flowmq_peer_service_tests>)
-  endif()
+                        PRIVATE TurboRaft::FlowMQ Salts::CNet Salts::TinyTest)
+  target_compile_definitions(
+    turboraft_flowmq_peer_service_tests
+    PRIVATE TURBORAFT_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
   add_test(NAME turboraft.flowmq_peer_service
            COMMAND turboraft_flowmq_peer_service_tests)
   set_tests_properties(turboraft.flowmq_peer_service PROPERTIES TIMEOUT 30)
