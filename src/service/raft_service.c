@@ -13,6 +13,8 @@ struct tr_raft_service {
     tr_raft_state_machine_t state_machine;
     tr_raft_snapshot_policy_t snapshot_policy;
     uint8_t *snapshot_buffer;
+    tr_raft_snapshot_point_t pending_snapshot;
+    bool journal_compaction_pending;
     tr_raft_message_t messages[TR_RAFT_MAX_VOTERS];
     tr_raft_runtime_result_t last_runtime_result;
     tr_raft_read_state_t read_state;
@@ -52,7 +54,8 @@ static bool tr_service_snapshot_policy_disabled(
     return policy->applied_entry_threshold == 0U &&
            policy->max_snapshot_bytes == 0U && policy->create == NULL &&
            policy->create_context == NULL && policy->store == NULL &&
-           policy->store_context == NULL;
+           policy->store_context == NULL && policy->journal_compact == NULL &&
+           policy->journal_compact_context == NULL;
 }
 
 static int tr_service_snapshot_policy_validate(
@@ -69,9 +72,31 @@ static int tr_service_snapshot_policy_validate(
     if (policy->applied_entry_threshold == 0U ||
         policy->applied_entry_threshold > max_log_entries ||
         policy->max_snapshot_bytes == 0U || policy->create == NULL ||
-        policy->store == NULL) {
+        policy->store == NULL ||
+        (policy->journal_compact == NULL &&
+         policy->journal_compact_context != NULL)) {
         return SALTS_EINVAL;
     }
+    return SALTS_OK;
+}
+
+static int tr_service_finish_journal_compaction(
+    tr_raft_service_t *service)
+{
+    int result;
+
+    result = service->snapshot_policy.journal_compact(
+        service->snapshot_policy.journal_compact_context,
+        service->pending_snapshot.index, service->pending_snapshot.term);
+    if (result != SALTS_OK) {
+        return result == SALTS_EIO ? result : tr_service_fault(service, result);
+    }
+    result = tr_raft_core_compact(service->core, &service->pending_snapshot);
+    if (result != SALTS_OK) {
+        return tr_service_fault(service, result);
+    }
+    memset(&service->pending_snapshot, 0, sizeof(service->pending_snapshot));
+    service->journal_compaction_pending = false;
     return SALTS_OK;
 }
 
@@ -84,6 +109,9 @@ static int tr_service_snapshot(tr_raft_service_t *service, bool force)
 
     if (service->snapshot_policy.applied_entry_threshold == 0U) {
         return force ? SALTS_EPROTONOSUPPORT : SALTS_OK;
+    }
+    if (service->journal_compaction_pending) {
+        return tr_service_finish_journal_compaction(service);
     }
     result = tr_raft_core_status(service->core, &status);
     if (result != SALTS_OK) {
@@ -116,6 +144,11 @@ static int tr_service_snapshot(tr_raft_service_t *service, bool force)
     if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
+    if (service->snapshot_policy.journal_compact != NULL) {
+        service->pending_snapshot = point;
+        service->journal_compaction_pending = true;
+        return tr_service_finish_journal_compaction(service);
+    }
     result = tr_raft_core_compact(service->core, &point);
     if (result != SALTS_OK) {
         return tr_service_fault(service, result);
@@ -130,7 +163,9 @@ static int tr_service_process_ready(
     int result;
 
     if (!tr_service_ready_has_effects(ready)) {
-        return SALTS_OK;
+        return service->journal_compaction_pending
+                   ? tr_service_snapshot(service, false)
+                   : SALTS_OK;
     }
     result = tr_raft_runtime_process(
         &service->runtime, ready, &service->last_runtime_result);

@@ -24,6 +24,17 @@ typedef int (*tr_raft_snapshot_store_fn)(
     const uint8_t *data,
     size_t size);
 
+/**
+ * Compacts a journal derived from a snapshot after store has made that
+ * snapshot durable. SALTS_EIO keeps the snapshot pending for a retry of this
+ * exact index and term; every other failure faults the Service without
+ * compacting Core.
+ */
+typedef int (*tr_raft_snapshot_journal_compact_fn)(
+    void *context,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term);
+
 typedef struct tr_raft_snapshot_policy {
     tr_raft_index_t applied_entry_threshold;
     size_t max_snapshot_bytes;
@@ -31,6 +42,9 @@ typedef struct tr_raft_snapshot_policy {
     void *create_context;
     tr_raft_snapshot_store_fn store;
     void *store_context;
+    /* Optional derived-journal compaction; context is borrowed by Service. */
+    tr_raft_snapshot_journal_compact_fn journal_compact;
+    void *journal_compact_context;
 } tr_raft_snapshot_policy_t;
 
 typedef struct tr_raft_service_config {
