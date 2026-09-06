@@ -529,6 +529,9 @@ endif()
 if(TARGET turboraft_control_plane)
   list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_control_plane)
 endif()
+if(TARGET turboraft_turbodb_redis_state_machine)
+  list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_turbodb_redis_state_machine)
+endif()
 list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_text_syntax
      turboraft_text_query_service turboraft_text_protocol_debug
      turboraft_replay_driver)
@@ -544,6 +547,10 @@ endif()
 set(TURBORAFT_HAVE_FLOWMQ OFF)
 if(TARGET turboraft_flowmq)
   set(TURBORAFT_HAVE_FLOWMQ ON)
+endif()
+set(TURBORAFT_HAVE_TURBODB_REDIS_STATE_MACHINE OFF)
+if(TARGET turboraft_turbodb_redis_state_machine)
+  set(TURBORAFT_HAVE_TURBODB_REDIS_STATE_MACHINE ON)
 endif()
 
 configure_package_config_file(

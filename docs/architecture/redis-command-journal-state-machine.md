@@ -127,11 +127,17 @@ its lower-bound metadata update.
 
 ## Build and Deployment
 
-The adapter is opt-in. Enabling it requires a current TurboDB installation
-containing the batch header, library target, and Redis client dependency. CMake
-finds TurboDB directly and fails configuration when the option is enabled but
-the package is missing. No compatibility copy, fallback implementation, or DLL
-staging rule is added.
+The adapter is opt-in. When enabled, the installed TurboRaft package exports
+`TurboRaft::TurboDbRedisStateMachine`. A consumer requests it explicitly:
+
+    find_package(TurboRaft CONFIG REQUIRED COMPONENTS TurboDbRedisStateMachine)
+    target_link_libraries(app PRIVATE TurboRaft::TurboDbRedisStateMachine)
+
+That component requires a current TurboDB installation containing the batch
+header, library target, and Redis client dependency. The package config finds
+TurboDB only through `TURBODB_ROOT` and fails configuration if that root is
+missing or invalid. Consumers that request only Core do not need `TURBODB_ROOT`.
+No compatibility copy, fallback implementation, or DLL staging rule is added.
 
 The user preset supplies TURBODB_ROOT and adds TURBODB_ROOT/bin to PATH so
 CTest can load the DLLs from the selected package prefix.
