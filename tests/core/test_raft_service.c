@@ -156,6 +156,7 @@ spec("raft service")
             tr_raft_read_state_t read_state;
 
             check_equal(tr_raft_service_read_index(service, 21U), SALTS_OK);
+            check_equal(tr_raft_service_prepare_backup(service), SALTS_EBUSY);
             check_equal(tr_raft_service_take_read_state(service, &read_state),
                          SALTS_OK);
             check_equal(read_state.context_id, 21U);
@@ -196,6 +197,44 @@ spec("raft service")
         check(status.faulted);
         check_equal(status.cause, SALTS_EPIPE);
         check_equal(tr_raft_service_tick(service, &tick), SALTS_EPROTO);
+
+        tr_raft_service_destroy(service);
+    }
+
+    it("quiesces mutation until a reopened WAL storage is rebound")
+    {
+        const tr_raft_node_id_t voters[] = {1U};
+        tr_raft_service_config_t config;
+        tr_raft_service_t *service = NULL;
+        tr_raft_service_status_t status;
+        tr_raft_storage_t incomplete_storage;
+        tr_raft_tick_t tick = {3U, 4U};
+        tr_raft_proposal_t proposal;
+        service_test_state_t state;
+
+        memset(&state, 0, sizeof(state));
+        memset(&incomplete_storage, 0, sizeof(incomplete_storage));
+        memset(&proposal, 0, sizeof(proposal));
+        service_configure(&config, &state, voters, 1U);
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+        check_equal(tr_raft_service_prepare_backup(service), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check(status.backup_prepared);
+        check_equal(tr_raft_service_prepare_backup(service), SALTS_EBUSY);
+        check_equal(tr_raft_service_tick(service, &tick), SALTS_EBUSY);
+        check_equal(tr_raft_service_propose(service, &proposal), SALTS_EBUSY);
+        check_equal(tr_raft_service_read_index(service, 1U), SALTS_EBUSY);
+        check_equal(tr_raft_service_poll(service), SALTS_EBUSY);
+        check_equal(tr_raft_service_trigger_snapshot(service), SALTS_EBUSY);
+        check_equal(tr_raft_service_reload(service, &config.core), SALTS_EBUSY);
+        check_equal(tr_raft_service_resume_backup(service, &incomplete_storage),
+                    SALTS_EINVAL);
+        check_equal(tr_raft_service_tick(service, &tick), SALTS_EBUSY);
+        check_equal(tr_raft_service_resume_backup(service, &config.storage),
+                    SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check(!status.backup_prepared);
+        check_equal(tr_raft_service_tick(service, &tick), SALTS_OK);
 
         tr_raft_service_destroy(service);
     }

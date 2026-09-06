@@ -14,8 +14,19 @@ the TurboRaft version, node ID, cluster ID, and backup time beside that set.
 
 Copying an active prefix is unsupported: a snapshot file may have reached disk
 before its referencing WAL transaction, or the final WAL frame may still be in
-flight. For online backup, first coordinate a Service pause and storage close
-at the owner-loop boundary.
+flight. For online backup, at the single Service owner-loop boundary:
+
+1. Stop ingress and call `tr_raft_service_prepare_backup()`. It returns
+   `SALTS_EBUSY` until no Ready, unread read state, or retrying journal
+   compaction remains.
+2. Close the caller-owned WAL storage, then copy every WAL and snapshot file
+   sharing the prefix as one set.
+3. Reopen the WAL and call `tr_raft_service_resume_backup()` with its fresh
+   `tr_raft_storage_t` adapter before restarting ingress.
+
+While prepared, Service rejects all state-advancing APIs with `SALTS_EBUSY`;
+read-only status, configuration, progress, and operation-status queries remain
+available. Service never closes, copies, or reopens caller-owned WAL files.
 
 ## Startup validation
 

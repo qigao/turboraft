@@ -260,6 +260,8 @@ spec("automatic snapshot policy")
         check_equal(capture.journal_compact_count, 1U);
         check_equal(status.core.log_base_index, 0U);
         check_false(status.faulted);
+        check(status.journal_compaction_pending);
+        check_equal(tr_raft_service_prepare_backup(service), SALTS_EBUSY);
         capture.journal_compact_result = SALTS_OK;
         check_equal(tr_raft_service_poll(service), SALTS_OK);
         check_equal(tr_raft_service_status(service, &status), SALTS_OK);
@@ -268,6 +270,7 @@ spec("automatic snapshot policy")
         check_equal(capture.journal_compact_count, 2U);
         check_equal(status.core.log_base_index, 2U);
         check_false(status.faulted);
+        check_false(status.journal_compaction_pending);
         tr_raft_service_destroy(service);
     }
 
