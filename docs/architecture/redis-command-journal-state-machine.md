@@ -140,8 +140,9 @@ boundary. The callback never trims the outbox Stream. If it returns
 `SALTS_EIO`, Service retains exactly one pending snapshot and later
 `poll`, `tick`, or `step` retries only that same `(index, term)` compaction.
 This covers an unknown Redis reply without creating or storing a second
-snapshot. Any other callback failure faults Service and leaves Core's live log
-prefix untrimmed.
+snapshot. The adapter deliberately owns no reconnect: its owner must restore
+the Redis connection before that retry can complete. Any other callback failure
+faults Service and leaves Core's live log prefix untrimmed.
 
 ## Build and Deployment
 
