@@ -20,6 +20,11 @@ typedef enum tr_turbodb_redis_reconcile_result {
     TR_TURBODB_REDIS_RECONCILE_PENDING
 } tr_turbodb_redis_reconcile_result_t;
 
+typedef enum tr_turbodb_redis_compact_result {
+    TR_TURBODB_REDIS_COMPACTED = 0,
+    TR_TURBODB_REDIS_COMPACT_REPLAYED
+} tr_turbodb_redis_compact_result_t;
+
 typedef struct tr_turbodb_redis_state_machine_config {
     /* Borrowed and driven synchronously by the Runtime owner thread. */
     redis_cflow_connection *connection;
@@ -38,34 +43,37 @@ int tr_turbodb_redis_state_machine_open(
     tr_turbodb_redis_state_machine_t **out_state_machine);
 int tr_turbodb_redis_state_machine_close(
     tr_turbodb_redis_state_machine_t *state_machine);
+
 /**
  * Verifies a Raft range after the caller has reconnected Redis and rebuilt the
- * exact range from WAL.
- *
- * @param state_machine Open adapter using the replacement Redis connection.
- * @param entries Exact, contiguous Raft entries retained by WAL recovery.
- * @param entry_count Number of entries, bounded by max_batch_entries.
- * @param out_result Receives REPLAYED or PENDING and must not be NULL.
- * @return SALTS_OK only when Redis verifies REPLAYED or PENDING. GAP,
- * CONFLICT, COMMIT_UNKNOWN, malformed replies, timeouts, and I/O errors are
- * returned as failures without modifying out_result.
- *
- * A PENDING result authorizes exactly one retry of the same entries through
- * the bound state-machine callback; no retry is authorized for any error.
- *
- * @code
- * tr_turbodb_redis_reconcile_result_t result;
- * if (tr_turbodb_redis_state_machine_reconcile_batch(adapter, entries, count,
- *                                                    &result) == SALTS_OK &&
- *     result == TR_TURBODB_REDIS_RECONCILE_PENDING)
- *     state_machine.apply_batch(state_machine.context, entries, count);
- * @endcode
+ * exact range from WAL. PENDING authorizes one retry through the bound
+ * state-machine callback; no error authorizes a retry.
  */
 int tr_turbodb_redis_state_machine_reconcile_batch(
     tr_turbodb_redis_state_machine_t *state_machine,
     const tr_raft_entry_t *entries,
     size_t entry_count,
     tr_turbodb_redis_reconcile_result_t *out_result);
+
+/**
+ * Compacts the durable Redis journal through a snapshot already made durable
+ * by the caller. Redis metadata is the sole source of the journal floor. A
+ * subsequent call returns REPLAYED once that floor has reached the snapshot
+ * index, including recovery after an unknown commit result.
+ *
+ * @param state_machine Open adapter driven by its owning Runtime thread.
+ * @param snapshot_index Index covered by the already durable snapshot.
+ * @param snapshot_term Term recorded for snapshot_index.
+ * @param out_result Receives COMPACTED or COMPACT_REPLAYED on success.
+ * @return SALTS_OK on a completed state transition; SALTS_EIO when Redis
+ *         cannot determine a read or commit result, after which the caller
+ *         may invoke this same request again; SALTS_EINVAL for invalid input.
+ */
+int tr_turbodb_redis_state_machine_compact_snapshot(
+    tr_turbodb_redis_state_machine_t *state_machine,
+    tr_raft_index_t snapshot_index, tr_raft_term_t snapshot_term,
+    tr_turbodb_redis_compact_result_t *out_result);
+
 int tr_turbodb_redis_state_machine_bind(
     tr_turbodb_redis_state_machine_t *state_machine,
     tr_raft_state_machine_t *out_state_machine);
