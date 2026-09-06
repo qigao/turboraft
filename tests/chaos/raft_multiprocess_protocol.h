@@ -16,8 +16,14 @@ typedef enum tr_chaos_command_kind {
     TR_CHAOS_COMMAND_STEP = 2,
     TR_CHAOS_COMMAND_PROPOSE = 3,
     TR_CHAOS_COMMAND_STATUS = 4,
-    TR_CHAOS_COMMAND_STOP = 5
+    TR_CHAOS_COMMAND_STOP = 5,
+    TR_CHAOS_COMMAND_BACKUP_HANDOFF = 6
 } tr_chaos_command_kind_t;
+
+typedef enum tr_chaos_backup_handoff_mode {
+    TR_CHAOS_BACKUP_HANDOFF_NORMAL = 0,
+    TR_CHAOS_BACKUP_HANDOFF_FAIL_REOPEN = 1
+} tr_chaos_backup_handoff_mode_t;
 
 static const uint8_t tr_chaos_command_magic[4] = {'T', 'R', 'C', 'Q'};
 static const uint8_t tr_chaos_response_magic[4] = {'T', 'R', 'C', 'R'};
