@@ -22,6 +22,14 @@ threading API. `TurboRaft::Service` applies the persistence-before-send and
 persistence-before-apply ordering around the core. WAL and snapshot storage use
 Salts filesystem/buffer primitives and report durability failures.
 
+Service treats `SALTS_ENOSPC` from a transport enqueue as bounded local
+backpressure rather than a permanent fault. It retains only the unsent suffix
+of the current Ready (at most `TR_RAFT_MAX_VOTERS` messages and
+`TR_RAFT_MAX_MEMBERS` snapshot requests) and admits no new Core input until that
+suffix drains. Already accepted messages are never replayed. A later owner call
+returns `SALTS_ENOSPC` without consuming its input while the transport remains
+full; every other transport error keeps the fail-fast Service fault behavior.
+
 ## Wire boundary
 
 `raft_transport.h` owns length-prefix framing, the validated current wire
@@ -60,5 +68,6 @@ bounded executor or mailbox; handlers never mutate Raft directly.
 4. Stop the CRPC/CHTTP server.
 5. Destroy transport adapters, snapshot state, service, and storage.
 
-Every capacity is explicit. Queue saturation is returned to the caller and is
-never converted into an unbounded allocation or silent drop.
+Every capacity is explicit. Queue saturation is either retained in the bounded
+Service Ready suffix or returned to the caller before consuming new input; it
+is never converted into an unbounded allocation or silent drop.

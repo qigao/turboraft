@@ -17,6 +17,12 @@ struct tr_raft_service {
     bool journal_compaction_pending;
     bool backup_prepared;
     tr_raft_message_t messages[TR_RAFT_MAX_VOTERS];
+    size_t pending_message_offset;
+    size_t pending_message_count;
+    tr_raft_snapshot_request_t pending_snapshot_requests[TR_RAFT_MAX_MEMBERS];
+    size_t pending_snapshot_request_offset;
+    size_t pending_snapshot_request_count;
+    bool transport_backpressured;
     tr_raft_runtime_result_t last_runtime_result;
     tr_raft_read_state_t read_state;
     bool read_state_available;
@@ -49,12 +55,115 @@ static int tr_service_fault(tr_raft_service_t *service, int cause)
     return cause;
 }
 
-static int tr_service_mutation_guard(const tr_raft_service_t *service)
+static void tr_service_clear_pending_transport(tr_raft_service_t *service)
+{
+    service->pending_message_offset = 0U;
+    service->pending_message_count = 0U;
+    service->pending_snapshot_request_offset = 0U;
+    service->pending_snapshot_request_count = 0U;
+    service->transport_backpressured = false;
+}
+
+static int tr_service_enqueue_message(
+    void *context,
+    const tr_raft_message_t *message)
+{
+    tr_raft_service_t *service = (tr_raft_service_t *) context;
+    int result;
+
+    if (service == NULL || message == NULL ||
+        service->transport.enqueue == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (!service->transport_backpressured) {
+        result = service->transport.enqueue(service->transport.context,
+                                            message);
+        if (result != SALTS_ENOSPC) {
+            return result;
+        }
+        service->transport_backpressured = true;
+    }
+    if (service->pending_message_count == TR_RAFT_MAX_VOTERS) {
+        return SALTS_EPROTO;
+    }
+    /* Core cannot reuse this Ready buffer until the pending suffix drains. */
+    service->messages[service->pending_message_count++] = *message;
+    return SALTS_OK;
+}
+
+static int tr_service_enqueue_snapshot(
+    void *context,
+    const tr_raft_snapshot_request_t *request)
+{
+    tr_raft_service_t *service = (tr_raft_service_t *) context;
+    int result;
+
+    if (service == NULL || request == NULL ||
+        service->transport.enqueue_snapshot == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (!service->transport_backpressured) {
+        result = service->transport.enqueue_snapshot(
+            service->transport.snapshot_context, request);
+        if (result != SALTS_ENOSPC) {
+            return result;
+        }
+        service->transport_backpressured = true;
+    }
+    if (service->pending_snapshot_request_count == TR_RAFT_MAX_MEMBERS) {
+        return SALTS_EPROTO;
+    }
+    service->pending_snapshot_requests[
+        service->pending_snapshot_request_count++] = *request;
+    return SALTS_OK;
+}
+
+static int tr_service_drain_transport(tr_raft_service_t *service)
+{
+    int result;
+
+    while (service->pending_message_offset <
+           service->pending_message_count) {
+        result = service->transport.enqueue(
+            service->transport.context,
+            &service->messages[service->pending_message_offset]);
+        if (result == SALTS_ENOSPC) {
+            return result;
+        }
+        if (result != SALTS_OK) {
+            return tr_service_fault(service, result);
+        }
+        ++service->pending_message_offset;
+    }
+    while (service->pending_snapshot_request_offset <
+           service->pending_snapshot_request_count) {
+        result = service->transport.enqueue_snapshot(
+            service->transport.snapshot_context,
+            &service->pending_snapshot_requests[
+                service->pending_snapshot_request_offset]);
+        if (result == SALTS_ENOSPC) {
+            return result;
+        }
+        if (result != SALTS_OK) {
+            return tr_service_fault(service, result);
+        }
+        ++service->pending_snapshot_request_offset;
+    }
+    tr_service_clear_pending_transport(service);
+    return SALTS_OK;
+}
+
+static int tr_service_mutation_guard(tr_raft_service_t *service)
 {
     if (service->faulted) {
         return SALTS_EPROTO;
     }
-    return service->backup_prepared ? SALTS_EBUSY : SALTS_OK;
+    if (service->backup_prepared) {
+        return SALTS_EBUSY;
+    }
+    return service->transport_backpressured
+               ? tr_service_drain_transport(service)
+               : SALTS_OK;
 }
 
 static bool tr_service_storage_complete(const tr_raft_storage_t *storage)
@@ -187,6 +296,7 @@ static int tr_service_process_ready(
     result = tr_raft_runtime_process(
         &service->runtime, ready, &service->last_runtime_result);
     if (result != SALTS_OK) {
+        tr_service_clear_pending_transport(service);
         return tr_service_fault(service, result);
     }
     if (ready->read_state_ready) {
@@ -197,7 +307,7 @@ static int tr_service_process_ready(
 }
 
 static int tr_service_runtime_init(
-    const tr_raft_service_t *service,
+    tr_raft_service_t *service,
     tr_raft_core_t *core,
     const tr_raft_storage_t *storage,
     tr_raft_runtime_t *runtime)
@@ -207,7 +317,10 @@ static int tr_service_runtime_init(
     memset(&config, 0, sizeof(config));
     config.core = core;
     config.storage = *storage;
-    config.transport = service->transport;
+    config.transport.context = service;
+    config.transport.enqueue = tr_service_enqueue_message;
+    config.transport.snapshot_context = service;
+    config.transport.enqueue_snapshot = tr_service_enqueue_snapshot;
     config.state_machine = service->state_machine;
     return tr_raft_runtime_init(runtime, &config);
 }
@@ -637,6 +750,7 @@ int tr_raft_service_reload(
            sizeof(service->last_runtime_result));
     memset(&service->read_state, 0, sizeof(service->read_state));
     service->read_state_available = false;
+    tr_service_clear_pending_transport(service);
     service->faulted = false;
     service->cause = SALTS_OK;
     return SALTS_OK;
