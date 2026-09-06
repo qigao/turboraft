@@ -75,7 +75,7 @@ static int tr_raft_flowmq_set_string(flowmq_socket_t *socket,
     if (value == NULL || value[0] == '\0') {
         return SALTS_OK;
     }
-    return flowmq_setsockopt(socket, option, value, strlen(value) + 1U);
+    return flowmq_setsockopt(socket, option, value, strlen(value));
 }
 
 static int tr_raft_flowmq_set_int(flowmq_socket_t *socket,

@@ -27,6 +27,15 @@ wire version, and strictly increasing message ID. TLS endpoints configure CA,
 certificate, key, server name, and optional client-certificate enforcement
 through FlowMQ socket options before bind/connect.
 
+The `turboraft.flowmq_peer_service` integration test drives two real services
+over loopback mTLS. Node 1 uses `node1-cert.pem` as its client credential, node
+2 uses `node2-cert.pem` as its server credential, and both trust the test-only
+`ca.pem`. The positive case verifies one exact Raft heartbeat crosses the wire.
+The negative case connects a CNet TLS probe without a client certificate to the
+same FlowMQ ROUTER and requires the explicit TLS read failure while verifying
+that no Raft callback runs. The fixture keys are test data and must not be used
+outside loopback tests.
+
 The caller stops producers first, calls `tr_raft_flowmq_peer_service_stop()`,
 then destroys the service. Sockets close DEALER-first, followed by ROUTER and
 context termination.
