@@ -306,6 +306,17 @@ int tr_turbodb_redis_state_machine_compact_snapshot(
     return SALTS_EPROTO;
 }
 
+int tr_turbodb_redis_state_machine_compact_snapshot_callback(
+    void *context, tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term)
+{
+    tr_turbodb_redis_compact_result_t result;
+
+    return tr_turbodb_redis_state_machine_compact_snapshot(
+        (tr_turbodb_redis_state_machine_t *)context, snapshot_index,
+        snapshot_term, &result);
+}
+
 int tr_turbodb_redis_state_machine_bind(
     tr_turbodb_redis_state_machine_t *state_machine,
     tr_raft_state_machine_t *out_state_machine)

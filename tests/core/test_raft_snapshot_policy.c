@@ -12,6 +12,9 @@ typedef struct snapshot_policy_capture {
     tr_raft_snapshot_point_t stored;
     size_t stored_size;
     int store_result;
+    size_t journal_compact_count;
+    tr_raft_snapshot_point_t journal_compacted;
+    int journal_compact_result;
 } snapshot_policy_capture_t;
 
 static int storage_ok(void *context)
@@ -102,6 +105,19 @@ static int snapshot_store(void *context, tr_raft_index_t snapshot_index,
     capture->stored.configuration = *configuration;
     capture->stored_size = size;
     return capture->store_result;
+}
+
+static int snapshot_journal_compact(void *context,
+                                    tr_raft_index_t snapshot_index,
+                                    tr_raft_term_t snapshot_term)
+{
+    snapshot_policy_capture_t *capture =
+        (snapshot_policy_capture_t *)context;
+
+    ++capture->journal_compact_count;
+    capture->journal_compacted.index = snapshot_index;
+    capture->journal_compacted.term = snapshot_term;
+    return capture->journal_compact_result;
 }
 
 static void snapshot_policy_config(tr_raft_service_config_t *config,
@@ -196,6 +212,86 @@ spec("automatic snapshot policy")
         check_equal(status.cause, SALTS_EIO);
         check_equal(status.core.log_base_index, 0U);
         check_equal(status.core.log_entry_count, 2U);
+        tr_raft_service_destroy(service);
+    }
+
+    it("compacts the derived journal after the durable snapshot")
+    {
+        snapshot_policy_capture_t capture;
+        tr_raft_service_config_t config;
+        tr_raft_service_status_t status;
+        tr_raft_service_t *service = NULL;
+        tr_raft_entry_t entries[2];
+
+        memset(&capture, 0, sizeof(capture));
+        snapshot_policy_config(&config, &capture, entries);
+        config.snapshot_policy.journal_compact = snapshot_journal_compact;
+        config.snapshot_policy.journal_compact_context = &capture;
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+        check_equal(tr_raft_service_poll(service), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check_equal(capture.store_count, 1U);
+        check_equal(capture.journal_compact_count, 1U);
+        check_equal(capture.journal_compacted.index, capture.stored.index);
+        check_equal(capture.journal_compacted.term, capture.stored.term);
+        check_equal(status.core.log_base_index, 2U);
+        check_false(status.faulted);
+        tr_raft_service_destroy(service);
+    }
+
+    it("retries an uncertain journal compaction without storing again")
+    {
+        snapshot_policy_capture_t capture;
+        tr_raft_service_config_t config;
+        tr_raft_service_status_t status;
+        tr_raft_service_t *service = NULL;
+        tr_raft_entry_t entries[2];
+
+        memset(&capture, 0, sizeof(capture));
+        capture.journal_compact_result = SALTS_EIO;
+        snapshot_policy_config(&config, &capture, entries);
+        config.snapshot_policy.journal_compact = snapshot_journal_compact;
+        config.snapshot_policy.journal_compact_context = &capture;
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+        check_equal(tr_raft_service_poll(service), SALTS_EIO);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check_equal(capture.create_count, 1U);
+        check_equal(capture.store_count, 1U);
+        check_equal(capture.journal_compact_count, 1U);
+        check_equal(status.core.log_base_index, 0U);
+        check_false(status.faulted);
+        capture.journal_compact_result = SALTS_OK;
+        check_equal(tr_raft_service_poll(service), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check_equal(capture.create_count, 1U);
+        check_equal(capture.store_count, 1U);
+        check_equal(capture.journal_compact_count, 2U);
+        check_equal(status.core.log_base_index, 2U);
+        check_false(status.faulted);
+        tr_raft_service_destroy(service);
+    }
+
+    it("faults without core compaction when journal compaction is rejected")
+    {
+        snapshot_policy_capture_t capture;
+        tr_raft_service_config_t config;
+        tr_raft_service_status_t status;
+        tr_raft_service_t *service = NULL;
+        tr_raft_entry_t entries[2];
+
+        memset(&capture, 0, sizeof(capture));
+        capture.journal_compact_result = SALTS_EPROTO;
+        snapshot_policy_config(&config, &capture, entries);
+        config.snapshot_policy.journal_compact = snapshot_journal_compact;
+        config.snapshot_policy.journal_compact_context = &capture;
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+        check_equal(tr_raft_service_poll(service), SALTS_EPROTO);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check_equal(capture.store_count, 1U);
+        check_equal(capture.journal_compact_count, 1U);
+        check_equal(status.core.log_base_index, 0U);
+        check(status.faulted);
+        check_equal(status.cause, SALTS_EPROTO);
         tr_raft_service_destroy(service);
     }
 }

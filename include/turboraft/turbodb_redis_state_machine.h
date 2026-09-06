@@ -74,6 +74,14 @@ int tr_turbodb_redis_state_machine_compact_snapshot(
     tr_raft_index_t snapshot_index, tr_raft_term_t snapshot_term,
     tr_turbodb_redis_compact_result_t *out_result);
 
+/**
+ * Adapter for tr_raft_snapshot_policy_t::journal_compact. context must be an
+ * open tr_turbodb_redis_state_machine_t driven by its owning Runtime thread.
+ */
+int tr_turbodb_redis_state_machine_compact_snapshot_callback(
+    void *context, tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term);
+
 int tr_turbodb_redis_state_machine_bind(
     tr_turbodb_redis_state_machine_t *state_machine,
     tr_raft_state_machine_t *out_state_machine);
