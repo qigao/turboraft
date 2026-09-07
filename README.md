@@ -21,6 +21,11 @@ ROUTER/DEALER peer service.
   owner thread.
 - `TurboRaft::SnapshotManager` emits transport-neutral payloads through a
   bounded enqueue callback.
+- `TurboRaft::CFlowStateMachine` maps committed entries to a dedicated CFlow
+  Statechart and advances Core only after an exact tagged macrostep settlement.
+  Its ApplyRuntime exposes explicit exact-entry reconciliation for an
+  application-proven `APPLIED` or `PENDING` result; persistence and CFlow state
+  restoration remain application-owned.
 - `TurboRaft::ControlPlane` owns a CRPC server. Its status provider is an
   explicit cross-owner boundary; use an executor or mailbox when Raft belongs
   to another thread.
@@ -36,6 +41,14 @@ Configure requires exact active-profile installations provided through:
 - `SALTS_ROOT`
 - `SALTS_UTILS_ROOT`
 - `FLOWMQ_ROOT`
+
+When `BUILD_TESTS=ON`, the application-owned SQLite recovery fixture also
+requires `TURBODB_ROOT` and resolves `Orm::C` only from that exact installed
+profile. This is a test dependency; TurboRaft Core and CFlowStateMachine do not
+link Orm or TurboDB. The fixture keeps blocking ORM transactions on a dedicated
+bounded Salts Coroutine Executor and includes child-process crash cut-points on
+both sides of commit. CFlow Statechart host callbacks must not perform database
+I/O.
 
 The supplied user presets resolve Debug and Release profiles independently and
 use `NO_DEFAULT_PATH` for first-party package discovery.
@@ -53,6 +66,7 @@ ctest --preset win-release-user --output-on-failure
 Installed public targets include:
 
 - `TurboRaft::Core`
+- `TurboRaft::CFlowStateMachine`
 - `TurboRaft::Service`
 - `TurboRaft::SnapshotReceiver`
 - `TurboRaft::SnapshotSender`

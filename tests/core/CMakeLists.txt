@@ -141,6 +141,60 @@ target_link_libraries(turboraft_runtime_tests PRIVATE TurboRaft::Core
                                                       Salts::TinyTest)
 add_test(NAME turboraft.runtime COMMAND turboraft_runtime_tests)
 
+cmake_add_test(
+  SOURCES test_raft_apply_runtime.c
+  LIBS TurboRaft::Core Salts::TinyTest
+  FOLDER "tests/core")
+
+cmake_add_test(
+  SOURCES test_raft_cflow_state_machine.c
+  LIBS TurboRaft::CFlowStateMachine Salts::TinyTest
+  FOLDER "tests/core")
+
+cmake_add_test(
+  SOURCES test_raft_cflow_snapshot_replay.c
+  LIBS TurboRaft::CFlowStateMachine Salts::TinyTest
+  FOLDER "tests/core")
+
+if(BUILD_TESTS)
+  if(NOT DEFINED ENV{TURBODB_ROOT} OR
+     "$ENV{TURBODB_ROOT}" STREQUAL "" OR
+     NOT IS_DIRECTORY "$ENV{TURBODB_ROOT}")
+    message(FATAL_ERROR
+            "TURBODB_ROOT must name the TurboDB install prefix for ORM-backed tests")
+  endif()
+  find_package(Orm CONFIG REQUIRED
+               PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
+  if(NOT TARGET Orm::C)
+    message(FATAL_ERROR "The TurboDB install does not provide Orm::C")
+  endif()
+  cmake_add_test(
+    SOURCES test_raft_cflow_orm_sqlite_recovery.c
+    LIBS TurboRaft::CFlowStateMachine Orm::C Salts::Coroutine Salts::TinyTest
+    FOLDER "tests/core")
+
+  add_executable(turboraft_orm_sqlite_crash_node
+                 ../chaos/raft_orm_sqlite_crash_node.c)
+  target_link_libraries(turboraft_orm_sqlite_crash_node PRIVATE Orm::C)
+  set_target_properties(turboraft_orm_sqlite_crash_node
+                        PROPERTIES FOLDER "tests/chaos")
+
+  add_executable(turboraft_orm_sqlite_crash_tests
+                 ../chaos/test_raft_orm_sqlite_crash.c)
+  target_link_libraries(turboraft_orm_sqlite_crash_tests
+                        PRIVATE Salts::Core Salts::Platform Salts::TinyTest)
+  set_target_properties(turboraft_orm_sqlite_crash_tests
+                        PROPERTIES FOLDER "tests/chaos")
+  add_test(NAME turboraft.orm_sqlite_crash
+           COMMAND turboraft_orm_sqlite_crash_tests)
+  set_tests_properties(
+    turboraft.orm_sqlite_crash
+    PROPERTIES ENVIRONMENT
+               "TURBORAFT_ORM_SQLITE_CRASH_NODE=$<TARGET_FILE:turboraft_orm_sqlite_crash_node>"
+               TIMEOUT 60
+               LABELS "orm;crash")
+endif()
+
 add_executable(turboraft_service_tests test_raft_service.c)
 target_link_libraries(turboraft_service_tests PRIVATE TurboRaft::Service
                                                       Salts::TinyTest)

@@ -45,6 +45,93 @@ static tr_raft_core_config_t recovery_config(const tr_raft_entry_t *entries,
 
 spec("raft startup recovery and apply")
 {
+    it("acknowledges only the next entry in an outstanding Ready")
+    {
+        tr_raft_entry_t entries[3];
+        tr_raft_core_config_t config;
+        tr_raft_core_t *core = NULL;
+        tr_raft_ready_t ready;
+        tr_raft_status_t status;
+
+        entries[0] = recovery_entry(1U, 1U, 11U, "one");
+        entries[1] = recovery_entry(2U, 1U, 12U, "two");
+        entries[2] = recovery_entry(3U, 2U, 13U, "three");
+        config = recovery_config(entries, 3U);
+        config.initial_commit_index = 3U;
+        memset(&ready, 0, sizeof(ready));
+
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(ready.committed_entry_count, 3U);
+
+        check_equal(tr_raft_core_acknowledge_ready(core), SALTS_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.applied_index, 0U);
+        check_false(status.ready_outstanding);
+
+        check_equal(tr_raft_core_acknowledge_applied_entry(core, 1U),
+                    SALTS_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.applied_index, 1U);
+        check_false(status.ready_outstanding);
+
+        check_equal(tr_raft_core_acknowledge_applied_entry(core, 1U),
+                    SALTS_EPROTO);
+        check_equal(tr_raft_core_acknowledge_applied_entry(core, 3U),
+                    SALTS_EPROTO);
+        check_equal(tr_raft_core_acknowledge_applied_entry(core, 2U),
+                    SALTS_OK);
+        check_equal(tr_raft_core_acknowledge_applied_entry(core, 3U),
+                    SALTS_OK);
+        check_equal(tr_raft_core_acknowledge_applied_entry(core, 4U),
+                    SALTS_EPROTO);
+
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.applied_index, 3U);
+        check_false(status.ready_outstanding);
+        check_equal(tr_raft_core_acknowledge_applied_entry(core, 4U),
+                    SALTS_EPROTO);
+        tr_raft_core_destroy(core);
+    }
+
+    it("reconstructs the suffix solely from the durable applied marker")
+    {
+        tr_raft_entry_t entries[3];
+        tr_raft_core_config_t config;
+        tr_raft_core_t *core = NULL;
+        tr_raft_ready_t ready;
+
+        entries[0] = recovery_entry(1U, 1U, 11U, "one");
+        entries[1] = recovery_entry(2U, 1U, 12U, "two");
+        entries[2] = recovery_entry(3U, 2U, 13U, "three");
+        config = recovery_config(entries, 3U);
+        config.initial_commit_index = 3U;
+        memset(&ready, 0, sizeof(ready));
+
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(tr_raft_core_acknowledge_ready(core), SALTS_OK);
+        tr_raft_core_destroy(core);
+
+        core = NULL;
+        memset(&ready, 0, sizeof(ready));
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(ready.committed_entry_count, 3U);
+        check_equal(ready.committed_entries[0].index, 1U);
+        tr_raft_core_destroy(core);
+
+        core = NULL;
+        config.initial_applied_index = 1U;
+        memset(&ready, 0, sizeof(ready));
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(ready.committed_entry_count, 2U);
+        check_equal(ready.committed_entries[0].index, 2U);
+        check_equal(ready.committed_entries[1].index, 3U);
+        tr_raft_core_destroy(core);
+    }
+
     it("polls committed but unapplied restored entries")
     {
         tr_raft_entry_t entries[2];

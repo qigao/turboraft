@@ -332,6 +332,28 @@ int tr_raft_core_read_index(tr_raft_core_t *core,
 int tr_raft_core_poll(tr_raft_core_t *core, tr_raft_ready_t *ready);
 
 /**
+ * Acknowledges durability, message handoff, and ownership transfer for the
+ * outstanding Ready without advancing applied_index.
+ *
+ * Committed-entry views from the Ready become invalid after this call. The
+ * caller must first copy or transfer every entry it will apply. This selects
+ * split-apply mode permanently for the Core instance; later Ready values must
+ * use this function and tr_raft_core_advance() returns SALTS_EPROTO.
+ */
+int tr_raft_core_acknowledge_ready(tr_raft_core_t *core);
+
+/**
+ * Acknowledges exactly the next dispatched committed entry.
+ *
+ * The caller must have durably committed the application state and its applied
+ * marker before calling this function. `index` must equal the current
+ * applied_index plus one and must not exceed the boundary transferred by
+ * tr_raft_core_acknowledge_ready().
+ */
+int tr_raft_core_acknowledge_applied_entry(tr_raft_core_t *core,
+                                           tr_raft_index_t index);
+
+/**
  * Acknowledges that persistence, transmission, and committed-entry application
  * for the last non-empty Ready all completed successfully.
  */

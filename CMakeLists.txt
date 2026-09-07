@@ -84,7 +84,8 @@ find_package(OpenSSL REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 
 foreach(_turboraft_required_target IN ITEMS Salts::CNet Salts::CHTTP
-                                             Salts::CRPC FlowMQ::FlowMQ)
+                                             Salts::CRPC Salts::CFlow
+                                             FlowMQ::FlowMQ)
   if(NOT TARGET ${_turboraft_required_target})
     message(FATAL_ERROR
             "Required target is unavailable: ${_turboraft_required_target}")
@@ -167,6 +168,7 @@ add_library(
   src/core/raft_peer_set.c
   src/core/raft_log.c
   src/runtime/raft_runtime.c
+  src/runtime/raft_apply_runtime.c
   src/wire/raft_wire_codec.c
   "${TURBORAFT_WIRE_GENERATED_SOURCE}"
   "${TURBORAFT_WIRE_V3_GENERATED_SOURCE}")
@@ -184,6 +186,20 @@ target_link_libraries(
   turboraft_core
   PUBLIC Salts::Core
   PRIVATE Salts::CSTL Salts::DataBind)
+
+add_library(turboraft_cflow_state_machine STATIC
+            src/integrations/raft_cflow_state_machine.c)
+cmake_config_target(turboraft_cflow_state_machine
+                    NO_INSTALL
+                    ALIAS TurboRaft::CFlowStateMachine
+                    EXPORT_NAME CFlowStateMachine
+                    FOLDER "libraries/integrations")
+target_include_directories(
+  turboraft_cflow_state_machine
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(turboraft_cflow_state_machine
+                      PUBLIC TurboRaft::Core Salts::CFlow)
 
 add_library(turboraft_service STATIC src/service/raft_service.c)
 add_library(TurboRaft::Service ALIAS turboraft_service)
@@ -516,6 +532,7 @@ add_subdirectory(tests)
 set(TURBORAFT_INSTALL_TARGETS
     turboraft_core turboraft_service turboraft_snapshot_receiver
     turboraft_data_stream turboraft_wal_storage
+    turboraft_cflow_state_machine
     turboraft_snapshot_sender)
 if(TARGET turboraft_cnet)
   list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_cnet)

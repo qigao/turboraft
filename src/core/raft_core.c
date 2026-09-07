@@ -36,6 +36,7 @@ struct tr_raft_core {
     tr_raft_log_t log;
     tr_raft_index_t commit_index;
     tr_raft_index_t applied_index;
+    tr_raft_index_t dispatched_apply_index;
     tr_raft_index_t pending_apply_index;
     tr_raft_term_t campaign_term;
     uint32_t heartbeat_ticks;
@@ -59,6 +60,7 @@ struct tr_raft_core {
     tr_raft_append_window_t append_windows[TR_RAFT_MAX_VOTERS];
     size_t max_inflight_append_requests;
     bool ready_outstanding;
+    bool split_apply_mode;
     bool in_call;
 };
 
@@ -485,13 +487,14 @@ static int tr_finish(tr_raft_core_t *core,
                      tr_raft_ready_t *ready,
                      const tr_raft_before_t *before)
 {
-    if (core->commit_index > core->applied_index) {
-        tr_raft_index_t first_index = core->applied_index + 1U;
+    if (core->commit_index > core->dispatched_apply_index) {
+        tr_raft_index_t first_index = core->dispatched_apply_index + 1U;
 
         ready->committed_entries = (const tr_raft_entry_t *)
             tr_raft_log_get(&core->log, first_index);
         ready->committed_entry_count =
-            (size_t) (core->commit_index - core->applied_index);
+            (size_t) (core->commit_index -
+                      core->dispatched_apply_index);
         core->pending_apply_index = core->commit_index;
     }
     ready->hard_state_changed = before->term != core->term ||
@@ -1453,6 +1456,7 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
     }
     core->commit_index = initial_commit;
     core->applied_index = initial_applied;
+    core->dispatched_apply_index = initial_applied;
     result = tr_core_replay_membership_log(core);
     if (result != SALTS_OK) {
         tr_raft_log_destroy(&core->log);
@@ -1968,7 +1972,23 @@ int tr_raft_core_poll(tr_raft_core_t *core, tr_raft_ready_t *ready)
     return tr_finish(core, ready, &before);
 }
 
-int tr_raft_core_advance(tr_raft_core_t *core)
+int tr_raft_core_acknowledge_applied_entry(tr_raft_core_t *core,
+                                           tr_raft_index_t index)
+{
+    if (core == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (core->in_call || !core->split_apply_mode ||
+        core->applied_index == UINT64_MAX ||
+        index != core->applied_index + 1U ||
+        index > core->dispatched_apply_index) {
+        return SALTS_EPROTO;
+    }
+    core->applied_index = index;
+    return SALTS_OK;
+}
+
+int tr_raft_core_acknowledge_ready(tr_raft_core_t *core)
 {
     if (core == NULL) {
         return SALTS_EINVAL;
@@ -1976,8 +1996,27 @@ int tr_raft_core_advance(tr_raft_core_t *core)
     if (core->in_call || !core->ready_outstanding) {
         return SALTS_EPROTO;
     }
+    core->split_apply_mode = true;
+    if (core->pending_apply_index != 0U) {
+        core->dispatched_apply_index = core->pending_apply_index;
+        core->pending_apply_index = 0U;
+    }
+    core->ready_outstanding = false;
+    return SALTS_OK;
+}
+
+int tr_raft_core_advance(tr_raft_core_t *core)
+{
+    if (core == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (core->in_call || !core->ready_outstanding ||
+        core->split_apply_mode) {
+        return SALTS_EPROTO;
+    }
     if (core->pending_apply_index != 0U) {
         core->applied_index = core->pending_apply_index;
+        core->dispatched_apply_index = core->pending_apply_index;
         core->pending_apply_index = 0U;
     }
     core->ready_outstanding = false;
