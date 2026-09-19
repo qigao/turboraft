@@ -93,6 +93,7 @@ spec("raft snapshot peer")
         peer_config.enqueue_context = &payloads;
         receiver_config.self_id = 2U;
         receiver_config.max_snapshot_bytes = 1024U;
+        receiver_config.max_buffered_snapshot_bytes = 1024U;
         receiver_config.install = snapshot_peer_install;
         receiver_config.install_context = &installed;
 
