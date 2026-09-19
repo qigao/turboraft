@@ -56,6 +56,7 @@ spec("raft wire fuzz corpus")
         uint32_t random_state = UINT32_C(0x6d2b79f5);
 
         memset(&metadata, 0, sizeof(metadata));
+        metadata.group_id = 1U;
         metadata.message_id = 1U;
         check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
 
