@@ -1,0 +1,109 @@
+name: Multi-group wire verification
+
+on:
+  push:
+    branches:
+      - feature/multi-group-wire
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout TurboRaft
+        uses: actions/checkout@v4
+
+      - name: Checkout public header dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          git clone --depth 1 https://github.com/qigao/salts.git ../salts             > diagnostics/salts-clone.log 2>&1
+          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils             > diagnostics/salts-utils-clone.log 2>&1
+
+      - name: Compile changed production sources and contract test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          INC=(
+            -Iinclude
+            -Isrc
+            -Isrc/core
+            -Isrc/wire/generated
+            -I../salts/utils/include
+            -I../salts/platform/include
+            -I../salts/cstl/include
+            -I../salts/cmeta/include
+            -I../salts/tinytest/include
+            -I../salts-utils/tbe/data_bind
+            -I../salts-utils/tbe/schema/include
+          )
+
+          run_check() {
+            local label="$1"
+            shift
+            set +e
+            local logfile="diagnostics/${label}.log"
+            "$@" > "$logfile" 2>&1
+            local rc=$?
+            set -e
+            {
+              echo "### ${label}"
+              echo '~~~text'
+              tail -n 120 "$logfile"
+              echo '~~~'
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat "$logfile"
+            return "$rc"
+          }
+
+          run_check "raft_wire_codec.c"             cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/wire/raft_wire_codec.c
+          run_check "raft_peer_handshake.c"             cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/transport/raft_peer_handshake.c
+          run_check "raft_transport.c"             cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/transport/raft_transport.c
+          run_check "test_raft_multigroup_wire.c"             cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             tests/core/test_raft_multigroup_wire.c
+
+      - name: Verify public group API constants compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/multigroup_api_smoke.c <<'EOF'
+          #include <turboraft/raft_transport.h>
+
+          _Static_assert(TR_RAFT_WIRE_LEGACY_HEADER_SIZE == 40U,
+                         "legacy header changed");
+          _Static_assert(TR_RAFT_WIRE_GROUP_HEADER_SIZE == 48U,
+                         "group header must carry group id");
+          _Static_assert(TR_RAFT_WIRE_GROUP_VERSION >
+                         TR_RAFT_WIRE_SNAPSHOT_VERSION,
+                         "group format must use a distinct version");
+
+          static void smoke(void)
+          {
+              tr_raft_wire_metadata_t metadata = {0};
+              tr_raft_transport_payload_t payload = {0};
+
+              metadata.group_id = (tr_raft_group_id_t)100U;
+              payload.group_id = metadata.group_id;
+          }
+
+          int main(void)
+          {
+              smoke();
+              return 0;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra -Werror             -Iinclude             /tmp/multigroup_api_smoke.c             -o /tmp/multigroup_api_smoke
+          /tmp/multigroup_api_smoke
+
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: multigroup-wire-diagnostics
+          path: diagnostics
+          if-no-files-found: warn
