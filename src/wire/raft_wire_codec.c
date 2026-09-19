@@ -391,7 +391,7 @@ int tr_raft_wire_encode(tr_raft_wire_codec_t *codec,
                                        output_capacity, output_length);
 }
 
-typedef struct tr_wire_v3_fieldstypedef struct tr_wire_v3_fields {
+typedef struct tr_wire_v3_fields {
     uint8_t message_type;
     uint8_t granted;
     uint16_t reserved;
@@ -880,7 +880,7 @@ int tr_raft_wire_decode_snapshot_ack(
     return tr_snapshot_ack_valid(ack) ? SALTS_OK : SALTS_EPROTO;
 }
 
-#define TR_DATA_CHUNK_FIXED_SIZE#define TR_DATA_CHUNK_FIXED_SIZE 85U
+#define TR_DATA_CHUNK_FIXED_SIZE 85U
 #define TR_DATA_ACK_FIXED_SIZE 82U
 
 int tr_raft_wire_encode_data_chunk(
