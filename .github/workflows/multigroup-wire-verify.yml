@@ -93,8 +93,13 @@ jobs:
 
           int main(void)
           {
+              tr_raft_wire_metadata_t metadata = {0};
+              tr_raft_transport_payload_t payload = {0};
+
               smoke();
-              return 0;
+              metadata.group_id = (tr_raft_group_id_t)100U;
+              payload.group_id = metadata.group_id;
+              return payload.group_id == 100U ? 0 : 1;
           }
           EOF
 
