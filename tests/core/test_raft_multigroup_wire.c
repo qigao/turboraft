@@ -277,7 +277,9 @@ spec("raft multi-group wire contract")
         check_equal(packet[TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE + 5U],
                     TR_RAFT_WIRE_VERSION);
         check_equal(tr_raft_transport_session_destroy(session), SALTS_OK);
-    }    it("dispatches a group-aware raft frame with its group identity")
+    }
+
+    it("dispatches a group-aware raft frame with its group identity")
     {
         tr_raft_handshake_result_t outbound_contract =
             contract_for(1U, 2U, true);
