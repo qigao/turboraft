@@ -976,6 +976,173 @@ jobs:
             -o /tmp/streaming_manager_behavior
           /tmp/streaming_manager_behavior
 
+      - name: Run database-scale streaming snapshot receiver behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/streaming_receiver_behavior.c <<'EOF'
+          #include <turboraft/raft_snapshot_receiver.h>
+          #include <salts_error.h>
+          #include <stdint.h>
+          #include <string.h>
+
+          typedef struct stream_capture {
+              uint64_t expected_size;
+              int begun;
+              int aborted;
+          } stream_capture_t;
+
+          static int stream_begin(
+              void *context,
+              tr_raft_term_t leader_term,
+              tr_raft_index_t snapshot_index,
+              tr_raft_term_t snapshot_term,
+              const tr_raft_conf_t *configuration,
+              uint64_t snapshot_size)
+          {
+              stream_capture_t *capture = (stream_capture_t *)context;
+              if (capture == NULL || leader_term != 5U ||
+                  snapshot_index != 9U || snapshot_term != 4U ||
+                  configuration == NULL ||
+                  snapshot_size != capture->expected_size)
+                  return SALTS_EPROTO;
+              capture->begun = 1;
+              return SALTS_OK;
+          }
+
+          static int stream_write(
+              void *context,
+              uint64_t offset,
+              const uint8_t *data,
+              size_t size)
+          {
+              (void)context;
+              return offset == 0U && data != NULL && size == 1U
+                         ? SALTS_OK
+                         : SALTS_EPROTO;
+          }
+
+          static int stream_commit(void *context)
+          {
+              (void)context;
+              return SALTS_OK;
+          }
+
+          static void stream_abort(void *context)
+          {
+              stream_capture_t *capture = (stream_capture_t *)context;
+              if (capture != NULL)
+                  capture->aborted = 1;
+          }
+
+          static int install(
+              void *context,
+              tr_raft_term_t leader_term,
+              tr_raft_index_t snapshot_index,
+              tr_raft_term_t snapshot_term,
+              const tr_raft_conf_t *configuration,
+              const uint8_t *data,
+              size_t size)
+          {
+              (void)context;
+              (void)leader_term;
+              (void)snapshot_index;
+              (void)snapshot_term;
+              (void)configuration;
+              (void)data;
+              (void)size;
+              return SALTS_OK;
+          }
+
+          static tr_raft_snapshot_chunk_t make_chunk(uint64_t snapshot_size)
+          {
+              static const uint8_t one = 0x5aU;
+              tr_raft_snapshot_chunk_t chunk;
+
+              memset(&chunk, 0, sizeof(chunk));
+              chunk.from = 1U;
+              chunk.to = 2U;
+              chunk.term = 5U;
+              chunk.snapshot_index = 9U;
+              chunk.snapshot_term = 4U;
+              chunk.snapshot_size = snapshot_size;
+              chunk.has_configuration = true;
+              chunk.configuration.phase = TR_RAFT_CONF_FINAL;
+              chunk.configuration.member_count = 1U;
+              chunk.configuration.members[0].node_id = 2U;
+              chunk.configuration.members[0].roles =
+                  TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+              chunk.data = &one;
+              chunk.data_length = 1U;
+              return chunk;
+          }
+
+          int main(void)
+          {
+              const uint64_t large_size =
+                  UINT64_C(512) * 1024U * 1024U;
+              tr_raft_snapshot_receiver_config_t config;
+              tr_raft_snapshot_receiver_t *receiver = NULL;
+              tr_raft_snapshot_receive_result_t result;
+              tr_raft_snapshot_chunk_t chunk;
+              stream_capture_t capture;
+
+              memset(&config, 0, sizeof(config));
+              memset(&capture, 0, sizeof(capture));
+              capture.expected_size = large_size;
+              config.self_id = 2U;
+              config.max_snapshot_bytes = large_size;
+              config.stream.begin = stream_begin;
+              config.stream.write = stream_write;
+              config.stream.commit = stream_commit;
+              config.stream.abort = stream_abort;
+              config.stream.context = &capture;
+
+              if (tr_raft_snapshot_receiver_create(
+                      &config, &receiver) != SALTS_OK)
+                  return 10;
+              chunk = make_chunk(large_size);
+              if (tr_raft_snapshot_receiver_handle(
+                      receiver, &chunk, &result) != SALTS_OK)
+                  return 11;
+              if (!capture.begun || result.ack.next_offset != 1U)
+                  return 12;
+              tr_raft_snapshot_receiver_destroy(receiver);
+              if (!capture.aborted)
+                  return 13;
+
+              memset(&config, 0, sizeof(config));
+              config.self_id = 2U;
+              config.max_snapshot_bytes = 1024U;
+              config.max_buffered_snapshot_bytes = 2U;
+              config.install = install;
+              if (tr_raft_snapshot_receiver_create(
+                      &config, &receiver) != SALTS_OK)
+                  return 20;
+              chunk = make_chunk(3U);
+              chunk.done = true;
+              if (tr_raft_snapshot_receiver_handle(
+                      receiver, &chunk, &result) != SALTS_EFBIG)
+                  return 21;
+              tr_raft_snapshot_receiver_destroy(receiver);
+              return 0;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -Isrc/core \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/concurrency/include \
+            -I../salts/cmeta/include \
+            /tmp/streaming_receiver_behavior.c \
+            src/snapshot/raft_snapshot_receiver.c \
+            src/core/raft_configuration.c \
+            -lcrypto \
+            -o /tmp/streaming_receiver_behavior
+          /tmp/streaming_receiver_behavior
+
       - name: Verify current public group API
         shell: bash
         run: |
