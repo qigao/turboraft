@@ -436,7 +436,8 @@ int tr_raft_handshake_select_snapshot_wire_version(
             TR_RAFT_HANDSHAKE_FEATURE_CURRENT ||
         result->wire_major != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
         result->wire_minor != TR_RAFT_HANDSHAKE_WIRE_MINOR ||
-        result->max_frame_size < TR_RAFT_WIRE_MAX_FRAME_SIZE ||
+        result->max_frame_size <
+            tr_raft_handshake_required_frame_size(result->feature_bits) ||
         result->max_snapshot_chunk_size <
             TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
         return SALTS_EPROTONOSUPPORT;
@@ -463,7 +464,9 @@ int tr_raft_handshake_select_data_wire_version(
         (result->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_DATA_STREAM_V5) ==
             0U ||
         result->wire_major != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
-        result->wire_minor != TR_RAFT_HANDSHAKE_WIRE_MINOR) {
+        result->wire_minor != TR_RAFT_HANDSHAKE_WIRE_MINOR ||
+        result->max_frame_size <
+            tr_raft_handshake_required_frame_size(result->feature_bits)) {
         return SALTS_EPROTONOSUPPORT;
     }
     *out_wire_version =
