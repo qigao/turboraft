@@ -14,8 +14,12 @@ extern "C" {
 #define TR_RAFT_WIRE_VERSION 3U
 #define TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION 4U
 #define TR_RAFT_WIRE_SNAPSHOT_VERSION 5U
-#define TR_RAFT_WIRE_MAX_VERSION TR_RAFT_WIRE_SNAPSHOT_VERSION
-#define TR_RAFT_WIRE_HEADER_SIZE 40U
+#define TR_RAFT_WIRE_GROUP_VERSION 6U
+#define TR_RAFT_WIRE_MAX_VERSION TR_RAFT_WIRE_GROUP_VERSION
+#define TR_RAFT_WIRE_LEGACY_HEADER_SIZE 40U
+#define TR_RAFT_WIRE_GROUP_HEADER_SIZE 48U
+#define TR_RAFT_WIRE_HEADER_SIZE TR_RAFT_WIRE_LEGACY_HEADER_SIZE
+#define TR_RAFT_WIRE_MAX_HEADER_SIZE TR_RAFT_WIRE_GROUP_HEADER_SIZE
 #define TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE 8192U
 #define TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE 32U
 #define TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES 512U
@@ -31,10 +35,13 @@ extern "C" {
 #define TR_RAFT_WIRE_MAX_DATA_STREAM_BYTES (1024ULL * 1024ULL * 1024ULL)
 #define TR_RAFT_WIRE_MAX_DATA_PAYLOAD_SIZE \
     (TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES + 128U)
+#define TR_RAFT_WIRE_LEGACY_MAX_FRAME_SIZE \
+    (TR_RAFT_WIRE_LEGACY_HEADER_SIZE + TR_RAFT_WIRE_MAX_PAYLOAD_SIZE)
 #define TR_RAFT_WIRE_MAX_FRAME_SIZE \
-    (TR_RAFT_WIRE_HEADER_SIZE + TR_RAFT_WIRE_MAX_PAYLOAD_SIZE)
+    (TR_RAFT_WIRE_MAX_HEADER_SIZE + TR_RAFT_WIRE_MAX_PAYLOAD_SIZE)
 
 typedef struct tr_raft_wire_codec tr_raft_wire_codec_t;
+typedef uint64_t tr_raft_group_id_t;
 
 typedef struct tr_raft_cluster_id {
     uint8_t bytes[16];
@@ -42,6 +49,7 @@ typedef struct tr_raft_cluster_id {
 
 typedef struct tr_raft_wire_metadata {
     tr_raft_cluster_id_t cluster_id;
+    tr_raft_group_id_t group_id;
     uint64_t message_id;
 } tr_raft_wire_metadata_t;
 
@@ -196,6 +204,15 @@ int tr_raft_wire_decode_snapshot_ack(
     tr_raft_wire_metadata_t *metadata,
     tr_raft_snapshot_ack_t *ack);
 
+int tr_raft_wire_encode_data_chunk_version(
+    tr_raft_wire_codec_t *codec,
+    uint16_t wire_version,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_data_chunk_t *chunk,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length);
+
 int tr_raft_wire_encode_data_chunk(
     tr_raft_wire_codec_t *codec,
     const tr_raft_wire_metadata_t *metadata,
@@ -210,6 +227,15 @@ int tr_raft_wire_decode_data_chunk(
     size_t frame_length,
     tr_raft_wire_metadata_t *metadata,
     tr_raft_data_chunk_t *chunk);
+
+int tr_raft_wire_encode_data_ack_version(
+    tr_raft_wire_codec_t *codec,
+    uint16_t wire_version,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_data_ack_t *ack,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length);
 
 int tr_raft_wire_encode_data_ack(
     tr_raft_wire_codec_t *codec,
