@@ -23,10 +23,16 @@ typedef int (*tr_raft_snapshot_install_fn)(
 
 typedef struct tr_raft_snapshot_receiver_config {
     tr_raft_node_id_t self_id;
-    size_t max_snapshot_bytes;
+    /** Total logical snapshot limit; applies to both buffered and streaming paths. */
+    uint64_t max_snapshot_bytes;
+    /**
+     * Whole-buffer compatibility cap. Required and non-zero when install is
+     * used; must be zero when stream is used.
+     */
+    uint64_t max_buffered_snapshot_bytes;
     tr_raft_snapshot_install_fn install;
     void *install_context;
-    /* Optional bounded-memory path; all four callbacks are required together. */
+    /* Database-scale bounded-memory path; all four callbacks are required. */
     tr_raft_snapshot_stream_sink_t stream;
 } tr_raft_snapshot_receiver_config_t;
 
