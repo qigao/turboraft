@@ -13,6 +13,23 @@ extern "C" {
 
 typedef struct tr_raft_snapshot_sender tr_raft_snapshot_sender_t;
 
+typedef int (*tr_raft_snapshot_source_read_at_fn)(
+    void *context,
+    uint64_t offset,
+    uint8_t *buffer,
+    size_t capacity,
+    size_t *out_size);
+
+typedef void (*tr_raft_snapshot_source_release_fn)(void *context);
+
+typedef struct tr_raft_snapshot_source {
+    void *context;
+    uint64_t size;
+    uint8_t digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE];
+    tr_raft_snapshot_source_read_at_fn read_at;
+    tr_raft_snapshot_source_release_fn release;
+} tr_raft_snapshot_source_t;
+
 #define TR_RAFT_SNAPSHOT_MAX_INFLIGHT_CHUNKS 4U
 #define TR_RAFT_SNAPSHOT_RECOMMENDED_INFLIGHT_CHUNKS 4U
 
@@ -45,6 +62,7 @@ int tr_raft_snapshot_sender_create(
 void tr_raft_snapshot_sender_destroy(tr_raft_snapshot_sender_t *sender);
 void tr_raft_snapshot_sender_reset(tr_raft_snapshot_sender_t *sender);
 
+/** Convenience helper for small snapshots; copies the complete payload. */
 int tr_raft_snapshot_sender_begin(
     tr_raft_snapshot_sender_t *sender,
     tr_raft_term_t leader_term,
@@ -53,6 +71,20 @@ int tr_raft_snapshot_sender_begin(
     const tr_raft_conf_t *configuration,
     const uint8_t *data,
     size_t size);
+
+/**
+ * Starts a database-scale transfer and takes ownership of source on success.
+ * read_at is called with bounded chunk-sized buffers. release is invoked at
+ * final acknowledgement, reset, or destroy when non-NULL.
+ */
+int tr_raft_snapshot_sender_begin_source(
+    tr_raft_snapshot_sender_t *sender,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source);
+
 
 /* Claims the next chunk; returns EBUSY while the bounded window is full. */
 int tr_raft_snapshot_sender_next_chunk(
