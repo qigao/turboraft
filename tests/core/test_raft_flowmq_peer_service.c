@@ -94,7 +94,10 @@ static tr_raft_handshake_config_t protocol_config(
     return config;
 }
 
-static tr_raft_flowmq_peer_service_t *make_service(size_t capacity)
+static tr_raft_flowmq_peer_service_t *make_service(
+    size_t total_capacity,
+    size_t max_groups,
+    size_t per_group_capacity)
 {
     tr_raft_flowmq_peer_service_config_t config;
     tr_raft_flowmq_peer_config_t peer;
@@ -124,15 +127,19 @@ static tr_raft_flowmq_peer_service_t *make_service(size_t capacity)
     config.local_identity = "node-1";
     config.peers = &peer;
     config.peer_count = 1U;
-    config.outbound_queue_capacity = capacity;
+    config.outbound_limits.total_item_capacity = total_capacity;
+    config.outbound_limits.total_data_bytes =
+        TR_RAFT_FLOWMQ_RECOMMENDED_INFLIGHT_DATA_BYTES;
+    config.outbound_limits.max_active_groups = max_groups;
+    config.outbound_limits.per_group_item_capacity = per_group_capacity;
+    config.outbound_limits.per_group_data_bytes =
+        TR_RAFT_FLOWMQ_RECOMMENDED_INFLIGHT_DATA_BYTES;
     config.max_send_batch_items =
         TR_RAFT_FLOWMQ_RECOMMENDED_SEND_BATCH_ITEMS;
     config.max_receive_batch_items =
         TR_RAFT_FLOWMQ_RECOMMENDED_RECEIVE_BATCH_ITEMS;
-    config.max_inflight_data_bytes =
-        TR_RAFT_FLOWMQ_RECOMMENDED_INFLIGHT_DATA_BYTES;
-    config.send_hwm_messages = capacity;
-    config.receive_hwm_messages = capacity;
+    config.send_hwm_messages = total_capacity;
+    config.receive_hwm_messages = total_capacity;
     config.send_hwm_bytes = 8U * 1024U * 1024U;
     config.receive_hwm_bytes = 8U * 1024U * 1024U;
     config.reconnect_initial_ms = 100U;
@@ -391,13 +398,19 @@ static int create_live_service(
     config.tls = live->listener_tls;
     config.peers = &peer;
     config.peer_count = 1U;
-    config.outbound_queue_capacity = TR_FLOWMQ_TEST_QUEUE_CAPACITY;
+    config.outbound_limits.total_item_capacity =
+        TR_FLOWMQ_TEST_QUEUE_CAPACITY;
+    config.outbound_limits.total_data_bytes =
+        TR_RAFT_FLOWMQ_RECOMMENDED_INFLIGHT_DATA_BYTES;
+    config.outbound_limits.max_active_groups = 4U;
+    config.outbound_limits.per_group_item_capacity =
+        TR_FLOWMQ_TEST_QUEUE_CAPACITY;
+    config.outbound_limits.per_group_data_bytes =
+        TR_RAFT_FLOWMQ_RECOMMENDED_INFLIGHT_DATA_BYTES;
     config.max_send_batch_items =
         TR_RAFT_FLOWMQ_RECOMMENDED_SEND_BATCH_ITEMS;
     config.max_receive_batch_items =
         TR_RAFT_FLOWMQ_RECOMMENDED_RECEIVE_BATCH_ITEMS;
-    config.max_inflight_data_bytes =
-        TR_RAFT_FLOWMQ_RECOMMENDED_INFLIGHT_DATA_BYTES;
     config.send_hwm_messages = TR_FLOWMQ_TEST_QUEUE_CAPACITY;
     config.receive_hwm_messages = TR_FLOWMQ_TEST_QUEUE_CAPACITY;
     config.send_hwm_bytes = TR_FLOWMQ_TEST_HWM_BYTES;
@@ -702,7 +715,7 @@ spec("Raft FlowMQ caller-driven service")
 
     it("copies messages into a bounded peer FIFO")
     {
-        tr_raft_flowmq_peer_service_t *service = make_service(2U);
+        tr_raft_flowmq_peer_service_t *service = make_service(2U, 1U, 2U);
         tr_raft_flowmq_peer_service_status_t status;
         tr_raft_message_t message = heartbeat();
 
@@ -715,13 +728,60 @@ spec("Raft FlowMQ caller-driven service")
         check_equal(tr_raft_flowmq_peer_service_get_status(service, &status),
                     SALTS_OK);
         check_equal(status.queued_payload_count, 2U);
-        check_equal(status.outbound_queue_capacity, 2U);
+        check_equal(status.outbound_limits.total_item_capacity, 2U);
+        check_equal(tr_raft_flowmq_peer_service_destroy(service), SALTS_OK);
+    }
+
+    it("enforces per-group queue capacity and active group limits")
+    {
+        tr_raft_flowmq_peer_service_t *service =
+            make_service(6U, 2U, 2U);
+        tr_raft_flowmq_peer_service_status_t status;
+        tr_raft_transport_group_queue_status_t group_status;
+        tr_raft_message_t message = heartbeat();
+
+        check_equal(tr_raft_flowmq_peer_service_enqueue_group(
+                        service, 10U, &message),
+                    SALTS_OK);
+        message.term = 5U;
+        check_equal(tr_raft_flowmq_peer_service_enqueue_group(
+                        service, 10U, &message),
+                    SALTS_OK);
+        message.term = 6U;
+        check_equal(tr_raft_flowmq_peer_service_enqueue_group(
+                        service, 10U, &message),
+                    SALTS_ENOSPC);
+
+        check_equal(tr_raft_flowmq_peer_service_enqueue_group(
+                        service, 20U, &message),
+                    SALTS_OK);
+        check_equal(tr_raft_flowmq_peer_service_enqueue_group(
+                        service, 30U, &message),
+                    SALTS_ENOSPC);
+
+        check_equal(tr_raft_flowmq_peer_service_get_status(service, &status),
+                    SALTS_OK);
+        check_equal(status.active_group_count, 2U);
+        check_equal(status.queued_payload_count, 3U);
+        check_equal(status.outbound_limits.max_active_groups, 2U);
+        check_equal(status.outbound_limits.per_group_item_capacity, 2U);
+
+        check_equal(tr_raft_flowmq_peer_service_get_group_status(
+                        service, 2U, 10U, &group_status),
+                    SALTS_OK);
+        check_equal(group_status.group_id, 10U);
+        check_equal(group_status.queued_payload_count, 2U);
+        check_equal(group_status.queued_data_bytes, 0U);
+        check_equal(tr_raft_flowmq_peer_service_get_group_status(
+                        service, 2U, 30U, &group_status),
+                    SALTS_ENOENT);
+
         check_equal(tr_raft_flowmq_peer_service_destroy(service), SALTS_OK);
     }
 
     it("has explicit start stop ownership")
     {
-        tr_raft_flowmq_peer_service_t *service = make_service(4U);
+        tr_raft_flowmq_peer_service_t *service = make_service(4U, 4U, 4U);
         tr_raft_flowmq_peer_service_step_result_t step;
         tr_raft_message_t message = heartbeat();
 
