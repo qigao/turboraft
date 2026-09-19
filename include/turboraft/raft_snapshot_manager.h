@@ -33,6 +33,7 @@ typedef int (*tr_raft_snapshot_complete_fn)(void *context,
 
 typedef struct tr_raft_snapshot_manager_config {
     tr_raft_node_id_t self_id;
+    tr_raft_group_id_t group_id;
     /* Strictly ascending, unique, non-zero peer IDs excluding self_id. */
     const tr_raft_node_id_t *peer_node_ids;
     size_t peer_count;
