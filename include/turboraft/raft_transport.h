@@ -56,6 +56,9 @@ typedef struct tr_raft_transport_status {
     uint64_t frames_decoded;
     uint64_t bytes_encoded;
     uint64_t bytes_decoded;
+    uint64_t group_routing_rejections;
+    tr_raft_group_id_t last_rejected_group_id;
+    int last_group_routing_error;
 } tr_raft_transport_status_t;
 
 typedef struct tr_raft_transport_session tr_raft_transport_session_t;
