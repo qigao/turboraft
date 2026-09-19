@@ -128,6 +128,79 @@ spec("raft multi-group wire contract")
         tr_raft_wire_codec_destroy(codec);
     }
 
+    it("round trips group identity for snapshot and data payloads")
+    {
+        tr_raft_wire_codec_t *codec = NULL;
+        tr_raft_wire_metadata_t metadata;
+        tr_raft_wire_metadata_t decoded_metadata;
+        tr_raft_snapshot_chunk_t snapshot;
+        tr_raft_snapshot_chunk_t decoded_snapshot;
+        tr_raft_data_chunk_t data_chunk;
+        tr_raft_data_chunk_t decoded_data;
+        uint8_t frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+        static const uint8_t snapshot_data[1] = {0x41U};
+        static const uint8_t stream_data[1] = {0x42U};
+        size_t frame_size = 0U;
+
+        memset(&metadata, 0, sizeof(metadata));
+        metadata.cluster_id.bytes[0] = 1U;
+        metadata.group_id = 321U;
+        metadata.message_id = 11U;
+
+        memset(&snapshot, 0, sizeof(snapshot));
+        snapshot.from = 1U;
+        snapshot.to = 2U;
+        snapshot.term = 7U;
+        snapshot.snapshot_index = 10U;
+        snapshot.snapshot_term = 6U;
+        snapshot.snapshot_size = sizeof(snapshot_data);
+        snapshot.data = snapshot_data;
+        snapshot.data_length = sizeof(snapshot_data);
+        snapshot.done = true;
+        snapshot.has_configuration = true;
+        snapshot.configuration.phase = TR_RAFT_CONF_FINAL;
+        snapshot.configuration.member_count = 1U;
+        snapshot.configuration.members[0].node_id = 1U;
+        snapshot.configuration.members[0].roles =
+            TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+        memset(snapshot.snapshot_digest, 0x5a,
+               sizeof(snapshot.snapshot_digest));
+
+        check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
+        check_equal(tr_raft_wire_encode_snapshot_chunk_version(
+                         codec, TR_RAFT_WIRE_GROUP_VERSION, &metadata,
+                         &snapshot, frame, sizeof(frame), &frame_size),
+                    SALTS_OK);
+        check_equal(tr_raft_wire_decode_snapshot_chunk(
+                         codec, frame, frame_size, &decoded_metadata,
+                         &decoded_snapshot), SALTS_OK);
+        check_equal(decoded_metadata.group_id, 321U);
+        check_equal(decoded_snapshot.snapshot_index, 10U);
+
+        metadata.message_id++;
+        memset(&data_chunk, 0, sizeof(data_chunk));
+        data_chunk.from = 1U;
+        data_chunk.to = 2U;
+        data_chunk.term = 7U;
+        data_chunk.stream_id = 9U;
+        data_chunk.stream_size = sizeof(stream_data);
+        data_chunk.data = stream_data;
+        data_chunk.data_length = sizeof(stream_data);
+        data_chunk.done = true;
+        memset(data_chunk.stream_digest, 0x6b,
+               sizeof(data_chunk.stream_digest));
+        check_equal(tr_raft_wire_encode_data_chunk_version(
+                         codec, TR_RAFT_WIRE_GROUP_VERSION, &metadata,
+                         &data_chunk, frame, sizeof(frame), &frame_size),
+                    SALTS_OK);
+        check_equal(tr_raft_wire_decode_data_chunk(
+                         codec, frame, frame_size, &decoded_metadata,
+                         &decoded_data), SALTS_OK);
+        check_equal(decoded_metadata.group_id, 321U);
+        check_equal(decoded_data.stream_id, 9U);
+        tr_raft_wire_codec_destroy(codec);
+    }
+
     it("selects group wire versions only when capability is negotiated")
     {
         tr_raft_handshake_result_t grouped = contract_for(1U, 2U, true);
@@ -204,5 +277,51 @@ spec("raft multi-group wire contract")
         check_equal(packet[TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE + 5U],
                     TR_RAFT_WIRE_VERSION);
         check_equal(tr_raft_transport_session_destroy(session), SALTS_OK);
+    }    it("dispatches a group-aware raft frame with its group identity")
+    {
+        tr_raft_handshake_result_t outbound_contract =
+            contract_for(1U, 2U, true);
+        tr_raft_handshake_result_t inbound_contract =
+            contract_for(2U, 1U, true);
+        tr_raft_transport_session_config_t config;
+        tr_raft_transport_session_t *outbound = NULL;
+        tr_raft_transport_session_t *inbound = NULL;
+        tr_raft_message_t message = heartbeat(1U, 2U);
+        uint8_t packet[TR_RAFT_TRANSPORT_MAX_PACKET_SIZE];
+        size_t packet_size = 0U;
+        tr_raft_group_id_t observed_group = 0U;
+
+        memset(&config, 0, sizeof(config));
+        config.cluster_id = outbound_contract.cluster_id;
+        config.local_node_id = 1U;
+        config.peer_node_id = 2U;
+        config.first_outbound_message_id = 1U;
+        config.handshake = &outbound_contract;
+        config.on_payload = capture_group_payload;
+        config.payload_context = &observed_group;
+        check_equal(tr_raft_transport_session_create(&config, &outbound),
+                    SALTS_OK);
+
+        memset(&config, 0, sizeof(config));
+        config.cluster_id = inbound_contract.cluster_id;
+        config.local_node_id = 2U;
+        config.peer_node_id = 1U;
+        config.first_outbound_message_id = 1U;
+        config.handshake = &inbound_contract;
+        config.on_payload = capture_group_payload;
+        config.payload_context = &observed_group;
+        check_equal(tr_raft_transport_session_create(&config, &inbound),
+                    SALTS_OK);
+
+        check_equal(tr_raft_transport_encode_group(
+                         outbound, 777U, &message, packet, sizeof(packet),
+                         &packet_size), SALTS_OK);
+        check_equal(tr_raft_transport_feed(inbound, packet, packet_size),
+                    SALTS_OK);
+        check_equal(observed_group, 777U);
+
+        check_equal(tr_raft_transport_session_destroy(inbound), SALTS_OK);
+        check_equal(tr_raft_transport_session_destroy(outbound), SALTS_OK);
     }
+
 }
