@@ -5,30 +5,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <turboraft/raft_wire_codec.h>
+#include <turboraft/raft_snapshot_stream.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct tr_raft_snapshot_sender tr_raft_snapshot_sender_t;
-
-typedef int (*tr_raft_snapshot_source_read_at_fn)(
-    void *context,
-    uint64_t offset,
-    uint8_t *buffer,
-    size_t capacity,
-    size_t *out_size);
-
-typedef void (*tr_raft_snapshot_source_release_fn)(void *context);
-
-typedef struct tr_raft_snapshot_source {
-    void *context;
-    uint64_t size;
-    uint8_t digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE];
-    tr_raft_snapshot_source_read_at_fn read_at;
-    tr_raft_snapshot_source_release_fn release;
-} tr_raft_snapshot_source_t;
 
 #define TR_RAFT_SNAPSHOT_MAX_INFLIGHT_CHUNKS 4U
 #define TR_RAFT_SNAPSHOT_RECOMMENDED_INFLIGHT_CHUNKS 4U
