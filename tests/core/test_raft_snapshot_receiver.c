@@ -73,6 +73,61 @@ static void snapshot_stream_abort(void *context)
     }
 }
 
+
+typedef struct large_snapshot_stream_capture {
+    uint64_t expected_size;
+    int begun;
+    int aborted;
+} large_snapshot_stream_capture_t;
+
+static int large_snapshot_stream_begin(
+    void *context,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    uint64_t snapshot_size)
+{
+    large_snapshot_stream_capture_t *capture =
+        (large_snapshot_stream_capture_t *)context;
+
+    if (capture == NULL || leader_term == 0U || snapshot_index == 0U ||
+        snapshot_term == 0U || configuration == NULL ||
+        snapshot_size != capture->expected_size) {
+        return SALTS_EPROTO;
+    }
+    capture->begun = 1;
+    return SALTS_OK;
+}
+
+static int large_snapshot_stream_write(
+    void *context,
+    uint64_t offset,
+    const uint8_t *data,
+    size_t size)
+{
+    (void)context;
+    return offset == 0U && data != NULL && size == 1U
+               ? SALTS_OK
+               : SALTS_EPROTO;
+}
+
+static int large_snapshot_stream_commit(void *context)
+{
+    (void)context;
+    return SALTS_OK;
+}
+
+static void large_snapshot_stream_abort(void *context)
+{
+    large_snapshot_stream_capture_t *capture =
+        (large_snapshot_stream_capture_t *)context;
+
+    if (capture != NULL) {
+        capture->aborted = 1;
+    }
+}
+
 static int snapshot_capture_install(void *context,
                                     tr_raft_term_t leader_term,
                                     tr_raft_index_t snapshot_index,
@@ -251,4 +306,82 @@ spec("raft snapshot receiver")
         check_equal(capture.data, "abcdef", 6U);
         tr_raft_snapshot_receiver_destroy(receiver);
     }
+    it("allows database-scale totals on the streaming sink path")
+    {
+        const uint64_t large_size = UINT64_C(512) * 1024U * 1024U;
+        static const uint8_t one = 0x5aU;
+        tr_raft_snapshot_receiver_config_t config;
+        tr_raft_snapshot_receiver_t *receiver = NULL;
+        tr_raft_snapshot_receive_result_t result;
+        tr_raft_snapshot_chunk_t chunk;
+        large_snapshot_stream_capture_t capture;
+
+        memset(&config, 0, sizeof(config));
+        memset(&chunk, 0, sizeof(chunk));
+        memset(&capture, 0, sizeof(capture));
+        capture.expected_size = large_size;
+
+        config.self_id = 2U;
+        config.max_snapshot_bytes = large_size;
+        config.stream.begin = large_snapshot_stream_begin;
+        config.stream.write = large_snapshot_stream_write;
+        config.stream.commit = large_snapshot_stream_commit;
+        config.stream.abort = large_snapshot_stream_abort;
+        config.stream.context = &capture;
+
+        check_equal(tr_raft_snapshot_receiver_create(&config, &receiver),
+                    SALTS_OK);
+
+        chunk.from = 1U;
+        chunk.to = 2U;
+        chunk.term = 5U;
+        chunk.snapshot_index = 9U;
+        chunk.snapshot_term = 4U;
+        chunk.snapshot_size = large_size;
+        chunk.has_configuration = true;
+        chunk.configuration.phase = TR_RAFT_CONF_FINAL;
+        chunk.configuration.member_count = 1U;
+        chunk.configuration.members[0].node_id = 2U;
+        chunk.configuration.members[0].roles =
+            TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+        chunk.data = &one;
+        chunk.data_length = 1U;
+
+        check_equal(tr_raft_snapshot_receiver_handle(
+                        receiver, &chunk, &result),
+                    SALTS_OK);
+        check(capture.begun);
+        check(!capture.aborted);
+        check_equal(result.ack.next_offset, 1U);
+
+        tr_raft_snapshot_receiver_destroy(receiver);
+        check(capture.aborted);
+    }
+
+    it("bounds the compatibility whole-buffer install path separately")
+    {
+        tr_raft_snapshot_receiver_config_t config;
+        tr_raft_snapshot_receiver_t *receiver = NULL;
+        tr_raft_snapshot_receive_result_t result;
+        tr_raft_snapshot_chunk_t chunk = snapshot_final_chunk();
+        snapshot_install_capture_t capture;
+
+        memset(&config, 0, sizeof(config));
+        memset(&capture, 0, sizeof(capture));
+        config.self_id = 2U;
+        config.max_snapshot_bytes = 1024U;
+        config.max_buffered_snapshot_bytes = 2U;
+        config.install = snapshot_capture_install;
+        config.install_context = &capture;
+
+        check_equal(tr_raft_snapshot_receiver_create(&config, &receiver),
+                    SALTS_OK);
+        check_equal(tr_raft_snapshot_receiver_handle(
+                        receiver, &chunk, &result),
+                    SALTS_EFBIG);
+        check_equal(capture.calls, 0);
+
+        tr_raft_snapshot_receiver_destroy(receiver);
+    }
+
 }
