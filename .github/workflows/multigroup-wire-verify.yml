@@ -219,7 +219,7 @@ jobs:
           }
           EOF
 
-          cc -std=c11 -Wall -Wextra             -Iinclude             -I../salts/utils/include             -I../salts/platform/include             -I../salts/concurrency/include             /tmp/handshake_behavior.c             src/transport/raft_peer_handshake.c             -o /tmp/handshake_behavior
+          cc -std=c11 -Wall -Wextra             -Iinclude             -I../salts/utils/include             -I../salts/platform/include             -I../salts/concurrency/include             -I../salts/cmeta/include             -I../salts/cstl/include             /tmp/handshake_behavior.c             src/transport/raft_peer_handshake.c             -o /tmp/handshake_behavior
           /tmp/handshake_behavior
 
       - name: Upload compiler diagnostics
