@@ -22,6 +22,7 @@ typedef struct tr_raft_cnet_peer_config {
 
 typedef struct tr_raft_cnet_peer_status {
     cnet_connection_state connection_state;
+    tr_raft_transport_status_t transport;
     tr_raft_transport_queue_limits_t outbound_limits;
     size_t active_group_count;
     size_t queued_payload_count;
