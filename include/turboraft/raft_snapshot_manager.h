@@ -46,7 +46,12 @@ typedef struct tr_raft_snapshot_manager_config {
     const tr_raft_node_id_t *peer_node_ids;
     size_t peer_count;
     uint64_t max_snapshot_bytes;
-    /* Both limits are required and validated; zero is rejected. */
+    /**
+     * Whole-buffer compatibility-provider cap. Required when provider is used;
+     * must be zero for source_provider.
+     */
+    uint64_t max_buffered_snapshot_bytes;
+    /* Both transport limits are required and validated; zero is rejected. */
     size_t snapshot_chunk_size;
     size_t snapshot_max_inflight_chunks;
     /* Transport seam; FlowMQ and CNet adapters both match this callback. */
