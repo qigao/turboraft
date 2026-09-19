@@ -15,6 +15,8 @@ extern "C" {
 #define TR_RAFT_MAX_APPEND_ENTRIES 8U
 #define TR_RAFT_DEFAULT_MAX_INFLIGHT_APPEND_REQUESTS 1U
 #define TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS 64U
+#define TR_RAFT_DEFAULT_MAX_PENDING_READS 1U
+#define TR_RAFT_MAX_PENDING_READS 64U
 #define TR_RAFT_DEFAULT_MAX_LOG_ENTRIES 1024U
 #define TR_RAFT_CONF_CODEC_VERSION 1U
 #define TR_RAFT_CONF_HEADER_SIZE 16U
@@ -151,6 +153,11 @@ typedef struct tr_raft_core_config {
      * in-flight request behavior.
      */
     size_t max_inflight_append_requests;
+    /**
+     * Maximum outstanding linearizable read contexts. Zero preserves the
+     * historical single-pending behavior.
+     */
+    size_t max_pending_reads;
 } tr_raft_core_config_t;
 
 typedef struct tr_raft_proposal {
@@ -191,6 +198,8 @@ typedef struct tr_raft_ready {
     size_t committed_entry_count;
     bool read_state_ready;
     tr_raft_read_state_t read_state;
+    tr_raft_read_state_t read_states[TR_RAFT_MAX_PENDING_READS];
+    size_t read_state_count;
     tr_raft_snapshot_request_t snapshot_requests[TR_RAFT_MAX_MEMBERS];
     size_t snapshot_request_count;
 } tr_raft_ready_t;
@@ -215,6 +224,8 @@ typedef struct tr_raft_status {
     tr_raft_node_id_t leadership_transfer_target;
     uint32_t leadership_transfer_elapsed_ticks;
     uint64_t pending_read_context_id;
+    size_t pending_read_count;
+    size_t max_pending_reads;
     size_t inflight_append_count;
     bool self_is_voter;
     size_t voter_count;
@@ -324,6 +335,15 @@ int tr_raft_core_transfer_leadership(tr_raft_core_t *core,
 int tr_raft_core_read_index(tr_raft_core_t *core,
                             uint64_t context_id,
                             tr_raft_ready_t *ready);
+
+/**
+ * Starts one quorum barrier for multiple non-zero, unique user contexts.
+ * Every completed state from the batch reports the same captured read index.
+ */
+int tr_raft_core_read_index_batch(tr_raft_core_t *core,
+                                  const uint64_t *context_ids,
+                                  size_t context_count,
+                                  tr_raft_ready_t *ready);
 
 /**
  * Returns startup/committed work and, on a leader, fills available bounded
