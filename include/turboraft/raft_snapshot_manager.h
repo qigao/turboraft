@@ -27,6 +27,14 @@ typedef int (*tr_raft_snapshot_provider_fn)(
     size_t capacity,
     size_t *out_size);
 
+typedef int (*tr_raft_snapshot_source_provider_fn)(
+    void *context,
+    tr_raft_index_t required_index,
+    tr_raft_term_t required_term,
+    tr_raft_snapshot_point_t *out_point,
+    tr_raft_snapshot_source_t *out_source);
+
+
 typedef int (*tr_raft_snapshot_complete_fn)(void *context,
                                             tr_raft_node_id_t peer_id,
                                             tr_raft_index_t snapshot_index);
@@ -44,7 +52,14 @@ typedef struct tr_raft_snapshot_manager_config {
     /* Transport seam; FlowMQ and CNet adapters both match this callback. */
     tr_raft_snapshot_manager_payload_enqueue_fn enqueue;
     void *enqueue_context;
-    /* Required when enqueue_request is used. */
+    /*
+     * Database-scale provider. Returns an owned source descriptor; ownership
+     * transfers into the peer sender when the request is admitted.
+     * Mutually exclusive with provider.
+     */
+    tr_raft_snapshot_source_provider_fn source_provider;
+    void *source_provider_context;
+    /* Small-snapshot compatibility provider; mutually exclusive above. */
     tr_raft_snapshot_provider_fn provider;
     void *provider_context;
     /* Called after the remote peer acknowledges the complete snapshot. */

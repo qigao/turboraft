@@ -94,6 +94,22 @@ int tr_raft_snapshot_peer_begin(
         configuration, data, size);
 }
 
+int tr_raft_snapshot_peer_begin_source(
+    tr_raft_snapshot_peer_t *peer,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source)
+{
+    if (peer == NULL || source == NULL) {
+        return SALTS_EINVAL;
+    }
+    return tr_raft_snapshot_coordinator_begin_source(
+        peer->coordinator, leader_term, snapshot_index, snapshot_term,
+        configuration, source);
+}
+
 int tr_raft_snapshot_peer_handle_payload(
     tr_raft_snapshot_peer_t *peer,
     const tr_raft_transport_payload_t *payload)

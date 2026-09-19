@@ -17,6 +17,8 @@ struct tr_raft_snapshot_manager {
     void *enqueue_context;
     size_t max_snapshot_bytes;
     uint8_t *snapshot_buffer;
+    tr_raft_snapshot_source_provider_fn source_provider;
+    void *source_provider_context;
     tr_raft_snapshot_provider_fn provider;
     void *provider_context;
     tr_raft_snapshot_complete_fn complete;
@@ -54,6 +56,31 @@ static int tr_snapshot_manager_enqueue(
     return manager->enqueue(manager->enqueue_context, payload);
 }
 
+static void tr_snapshot_manager_release_source(
+    tr_raft_snapshot_source_t *source)
+{
+    if (source != NULL && source->release != NULL) {
+        source->release(source->context);
+    }
+    if (source != NULL) {
+        memset(source, 0, sizeof(*source));
+    }
+}
+
+static void tr_snapshot_manager_note_started(
+    tr_raft_snapshot_manager_t *manager,
+    size_t index,
+    tr_raft_index_t snapshot_index)
+{
+    tr_raft_snapshot_sender_status_t status;
+
+    if (tr_raft_snapshot_peer_get_status(
+            manager->peers[index], &status) == SALTS_OK &&
+        status.active && status.snapshot_index == snapshot_index) {
+        manager->completion_notified[index] = false;
+    }
+}
+
 int tr_raft_snapshot_manager_create(
     const tr_raft_snapshot_manager_config_t *config,
     tr_raft_snapshot_manager_t **out_manager)
@@ -66,7 +93,8 @@ int tr_raft_snapshot_manager_create(
         config->group_id == 0U ||
         config->peer_node_ids == NULL || config->peer_count == 0U ||
         config->peer_count > TR_RAFT_MAX_VOTERS - 1U ||
-        config->max_snapshot_bytes == 0U) {
+        config->max_snapshot_bytes == 0U ||
+        (config->source_provider != NULL && config->provider != NULL)) {
         return SALTS_EINVAL;
     }
     for (index = 0U; index < config->peer_count; ++index) {
@@ -89,6 +117,8 @@ int tr_raft_snapshot_manager_create(
     manager->enqueue = config->enqueue;
     manager->enqueue_context = config->enqueue_context;
     manager->max_snapshot_bytes = config->max_snapshot_bytes;
+    manager->source_provider = config->source_provider;
+    manager->source_provider_context = config->source_provider_context;
     manager->provider = config->provider;
     manager->provider_context = config->provider_context;
     manager->complete = config->complete;
@@ -174,9 +204,7 @@ int tr_raft_snapshot_manager_begin(
             manager->peers[index], leader_term, snapshot_index, snapshot_term,
             configuration, data, size);
 
-        if (result == SALTS_OK) {
-            manager->completion_notified[index] = false;
-        }
+        tr_snapshot_manager_note_started(manager, index, snapshot_index);
         return result;
     }
 }
@@ -189,7 +217,6 @@ int tr_raft_snapshot_manager_enqueue_request(
         (tr_raft_snapshot_manager_t *) context;
     tr_raft_snapshot_sender_status_t status;
     tr_raft_snapshot_point_t point;
-    size_t snapshot_size = 0U;
     size_t index;
     int result;
 
@@ -198,7 +225,8 @@ int tr_raft_snapshot_manager_enqueue_request(
         request->snapshot_term == 0U) {
         return SALTS_EINVAL;
     }
-    if (manager->provider == NULL || manager->snapshot_buffer == NULL) {
+    if (manager->source_provider == NULL &&
+        (manager->provider == NULL || manager->snapshot_buffer == NULL)) {
         return SALTS_EINVAL;
     }
     index = tr_snapshot_manager_find_peer(manager, request->peer_id);
@@ -216,23 +244,55 @@ int tr_raft_snapshot_manager_enqueue_request(
     }
 
     memset(&point, 0, sizeof(point));
-    result = manager->provider(
-        manager->provider_context, request->snapshot_index,
-        request->snapshot_term, &point, manager->snapshot_buffer,
-        manager->max_snapshot_bytes, &snapshot_size);
-    if (result != SALTS_OK) {
+    if (manager->source_provider != NULL) {
+        tr_raft_snapshot_source_t source;
+
+        memset(&source, 0, sizeof(source));
+        result = manager->source_provider(
+            manager->source_provider_context, request->snapshot_index,
+            request->snapshot_term, &point, &source);
+        if (result != SALTS_OK) {
+            return result;
+        }
+        if (point.index != request->snapshot_index ||
+            point.term != request->snapshot_term ||
+            tr_raft_conf_validate(&point.configuration) != SALTS_OK ||
+            source.read_at == NULL ||
+            source.size > (uint64_t)manager->max_snapshot_bytes) {
+            tr_snapshot_manager_release_source(&source);
+            return SALTS_EPROTO;
+        }
+
+        result = tr_raft_snapshot_peer_begin_source(
+            manager->peers[index], request->leader_term, point.index,
+            point.term, &point.configuration, &source);
+        tr_snapshot_manager_note_started(manager, index, point.index);
         return result;
     }
-    if (point.index != request->snapshot_index ||
-        point.term != request->snapshot_term ||
-        tr_raft_conf_validate(&point.configuration) != SALTS_OK ||
-        snapshot_size > manager->max_snapshot_bytes) {
-        return SALTS_EPROTO;
+
+    {
+        size_t snapshot_size = 0U;
+
+        result = manager->provider(
+            manager->provider_context, request->snapshot_index,
+            request->snapshot_term, &point, manager->snapshot_buffer,
+            manager->max_snapshot_bytes, &snapshot_size);
+        if (result != SALTS_OK) {
+            return result;
+        }
+        if (point.index != request->snapshot_index ||
+            point.term != request->snapshot_term ||
+            tr_raft_conf_validate(&point.configuration) != SALTS_OK ||
+            snapshot_size > manager->max_snapshot_bytes) {
+            return SALTS_EPROTO;
+        }
+        result = tr_raft_snapshot_peer_begin(
+            manager->peers[index], request->leader_term, point.index,
+            point.term, &point.configuration, manager->snapshot_buffer,
+            snapshot_size);
+        tr_snapshot_manager_note_started(manager, index, point.index);
+        return result;
     }
-    return tr_raft_snapshot_manager_begin(
-        manager, request->peer_id, request->leader_term, point.index,
-        point.term, &point.configuration, manager->snapshot_buffer,
-        snapshot_size);
 }
 
 int tr_raft_snapshot_manager_handle_payload(

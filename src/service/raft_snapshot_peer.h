@@ -37,6 +37,14 @@ int tr_raft_snapshot_peer_begin(
     const uint8_t *data,
     size_t size);
 
+int tr_raft_snapshot_peer_begin_source(
+    tr_raft_snapshot_peer_t *peer,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source);
+
 int tr_raft_snapshot_peer_handle_payload(
     tr_raft_snapshot_peer_t *peer,
     const tr_raft_transport_payload_t *payload);

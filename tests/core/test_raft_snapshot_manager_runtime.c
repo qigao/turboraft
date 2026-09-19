@@ -11,6 +11,8 @@ typedef struct runtime_manager_capture {
     tr_raft_transport_payload_t payloads[4];
     size_t payload_count;
     size_t provider_count;
+    size_t source_read_count;
+    size_t source_release_count;
     size_t install_count;
     size_t complete_count;
     tr_raft_node_id_t completed_peer;
@@ -32,22 +34,59 @@ static int runtime_manager_enqueue(
     return SALTS_OK;
 }
 
-static int runtime_manager_provider(
+static int runtime_source_read(
     void *context,
-    tr_raft_index_t required_index,
-    tr_raft_term_t required_term,
-    tr_raft_snapshot_point_t *out_point,
+    uint64_t offset,
     uint8_t *buffer,
     size_t capacity,
     size_t *out_size)
 {
     static const uint8_t snapshot[] = {0x72U, 0x61U, 0x66U, 0x74U};
     runtime_manager_capture_t *capture =
-        (runtime_manager_capture_t *) context;
+        (runtime_manager_capture_t *)context;
 
-    if (capture == NULL || out_point == NULL || buffer == NULL ||
-        out_size == NULL || required_index != 10U || required_term != 7U ||
-        capacity < sizeof(snapshot)) {
+    if (capture == NULL || out_size == NULL ||
+        offset > sizeof(snapshot) ||
+        capacity > sizeof(snapshot) - (size_t)offset ||
+        (capacity != 0U && buffer == NULL)) {
+        return SALTS_EINVAL;
+    }
+    if (capacity != 0U) {
+        memcpy(buffer, snapshot + (size_t)offset, capacity);
+    }
+    *out_size = capacity;
+    ++capture->source_read_count;
+    return SALTS_OK;
+}
+
+static void runtime_source_release(void *context)
+{
+    runtime_manager_capture_t *capture =
+        (runtime_manager_capture_t *)context;
+
+    if (capture != NULL) {
+        ++capture->source_release_count;
+    }
+}
+
+static int runtime_manager_source_provider(
+    void *context,
+    tr_raft_index_t required_index,
+    tr_raft_term_t required_term,
+    tr_raft_snapshot_point_t *out_point,
+    tr_raft_snapshot_source_t *out_source)
+{
+    static const uint8_t digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE] = {
+        0x76U, 0xa3U, 0x50U, 0x72U, 0xdfU, 0x72U, 0x59U, 0x1aU,
+        0x65U, 0x6eU, 0x69U, 0xcaU, 0xb6U, 0xf6U, 0xfaU, 0x99U,
+        0xaaU, 0x38U, 0x6fU, 0xd5U, 0xacU, 0xe3U, 0x5cU, 0x90U,
+        0x42U, 0x85U, 0x1eU, 0xb3U, 0x24U, 0xecU, 0x16U, 0xb5U
+    };
+    runtime_manager_capture_t *capture =
+        (runtime_manager_capture_t *)context;
+
+    if (capture == NULL || out_point == NULL || out_source == NULL ||
+        required_index != 10U || required_term != 7U) {
         return SALTS_EINVAL;
     }
     memset(out_point, 0, sizeof(*out_point));
@@ -62,8 +101,13 @@ static int runtime_manager_provider(
     out_point->configuration.members[1].node_id = 2U;
     out_point->configuration.members[1].roles =
         TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
-    memcpy(buffer, snapshot, sizeof(snapshot));
-    *out_size = sizeof(snapshot);
+
+    memset(out_source, 0, sizeof(*out_source));
+    out_source->context = capture;
+    out_source->size = 4U;
+    memcpy(out_source->digest, digest, sizeof(digest));
+    out_source->read_at = runtime_source_read;
+    out_source->release = runtime_source_release;
     ++capture->provider_count;
     return SALTS_OK;
 }
@@ -133,8 +177,8 @@ spec("snapshot manager runtime bridge")
         manager_config.snapshot_max_inflight_chunks = 1U;
         manager_config.enqueue = runtime_manager_enqueue;
         manager_config.enqueue_context = &capture;
-        manager_config.provider = runtime_manager_provider;
-        manager_config.provider_context = &capture;
+        manager_config.source_provider = runtime_manager_source_provider;
+        manager_config.source_provider_context = &capture;
         manager_config.complete = runtime_manager_complete;
         manager_config.complete_context = &capture;
         check_equal(tr_raft_snapshot_manager_create(&manager_config,
@@ -174,6 +218,8 @@ spec("snapshot manager runtime bridge")
                      SALTS_OK);
         check_equal(capture.install_count, 1U);
         check_equal(capture.complete_count, 1U);
+        check_equal(capture.source_read_count, 1U);
+        check_equal(capture.source_release_count, 1U);
         check_equal(capture.completed_peer, 2U);
         check_equal(capture.completed_index, 10U);
 

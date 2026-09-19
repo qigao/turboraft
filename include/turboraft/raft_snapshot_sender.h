@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <turboraft/raft_wire_codec.h>
+#include <turboraft/raft_snapshot_stream.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +45,7 @@ int tr_raft_snapshot_sender_create(
 void tr_raft_snapshot_sender_destroy(tr_raft_snapshot_sender_t *sender);
 void tr_raft_snapshot_sender_reset(tr_raft_snapshot_sender_t *sender);
 
+/** Convenience helper for small snapshots; copies the complete payload. */
 int tr_raft_snapshot_sender_begin(
     tr_raft_snapshot_sender_t *sender,
     tr_raft_term_t leader_term,
@@ -53,6 +54,20 @@ int tr_raft_snapshot_sender_begin(
     const tr_raft_conf_t *configuration,
     const uint8_t *data,
     size_t size);
+
+/**
+ * Starts a database-scale transfer and takes ownership of source on success.
+ * read_at is called with bounded chunk-sized buffers. release is invoked at
+ * final acknowledgement, reset, or destroy when non-NULL.
+ */
+int tr_raft_snapshot_sender_begin_source(
+    tr_raft_snapshot_sender_t *sender,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source);
+
 
 /* Claims the next chunk; returns EBUSY while the bounded window is full. */
 int tr_raft_snapshot_sender_next_chunk(
