@@ -36,6 +36,14 @@ int tr_raft_snapshot_coordinator_begin(
     const uint8_t *data,
     size_t size);
 
+int tr_raft_snapshot_coordinator_begin_source(
+    tr_raft_snapshot_coordinator_t *coordinator,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source);
+
 int tr_raft_snapshot_coordinator_handle_ack(
     tr_raft_snapshot_coordinator_t *coordinator,
     const tr_raft_snapshot_ack_t *ack);
