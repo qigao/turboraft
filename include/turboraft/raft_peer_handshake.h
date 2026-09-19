@@ -23,6 +23,7 @@ extern "C" {
 #define TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V4 (UINT64_C(1) << 2)
 #define TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_V5 (UINT64_C(1) << 3)
 #define TR_RAFT_HANDSHAKE_FEATURE_DATA_STREAM_V5 (UINT64_C(1) << 4)
+#define TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1 (UINT64_C(1) << 5)
 #define TR_RAFT_HANDSHAKE_FEATURE_CURRENT                                    \
     (TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE |                        \
      TR_RAFT_HANDSHAKE_FEATURE_RAFT_BATCH_V3 |                              \
@@ -131,6 +132,10 @@ int tr_raft_handshake_select_snapshot_wire_version(
     const tr_raft_handshake_result_t *result,
     uint16_t *out_wire_version,
     uint32_t *out_chunk_size);
+
+int tr_raft_handshake_select_data_wire_version(
+    const tr_raft_handshake_result_t *result,
+    uint16_t *out_wire_version);
 
 /** Marks result complete only when the remote ACK exactly matches negotiation. */
 int tr_raft_handshake_validate_ack(
