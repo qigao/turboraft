@@ -1,0 +1,80 @@
+name: Multi-group wire verification
+
+on:
+  push:
+    branches:
+      - feature/multi-group-wire
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout TurboRaft
+        uses: actions/checkout@v4
+
+      - name: Checkout public header dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/qigao/salts.git ../salts
+          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils
+
+      - name: Compile changed production sources and contract test
+        shell: bash
+        run: |
+          set -euo pipefail
+          INC=(
+            -Iinclude
+            -Isrc
+            -Isrc/core
+            -Isrc/wire/generated
+            -I../salts/utils/include
+            -I../salts/cstl/include
+            -I../salts/cmeta/include
+            -I../salts/tinytest/include
+            -I../salts-utils/tbe/data_bind
+            -I../salts-utils/tbe/schema/include
+          )
+
+          cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/wire/raft_wire_codec.c
+          cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/transport/raft_peer_handshake.c
+          cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/transport/raft_transport.c
+          cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             tests/core/test_raft_multigroup_wire.c
+
+      - name: Verify public group API constants compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/multigroup_api_smoke.c <<'EOF'
+          #include <turboraft/raft_transport.h>
+
+          _Static_assert(TR_RAFT_WIRE_LEGACY_HEADER_SIZE == 40U,
+                         "legacy header changed");
+          _Static_assert(TR_RAFT_WIRE_GROUP_HEADER_SIZE == 48U,
+                         "group header must carry group id");
+          _Static_assert(TR_RAFT_WIRE_GROUP_VERSION >
+                         TR_RAFT_WIRE_SNAPSHOT_VERSION,
+                         "group format must use a distinct version");
+
+          static void smoke(void)
+          {
+              tr_raft_wire_metadata_t metadata = {0};
+              tr_raft_transport_payload_t payload = {0};
+
+              metadata.group_id = (tr_raft_group_id_t)100U;
+              payload.group_id = metadata.group_id;
+          }
+
+          int main(void)
+          {
+              smoke();
+              return 0;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra -Werror             -Iinclude             /tmp/multigroup_api_smoke.c             -o /tmp/multigroup_api_smoke
+          /tmp/multigroup_api_smoke
