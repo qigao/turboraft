@@ -118,7 +118,6 @@ static bool tr_snapshot_chunk_valid(const tr_raft_snapshot_chunk_t *chunk)
     if (chunk == NULL || chunk->from == 0U || chunk->to == 0U ||
         chunk->term == 0U || chunk->snapshot_index == 0U ||
         chunk->snapshot_term == 0U || chunk->snapshot_term > chunk->term ||
-        chunk->snapshot_size > TR_RAFT_WIRE_MAX_SNAPSHOT_BYTES ||
         chunk->snapshot_offset > chunk->snapshot_size ||
         chunk->data_length > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES ||
         (chunk->data_length != 0U && chunk->data == NULL) ||
@@ -182,7 +181,6 @@ static bool tr_snapshot_ack_valid(const tr_raft_snapshot_ack_t *ack)
 {
     return ack != NULL && ack->from != 0U && ack->to != 0U &&
            ack->term != 0U && ack->snapshot_index != 0U &&
-           ack->snapshot_size <= TR_RAFT_WIRE_MAX_SNAPSHOT_BYTES &&
            ack->next_offset <= ack->snapshot_size;
 }
 
