@@ -856,6 +856,8 @@ static int tr_wal_apply_payload(tr_raft_wal_storage_t *storage,
             tr_raft_index_t commit_index;
             tr_raft_node_id_t voted_for;
             uint32_t configuration_size;
+            uint32_t digest_size;
+            const uint8_t *snapshot_digest = NULL;
             size_t suffix_offset = 0U;
             size_t suffix_count = 0U;
             int result;
@@ -868,8 +870,13 @@ static int tr_wal_apply_payload(tr_raft_wal_storage_t *storage,
             commit_index = tr_wal_get_u64(data + 40U);
             voted_for = tr_wal_get_u64(data + 48U);
             configuration_size = tr_wal_get_u32(data + 56U);
-            if (tr_wal_get_u32(data + 60U) != 0U ||
-                size != 64U + configuration_size || leader_term == 0U ||
+            digest_size = tr_wal_get_u32(data + 60U);
+            if ((digest_size != 0U &&
+                 digest_size != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) ||
+                configuration_size > size - 64U ||
+                digest_size > size - 64U - configuration_size ||
+                size != 64U + configuration_size + digest_size ||
+                leader_term == 0U ||
                 snapshot_index == 0U || snapshot_term == 0U ||
                 snapshot_term > leader_term || leader_term < recovery->term ||
                 snapshot_index <= recovery->snapshot_index ||
@@ -879,6 +886,9 @@ static int tr_wal_apply_payload(tr_raft_wal_storage_t *storage,
                  commit_index > recovery->snapshot_index +
                                     recovery->entry_count))
                 return SALTS_EPROTO;
+            if (digest_size != 0U) {
+                snapshot_digest = data + 64U + configuration_size;
+            }
             if (snapshot_index > recovery->snapshot_index &&
                 snapshot_index <= recovery->snapshot_index +
                                       recovery->entry_count) {
@@ -899,6 +909,12 @@ static int tr_wal_apply_payload(tr_raft_wal_storage_t *storage,
             recovery->entry_count = suffix_count;
             free(recovery->snapshot_data);
             recovery->snapshot_data = NULL;
+            if (recovery->snapshot_source.release != NULL) {
+                recovery->snapshot_source.release(
+                    recovery->snapshot_source.context);
+            }
+            memset(&recovery->snapshot_source, 0,
+                   sizeof(recovery->snapshot_source));
             recovery->snapshot_index = snapshot_index;
             recovery->snapshot_term = snapshot_term;
             recovery->snapshot_size = (size_t)snapshot_size;
@@ -906,8 +922,9 @@ static int tr_wal_apply_payload(tr_raft_wal_storage_t *storage,
             recovery->voted_for = voted_for;
             recovery->term = leader_term;
             recovery->commit_index = commit_index;
-            result = tr_wal_read_snapshot_file(storage, recovery,
-                                               snapshot_checksum);
+            result = tr_wal_read_snapshot_file(
+                storage, recovery, snapshot_checksum,
+                snapshot_digest, digest_size);
             if (result != SALTS_OK) return result;
         } else {
             return SALTS_EPROTO;
