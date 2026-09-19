@@ -76,6 +76,13 @@ static int tr_raft_handshake_bytes_nonzero(const uint8_t *bytes, size_t size)
     return 0;
 }
 
+static uint32_t tr_raft_handshake_required_frame_size(uint64_t feature_bits)
+{
+    return (feature_bits & TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1) != 0U
+               ? TR_RAFT_WIRE_MAX_FRAME_SIZE
+               : TR_RAFT_WIRE_LEGACY_MAX_FRAME_SIZE;
+}
+
 static int tr_raft_handshake_message_validate(
     const tr_raft_handshake_message_t *message)
 {
@@ -97,7 +104,8 @@ static int tr_raft_handshake_message_validate(
         !tr_raft_handshake_bytes_nonzero(
             message->process_incarnation.bytes,
             sizeof(message->process_incarnation.bytes)) ||
-        message->max_frame_size < TR_RAFT_WIRE_MAX_FRAME_SIZE ||
+        message->max_frame_size <
+            tr_raft_handshake_required_frame_size(message->feature_bits) ||
         message->max_snapshot_chunk_size <
             TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
         return SALTS_EPROTO;
@@ -381,7 +389,8 @@ int tr_raft_handshake_result_validate(
             TR_RAFT_HANDSHAKE_FEATURE_CURRENT ||
         result->wire_major != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
         result->wire_minor != TR_RAFT_HANDSHAKE_WIRE_MINOR ||
-        result->max_frame_size < TR_RAFT_WIRE_MAX_FRAME_SIZE ||
+        result->max_frame_size <
+            tr_raft_handshake_required_frame_size(result->feature_bits) ||
         result->max_snapshot_chunk_size <
             TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
         return SALTS_EPROTONOSUPPORT;
@@ -404,7 +413,11 @@ int tr_raft_handshake_select_raft_wire_version(
         result->wire_minor != TR_RAFT_HANDSHAKE_WIRE_MINOR) {
         return SALTS_EPROTONOSUPPORT;
     }
-    *out_wire_version = TR_RAFT_WIRE_VERSION;
+    *out_wire_version =
+        (result->feature_bits &
+         TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1) != 0U
+            ? TR_RAFT_WIRE_GROUP_VERSION
+            : TR_RAFT_WIRE_VERSION;
     return SALTS_OK;
 }
 
@@ -429,8 +442,35 @@ int tr_raft_handshake_select_snapshot_wire_version(
         return SALTS_EPROTONOSUPPORT;
     }
     chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
-    *out_wire_version = TR_RAFT_WIRE_SNAPSHOT_VERSION;
+    *out_wire_version =
+        (result->feature_bits &
+         TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1) != 0U
+            ? TR_RAFT_WIRE_GROUP_VERSION
+            : TR_RAFT_WIRE_SNAPSHOT_VERSION;
     *out_chunk_size = chunk_size;
+    return SALTS_OK;
+}
+
+int tr_raft_handshake_select_data_wire_version(
+    const tr_raft_handshake_result_t *result,
+    uint16_t *out_wire_version)
+{
+    if (result == NULL || out_wire_version == NULL || !result->complete) {
+        return SALTS_EINVAL;
+    }
+    if ((result->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_CURRENT) !=
+            TR_RAFT_HANDSHAKE_FEATURE_CURRENT ||
+        (result->feature_bits & TR_RAFT_HANDSHAKE_FEATURE_DATA_STREAM_V5) ==
+            0U ||
+        result->wire_major != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
+        result->wire_minor != TR_RAFT_HANDSHAKE_WIRE_MINOR) {
+        return SALTS_EPROTONOSUPPORT;
+    }
+    *out_wire_version =
+        (result->feature_bits &
+         TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1) != 0U
+            ? TR_RAFT_WIRE_GROUP_VERSION
+            : TR_RAFT_WIRE_SNAPSHOT_VERSION;
     return SALTS_OK;
 }
 
