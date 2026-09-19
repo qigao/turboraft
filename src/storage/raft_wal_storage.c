@@ -39,7 +39,7 @@ struct tr_raft_wal_storage {
     size_t segment_bytes;
     size_t max_segments;
     size_t max_log_entries;
-    size_t max_snapshot_bytes;
+    uint64_t max_snapshot_bytes;
     size_t current_segment;
     uint64_t current_offset;
     uint64_t last_transaction_id;
@@ -314,7 +314,9 @@ static int tr_wal_read_snapshot_file(
 
     while (offset < recovery->snapshot_size) {
         size_t request = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
-        size_t remaining = recovery->snapshot_size - (size_t)offset;
+        uint64_t remaining64 = recovery->snapshot_size - offset;
+        size_t remaining =
+            remaining64 > (uint64_t)SIZE_MAX ? SIZE_MAX : (size_t)remaining64;
         salts_file_t file;
 
         if (request > remaining) {
@@ -424,7 +426,7 @@ static int tr_wal_write_snapshot_source_file(
         memset(&existing, 0, sizeof(existing));
         existing.snapshot_index = index;
         existing.snapshot_term = term;
-        existing.snapshot_size = (size_t)source->size;
+        existing.snapshot_size = source->size;
         result = tr_wal_snapshot_file_header(
             storage, index, term, source->size, &existing_checksum,
             final_path, sizeof(final_path));
@@ -917,7 +919,7 @@ static int tr_wal_apply_payload(tr_raft_wal_storage_t *storage,
                    sizeof(recovery->snapshot_source));
             recovery->snapshot_index = snapshot_index;
             recovery->snapshot_term = snapshot_term;
-            recovery->snapshot_size = (size_t)snapshot_size;
+            recovery->snapshot_size = snapshot_size;
             recovery->has_snapshot_configuration = true;
             recovery->voted_for = voted_for;
             recovery->term = leader_term;
@@ -1122,7 +1124,7 @@ int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
     storage->max_segments = config->max_segments;
     storage->max_log_entries = config->max_log_entries;
     storage->max_snapshot_bytes = config->max_snapshot_bytes == 0U
-                                      ? TR_RAFT_WAL_MAX_SNAPSHOT_BYTES
+                                      ? TR_RAFT_WAL_DEFAULT_MAX_SNAPSHOT_BYTES
                                       : config->max_snapshot_bytes;
     storage->transaction = (uint8_t *)malloc(transaction_bytes);
     if (storage->transaction == NULL) {
