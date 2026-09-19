@@ -182,19 +182,21 @@ int tr_raft_cnet_peer_enqueue_payload(
     return result;
 }
 
-int tr_raft_cnet_peer_enqueue(void *context,
-                              const tr_raft_message_t *message)
+int tr_raft_cnet_peer_enqueue_group(
+    tr_raft_cnet_peer_t *peer,
+    tr_raft_group_id_t group_id,
+    const tr_raft_message_t *message)
 {
     tr_raft_transport_payload_t payload;
 
-    if (message == NULL) {
+    if (peer == NULL || message == NULL || group_id == 0U) {
         return SALTS_EINVAL;
     }
     memset(&payload, 0, sizeof(payload));
+    payload.group_id = group_id;
     payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
     payload.data.raft = *message;
-    return tr_raft_cnet_peer_enqueue_payload((tr_raft_cnet_peer_t *)context,
-                                              &payload);
+    return tr_raft_cnet_peer_enqueue_payload(peer, &payload);
 }
 
 int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
