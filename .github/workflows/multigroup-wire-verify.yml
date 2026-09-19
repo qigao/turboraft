@@ -230,6 +230,317 @@ jobs:
             -o /tmp/group_queue_behavior
           /tmp/group_queue_behavior
 
+      - name: Run group routing fault-isolation behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/group_routing_behavior.c <<'EOF'
+          #include <turboraft/raft_transport.h>
+          #include <salts_error.h>
+
+          #include <stdlib.h>
+          #include <string.h>
+
+          struct tr_raft_wire_codec {
+              int unused;
+          };
+
+          static tr_raft_wire_metadata_t g_metadata;
+          static tr_raft_message_t g_message;
+
+          int tr_raft_wire_codec_create(tr_raft_wire_codec_t **out_codec)
+          {
+              if (out_codec == NULL) return SALTS_EINVAL;
+              *out_codec = (tr_raft_wire_codec_t *)calloc(1U, sizeof(**out_codec));
+              return *out_codec == NULL ? SALTS_ENOMEM : SALTS_OK;
+          }
+
+          void tr_raft_wire_codec_destroy(tr_raft_wire_codec_t *codec)
+          {
+              free(codec);
+          }
+
+          int tr_raft_wire_peek_payload_kind(
+              const uint8_t *frame,
+              size_t frame_length,
+              tr_raft_wire_payload_kind_t *out_kind)
+          {
+              (void)frame;
+              if (frame_length != TR_RAFT_WIRE_HEADER_SIZE ||
+                  out_kind == NULL) {
+                  return SALTS_EPROTO;
+              }
+              *out_kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+              return SALTS_OK;
+          }
+
+          int tr_raft_wire_decode(
+              tr_raft_wire_codec_t *codec,
+              const uint8_t *frame,
+              size_t frame_length,
+              tr_raft_wire_metadata_t *metadata,
+              tr_raft_message_t *message)
+          {
+              (void)codec;
+              (void)frame;
+              if (frame_length != TR_RAFT_WIRE_HEADER_SIZE ||
+                  metadata == NULL || message == NULL) {
+                  return SALTS_EPROTO;
+              }
+              *metadata = g_metadata;
+              *message = g_message;
+              return SALTS_OK;
+          }
+
+          int tr_raft_wire_decode_snapshot_chunk(
+              tr_raft_wire_codec_t *codec,
+              const uint8_t *frame,
+              size_t frame_length,
+              tr_raft_wire_metadata_t *metadata,
+              tr_raft_snapshot_chunk_t *chunk)
+          {
+              (void)codec; (void)frame; (void)frame_length;
+              (void)metadata; (void)chunk;
+              return SALTS_EPROTO;
+          }
+
+          int tr_raft_wire_decode_snapshot_ack(
+              tr_raft_wire_codec_t *codec,
+              const uint8_t *frame,
+              size_t frame_length,
+              tr_raft_wire_metadata_t *metadata,
+              tr_raft_snapshot_ack_t *ack)
+          {
+              (void)codec; (void)frame; (void)frame_length;
+              (void)metadata; (void)ack;
+              return SALTS_EPROTO;
+          }
+
+          int tr_raft_wire_decode_data_chunk(
+              tr_raft_wire_codec_t *codec,
+              const uint8_t *frame,
+              size_t frame_length,
+              tr_raft_wire_metadata_t *metadata,
+              tr_raft_data_chunk_t *chunk)
+          {
+              (void)codec; (void)frame; (void)frame_length;
+              (void)metadata; (void)chunk;
+              return SALTS_EPROTO;
+          }
+
+          int tr_raft_wire_decode_data_ack(
+              tr_raft_wire_codec_t *codec,
+              const uint8_t *frame,
+              size_t frame_length,
+              tr_raft_wire_metadata_t *metadata,
+              tr_raft_data_ack_t *ack)
+          {
+              (void)codec; (void)frame; (void)frame_length;
+              (void)metadata; (void)ack;
+              return SALTS_EPROTO;
+          }
+
+          int tr_raft_wire_encode(
+              tr_raft_wire_codec_t *codec,
+              const tr_raft_wire_metadata_t *metadata,
+              const tr_raft_message_t *message,
+              uint8_t *output,
+              size_t output_capacity,
+              size_t *output_length)
+          {
+              (void)codec; (void)metadata; (void)message;
+              (void)output; (void)output_capacity; (void)output_length;
+              return SALTS_EPROTONOSUPPORT;
+          }
+
+          int tr_raft_wire_encode_snapshot_chunk(
+              tr_raft_wire_codec_t *codec,
+              const tr_raft_wire_metadata_t *metadata,
+              const tr_raft_snapshot_chunk_t *chunk,
+              uint8_t *output,
+              size_t output_capacity,
+              size_t *output_length)
+          {
+              (void)codec; (void)metadata; (void)chunk;
+              (void)output; (void)output_capacity; (void)output_length;
+              return SALTS_EPROTONOSUPPORT;
+          }
+
+          int tr_raft_wire_encode_snapshot_ack(
+              tr_raft_wire_codec_t *codec,
+              const tr_raft_wire_metadata_t *metadata,
+              const tr_raft_snapshot_ack_t *ack,
+              uint8_t *output,
+              size_t output_capacity,
+              size_t *output_length)
+          {
+              (void)codec; (void)metadata; (void)ack;
+              (void)output; (void)output_capacity; (void)output_length;
+              return SALTS_EPROTONOSUPPORT;
+          }
+
+          int tr_raft_wire_encode_data_chunk(
+              tr_raft_wire_codec_t *codec,
+              const tr_raft_wire_metadata_t *metadata,
+              const tr_raft_data_chunk_t *chunk,
+              uint8_t *output,
+              size_t output_capacity,
+              size_t *output_length)
+          {
+              (void)codec; (void)metadata; (void)chunk;
+              (void)output; (void)output_capacity; (void)output_length;
+              return SALTS_EPROTONOSUPPORT;
+          }
+
+          int tr_raft_wire_encode_data_ack(
+              tr_raft_wire_codec_t *codec,
+              const tr_raft_wire_metadata_t *metadata,
+              const tr_raft_data_ack_t *ack,
+              uint8_t *output,
+              size_t output_capacity,
+              size_t *output_length)
+          {
+              (void)codec; (void)metadata; (void)ack;
+              (void)output; (void)output_capacity; (void)output_length;
+              return SALTS_EPROTONOSUPPORT;
+          }
+
+          int tr_raft_handshake_result_validate(
+              const tr_raft_handshake_result_t *result,
+              const tr_raft_cluster_id_t *cluster_id,
+              tr_raft_node_id_t local_node_id,
+              tr_raft_node_id_t peer_node_id)
+          {
+              if (result == NULL || cluster_id == NULL || !result->complete ||
+                  result->local_node_id != local_node_id ||
+                  result->peer_node_id != peer_node_id ||
+                  memcmp(result->cluster_id.bytes, cluster_id->bytes,
+                         sizeof(cluster_id->bytes)) != 0) {
+                  return SALTS_EPROTO;
+              }
+              return SALTS_OK;
+          }
+
+          static int route(void *context,
+                           const tr_raft_transport_payload_t *payload)
+          {
+              size_t *accepted = (size_t *)context;
+
+              if (payload->group_id == 999U) return SALTS_ENOENT;
+              if (payload->group_id == 998U) return SALTS_ESHUTDOWN;
+              ++*accepted;
+              return SALTS_OK;
+          }
+
+          static void put_u32(uint8_t *p, uint32_t value)
+          {
+              p[0] = (uint8_t)(value >> 24U);
+              p[1] = (uint8_t)(value >> 16U);
+              p[2] = (uint8_t)(value >> 8U);
+              p[3] = (uint8_t)value;
+          }
+
+          static int feed_group(
+              tr_raft_transport_session_t *session,
+              tr_raft_group_id_t group_id,
+              uint64_t message_id)
+          {
+              uint8_t packet[
+                  TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE +
+                  TR_RAFT_WIRE_HEADER_SIZE];
+
+              memset(packet, 0, sizeof(packet));
+              put_u32(packet, TR_RAFT_WIRE_HEADER_SIZE);
+              g_metadata.group_id = group_id;
+              g_metadata.message_id = message_id;
+              return tr_raft_transport_feed(session, packet, sizeof(packet));
+          }
+
+          int main(void)
+          {
+              tr_raft_transport_session_config_t config;
+              tr_raft_handshake_result_t handshake;
+              tr_raft_transport_session_t *session = NULL;
+              tr_raft_transport_status_t status;
+              size_t accepted = 0U;
+              size_t i;
+
+              memset(&config, 0, sizeof(config));
+              memset(&handshake, 0, sizeof(handshake));
+              memset(&g_metadata, 0, sizeof(g_metadata));
+              memset(&g_message, 0, sizeof(g_message));
+
+              for (i = 0U; i < sizeof(config.cluster_id.bytes); ++i) {
+                  config.cluster_id.bytes[i] = (uint8_t)(41U + i);
+              }
+              g_metadata.cluster_id = config.cluster_id;
+              g_message.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+              g_message.from = 1U;
+              g_message.to = 2U;
+              g_message.term = 7U;
+
+              handshake.complete = 1;
+              handshake.cluster_id = config.cluster_id;
+              handshake.local_node_id = 2U;
+              handshake.peer_node_id = 1U;
+              handshake.peer_process_incarnation.bytes[0] = 1U;
+              handshake.wire_major = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
+              handshake.wire_minor = TR_RAFT_HANDSHAKE_WIRE_MINOR;
+              handshake.max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
+              handshake.max_snapshot_chunk_size =
+                  TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+
+              config.local_node_id = 2U;
+              config.peer_node_id = 1U;
+              config.first_outbound_message_id = 1U;
+              config.handshake = &handshake;
+              config.on_payload = route;
+              config.payload_context = &accepted;
+
+              if (tr_raft_transport_session_create(&config, &session) !=
+                  SALTS_OK) return 10;
+
+              if (feed_group(session, 999U, 1U) != SALTS_OK) return 11;
+              if (tr_raft_transport_get_status(session, &status) != SALTS_OK)
+                  return 12;
+              if (status.state != TR_RAFT_TRANSPORT_STATE_READY ||
+                  status.group_routing_rejections != 1U ||
+                  status.last_rejected_group_id != 999U ||
+                  status.last_group_routing_error != SALTS_ENOENT)
+                  return 13;
+
+              if (feed_group(session, 998U, 2U) != SALTS_OK) return 14;
+              if (tr_raft_transport_get_status(session, &status) != SALTS_OK)
+                  return 15;
+              if (status.state != TR_RAFT_TRANSPORT_STATE_READY ||
+                  status.group_routing_rejections != 2U ||
+                  status.last_rejected_group_id != 998U ||
+                  status.last_group_routing_error != SALTS_ESHUTDOWN)
+                  return 16;
+
+              if (feed_group(session, 100U, 3U) != SALTS_OK) return 17;
+              if (accepted != 1U) return 18;
+              if (tr_raft_transport_get_status(session, &status) != SALTS_OK)
+                  return 19;
+              if (status.state != TR_RAFT_TRANSPORT_STATE_READY) return 20;
+
+              if (tr_raft_transport_session_destroy(session) != SALTS_OK)
+                  return 21;
+              return 0;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/concurrency/include \
+            -I../salts/cmeta/include \
+            /tmp/group_routing_behavior.c \
+            src/transport/raft_transport.c \
+            -o /tmp/group_routing_behavior
+          /tmp/group_routing_behavior
+
       - name: Verify current public group API
         shell: bash
         run: |
