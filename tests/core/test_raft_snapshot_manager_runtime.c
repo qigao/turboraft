@@ -124,11 +124,12 @@ spec("snapshot manager runtime bridge")
         memset(&capture, 0, sizeof(capture));
         memset(&manager_config, 0, sizeof(manager_config));
         manager_config.self_id = 1U;
+        manager_config.group_id = 88U;
         manager_config.peer_node_ids = peers;
         manager_config.peer_count = 1U;
         manager_config.max_snapshot_bytes = 1024U;
         manager_config.snapshot_chunk_size =
-            TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+            512U;
         manager_config.snapshot_max_inflight_chunks = 1U;
         manager_config.enqueue = runtime_manager_enqueue;
         manager_config.enqueue_context = &capture;
@@ -165,6 +166,7 @@ spec("snapshot manager runtime bridge")
                          &capture.payloads[0].data.snapshot_chunk,
                          &receive_result), SALTS_OK);
         memset(&ack_payload, 0, sizeof(ack_payload));
+        ack_payload.group_id = 88U;
         ack_payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
         ack_payload.data.snapshot_ack = receive_result.ack;
         check_equal(tr_raft_snapshot_manager_handle_payload(manager,
