@@ -836,12 +836,20 @@ int tr_raft_flowmq_peer_service_get_status(
     out_status->step_active = service->step_active;
     out_status->last_error = service->last_error;
     for (index = 0U; index < service->peer_count; ++index) {
+        tr_raft_transport_status_t transport_status;
+
         out_status->active_group_count +=
             tr_raft_group_queue_active_groups(&service->peers[index].outbound);
         out_status->queued_payload_count +=
             tr_raft_group_queue_size(&service->peers[index].outbound);
         out_status->queued_data_bytes +=
             tr_raft_group_queue_data_bytes(&service->peers[index].outbound);
+        if (tr_raft_transport_get_status(service->peers[index].session,
+                                         &transport_status) != SALTS_OK) {
+            return SALTS_EPROTO;
+        }
+        out_status->group_routing_rejections +=
+            transport_status.group_routing_rejections;
     }
     return SALTS_OK;
 }
@@ -872,6 +880,25 @@ int tr_raft_flowmq_peer_service_get_group_status(
             out_status->queued_payload_count = status.queued_item_count;
             out_status->queued_data_bytes = status.queued_data_bytes;
             return SALTS_OK;
+        }
+    }
+    return SALTS_ENOENT;
+}
+
+int tr_raft_flowmq_peer_service_get_peer_transport_status(
+    const tr_raft_flowmq_peer_service_t *service,
+    tr_raft_node_id_t peer_node_id,
+    tr_raft_transport_status_t *out_status)
+{
+    size_t index;
+
+    if (service == NULL || peer_node_id == 0U || out_status == NULL) {
+        return SALTS_EINVAL;
+    }
+    for (index = 0U; index < service->peer_count; ++index) {
+        if (service->peers[index].node_id == peer_node_id) {
+            return tr_raft_transport_get_status(
+                service->peers[index].session, out_status);
         }
     }
     return SALTS_ENOENT;
