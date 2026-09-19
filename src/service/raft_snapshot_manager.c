@@ -9,6 +9,7 @@
 
 struct tr_raft_snapshot_manager {
     tr_raft_node_id_t self_id;
+    tr_raft_group_id_t group_id;
     tr_raft_node_id_t peer_node_ids[TR_RAFT_MAX_VOTERS - 1U];
     tr_raft_snapshot_peer_t *peers[TR_RAFT_MAX_VOTERS - 1U];
     size_t peer_count;
@@ -62,6 +63,7 @@ int tr_raft_snapshot_manager_create(
     int result;
 
     if (config == NULL || out_manager == NULL || config->self_id == 0U ||
+        config->group_id == 0U ||
         config->peer_node_ids == NULL || config->peer_count == 0U ||
         config->peer_count > TR_RAFT_MAX_VOTERS - 1U ||
         config->max_snapshot_bytes == 0U) {
@@ -82,6 +84,7 @@ int tr_raft_snapshot_manager_create(
         return SALTS_ENOMEM;
     }
     manager->self_id = config->self_id;
+    manager->group_id = config->group_id;
     manager->peer_count = config->peer_count;
     manager->enqueue = config->enqueue;
     manager->enqueue_context = config->enqueue_context;
@@ -107,6 +110,7 @@ int tr_raft_snapshot_manager_create(
         memset(&peer_config, 0, sizeof(peer_config));
         peer_config.self_id = manager->self_id;
         peer_config.peer_id = manager->peer_node_ids[index];
+        peer_config.group_id = manager->group_id;
         peer_config.max_snapshot_bytes = config->max_snapshot_bytes;
         peer_config.chunk_size = config->snapshot_chunk_size;
         peer_config.max_inflight_chunks =
@@ -240,6 +244,7 @@ int tr_raft_snapshot_manager_handle_payload(
     size_t index;
 
     if (manager == NULL || payload == NULL ||
+        payload->group_id != manager->group_id ||
         payload->kind != TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK ||
         payload->data.snapshot_ack.to != manager->self_id) {
         return SALTS_EPROTO;
