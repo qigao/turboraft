@@ -48,7 +48,7 @@ typedef uint64_t tr_raft_group_id_t;
 
 Rules:
 
-- 0 is invalid for group-aware sessions.
+- 0 is invalid for every transport session.
 - Group IDs are assigned and interpreted by the embedding system.
 - Group ID is not stored in tr_raft_message_t.
 - Group ID is not part of election, quorum, term, log, or membership semantics.
@@ -80,24 +80,33 @@ A frame is first validated for cluster/session identity and then routed by group
 
 The group ID MUST NOT be encoded independently inside each payload type. It belongs to the common envelope.
 
-## 6. Negotiation and compatibility
+## 6. Single current wire contract
 
-Add an explicit peer capability such as:
+R0 intentionally removes legacy peer-wire interoperability. TurboRaft has one current peer protocol and every valid frame is group-aware.
 
-~~~c
-TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1
+The common envelope is fixed:
+
+~~~text
+magic
+version
+header_size
+payload_size
+payload_kind
+cluster_id
+group_id
+message_id
 ~~~
 
-Compatibility rules:
+Rules:
 
-1. A peer pair without this capability keeps the current single-group contract.
-2. A group-aware session requires both peers to negotiate the feature.
-3. Legacy frames are never silently interpreted as group-aware frames.
-4. A group-aware session rejects group ID 0.
-5. Frame limits and snapshot limits remain negotiated exactly as they are today.
-6. Rolling upgrade compatibility is explicit; no inferred downgrade path is allowed.
+1. `group_id` is mandatory and non-zero on every frame, including deployments that host only one Raft group.
+2. A single-group embedding may simply use a stable group ID such as 1; there is no separate single-group wire mode.
+3. Raft, snapshot, and data payloads all use the same current envelope contract.
+4. Handshake negotiates peer identity, limits, and future optional capabilities; it does not negotiate historical Raft/snapshot/data wire versions.
+5. Old peers using the pre-R0 wire contract are rejected explicitly. Rolling interoperability with those peers is not supported.
+6. Upgrading across this breaking wire change requires a coordinated cluster upgrade/restart or rebootstrap policy owned by the embedding system.
 
-For legacy single-group operation, the caller may configure one default local group association outside the wire protocol. This is an adapter concern and must not create a second wire interpretation.
+This removes dual header sizes, version-specific transport callbacks, historical payload selectors, and optional group-multiplex feature negotiation.
 
 ## 7. Physical peer connection model
 
@@ -129,7 +138,7 @@ int tr_raft_flowmq_peer_service_enqueue_group(
     const tr_raft_transport_payload_t *payload);
 ~~~
 
-The existing single-group APIs remain source-compatible where practical and are implemented as compatibility adapters rather than duplicated transport stacks.
+There is one outbound transport API family. Every queued payload carries an explicit non-zero group ID; no legacy single-group transport adapter is retained.
 
 ## 9. Inbound dispatch
 
@@ -456,8 +465,8 @@ R0 is complete only when all of the following pass:
 7. Every group recovers from its own WAL without opening another group's WAL.
 8. Group removal does not disturb unrelated groups on the same physical transport.
 9. Streaming snapshot transfer works without retaining the full snapshot in memory.
-10. Existing single-group Core, Service, WAL, snapshot, and transport behavior remains unchanged.
-11. Legacy peer interoperability follows the explicit negotiated compatibility contract.
+10. Existing single-group Core, Service, WAL, and state-machine semantics remain unchanged; transport callers migrate to the mandatory group-aware API.
+11. Pre-R0 legacy peer frames are rejected rather than silently downgraded.
 12. Full release tests and multiprocess chaos tests remain green.
 
 ## 24. Resulting TurboRaft boundary
