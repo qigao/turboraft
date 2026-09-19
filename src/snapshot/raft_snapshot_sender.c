@@ -66,7 +66,6 @@ int tr_raft_snapshot_sender_create(
     inflight = config->max_inflight_chunks;
     if (chunk_size == 0U ||
         chunk_size > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES ||
-        chunk_size % TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES != 0U ||
         inflight == 0U ||
         inflight > TR_RAFT_SNAPSHOT_MAX_INFLIGHT_CHUNKS ||
         chunk_size > SIZE_MAX / inflight ||
