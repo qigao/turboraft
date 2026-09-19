@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,7 +16,8 @@ extern "C" {
 #define TR_RAFT_WAL_DEFAULT_SEGMENT_BYTES (64U * 1024U * 1024U)
 #define TR_RAFT_WAL_DEFAULT_TRANSACTION_BYTES (256U * 1024U)
 #define TR_RAFT_WAL_MAX_SEGMENTS 65535U
-#define TR_RAFT_WAL_MAX_SNAPSHOT_BYTES (256U * 1024U * 1024U)
+#define TR_RAFT_WAL_DEFAULT_MAX_SNAPSHOT_BYTES \
+    (UINT64_C(256) * 1024U * 1024U)
 
 typedef struct tr_raft_wal_storage tr_raft_wal_storage_t;
 
@@ -26,7 +28,7 @@ typedef struct tr_raft_wal_storage_config {
     size_t max_transaction_bytes;
     size_t max_segments;
     size_t max_log_entries;
-    size_t max_snapshot_bytes;
+    uint64_t max_snapshot_bytes;
     bool create_if_missing;
 } tr_raft_wal_storage_config_t;
 
@@ -43,7 +45,7 @@ typedef struct tr_raft_wal_recovery {
      * Use snapshot_source for snapshot bytes.
      */
     uint8_t *snapshot_data;
-    size_t snapshot_size;
+    uint64_t snapshot_size;
     tr_raft_snapshot_source_t snapshot_source;
     tr_raft_entry_t *entries;
     size_t entry_count;
