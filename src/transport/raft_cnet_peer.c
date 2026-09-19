@@ -344,6 +344,10 @@ int tr_raft_cnet_peer_get_status(const tr_raft_cnet_peer_t *peer,
     }
     memset(out_status, 0, sizeof(*out_status));
     out_status->connection_state = peer->connection_state;
+    if (tr_raft_transport_get_status(peer->transport,
+                                     &out_status->transport) != SALTS_OK) {
+        return SALTS_EPROTO;
+    }
     out_status->outbound_limits = peer->outbound_limits;
     out_status->active_group_count =
         tr_raft_group_queue_active_groups(&peer->outbound);
