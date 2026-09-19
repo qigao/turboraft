@@ -23,6 +23,7 @@
 #define TR_FLOWMQ_TEST_CNET_STOP_TIMEOUT_MS 5000U
 
 typedef struct tr_flowmq_message_capture {
+    tr_raft_group_id_t group_id;
     tr_raft_message_t message;
     size_t count;
 } tr_flowmq_message_capture_t;
@@ -62,10 +63,11 @@ typedef struct tr_flowmq_live_service_config {
     tr_flowmq_message_capture_t *capture;
 } tr_flowmq_live_service_config_t;
 
-static int ignore_message(void *context, const tr_raft_message_t *message)
+static int ignore_payload(void *context,
+                          const tr_raft_transport_payload_t *payload)
 {
     (void)context;
-    (void)message;
+    (void)payload;
     return SALTS_OK;
 }
 
@@ -82,7 +84,7 @@ static tr_raft_handshake_config_t protocol_config(
     config.local_node_id = local_node_id;
     config.process_incarnation.bytes[0] = (uint8_t)local_node_id;
     config.config_epoch = 1U;
-    config.feature_bits = TR_RAFT_HANDSHAKE_FEATURE_CURRENT;
+    config.feature_bits = 0U;
     config.wire_major_min = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
     config.wire_major_max = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
     config.wire_minor_min = TR_RAFT_HANDSHAKE_WIRE_MINOR;
@@ -109,7 +111,7 @@ static tr_raft_flowmq_peer_service_t *make_service(size_t capacity)
     handshake.local_node_id = 1U;
     handshake.peer_node_id = 2U;
     handshake.peer_process_incarnation.bytes[0] = 1U;
-    handshake.feature_bits = TR_RAFT_HANDSHAKE_FEATURE_CURRENT;
+    handshake.feature_bits = 0U;
     handshake.wire_major = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
     handshake.wire_minor = TR_RAFT_HANDSHAKE_WIRE_MINOR;
     handshake.max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
@@ -135,21 +137,25 @@ static tr_raft_flowmq_peer_service_t *make_service(size_t capacity)
     config.receive_hwm_bytes = 8U * 1024U * 1024U;
     config.reconnect_initial_ms = 100U;
     config.reconnect_max_ms = 1000U;
-    config.on_message = ignore_message;
+    config.on_payload = ignore_payload;
     check_equal(tr_raft_flowmq_peer_service_create(&config, &service),
                 SALTS_OK);
     return service;
 }
 
-static int capture_message(void *context, const tr_raft_message_t *message)
+static int capture_payload(void *context,
+                           const tr_raft_transport_payload_t *payload)
 {
     tr_flowmq_message_capture_t *capture =
         (tr_flowmq_message_capture_t *)context;
 
-    if (capture == NULL || message == NULL) {
+    if (capture == NULL || payload == NULL ||
+        payload->kind != TR_RAFT_WIRE_PAYLOAD_RAFT ||
+        payload->group_id == 0U) {
         return SALTS_EINVAL;
     }
-    capture->message = *message;
+    capture->group_id = payload->group_id;
+    capture->message = payload->data.raft;
     capture->count++;
     return SALTS_OK;
 }
@@ -167,7 +173,7 @@ static tr_raft_handshake_result_t handshake_result(
     result.peer_node_id = peer_node_id;
     result.peer_process_incarnation.bytes[0] = (uint8_t)peer_node_id;
     result.peer_config_epoch = 1U;
-    result.feature_bits = TR_RAFT_HANDSHAKE_FEATURE_CURRENT;
+    result.feature_bits = 0U;
     result.wire_major = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
     result.wire_minor = TR_RAFT_HANDSHAKE_WIRE_MINOR;
     result.max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
@@ -398,8 +404,8 @@ static int create_live_service(
     config.receive_hwm_bytes = TR_FLOWMQ_TEST_HWM_BYTES;
     config.reconnect_initial_ms = 1U;
     config.reconnect_max_ms = 16U;
-    config.on_message = capture_message;
-    config.message_context = live->capture;
+    config.on_payload = capture_payload;
+    config.payload_context = live->capture;
     return tr_raft_flowmq_peer_service_create(&config, out_service);
 }
 
@@ -585,8 +591,8 @@ spec("Raft FlowMQ caller-driven service")
         check_equal(result, SALTS_OK);
         if (result == SALTS_OK) {
             message.term = 7U;
-            result = tr_raft_flowmq_peer_service_enqueue(pair.node1,
-                                                         &message);
+            result = tr_raft_flowmq_peer_service_enqueue_group(pair.node1, 1U,
+                                                               &message);
             check_equal(result, SALTS_OK);
         }
         for (progress = 0U;
@@ -603,6 +609,7 @@ spec("Raft FlowMQ caller-driven service")
         check_equal(result, SALTS_OK);
         check_equal(pair.node2_capture.count, 1U);
         if (pair.node2_capture.count == 1U) {
+            check_equal(pair.node2_capture.group_id, 1U);
             check_equal(pair.node2_capture.message.type,
                         TR_RAFT_MSG_HEARTBEAT_REQUEST);
             check_equal(pair.node2_capture.message.from, 1U);
@@ -661,8 +668,8 @@ spec("Raft FlowMQ caller-driven service")
         }
         if (result == SALTS_OK) {
             message.term = 7U;
-            result = tr_raft_flowmq_peer_service_enqueue(pair.node1,
-                                                         &message);
+            result = tr_raft_flowmq_peer_service_enqueue_group(pair.node1, 1U,
+                                                               &message);
             check_equal(result, SALTS_OK);
         }
         for (progress = 0U;
@@ -699,11 +706,11 @@ spec("Raft FlowMQ caller-driven service")
         tr_raft_flowmq_peer_service_status_t status;
         tr_raft_message_t message = heartbeat();
 
-        check_equal(tr_raft_flowmq_peer_service_enqueue(service, &message),
+        check_equal(tr_raft_flowmq_peer_service_enqueue_group(service, 1U, &message),
                     SALTS_OK);
-        check_equal(tr_raft_flowmq_peer_service_enqueue(service, &message),
+        check_equal(tr_raft_flowmq_peer_service_enqueue_group(service, 1U, &message),
                     SALTS_OK);
-        check_equal(tr_raft_flowmq_peer_service_enqueue(service, &message),
+        check_equal(tr_raft_flowmq_peer_service_enqueue_group(service, 1U, &message),
                     SALTS_ENOSPC);
         check_equal(tr_raft_flowmq_peer_service_get_status(service, &status),
                     SALTS_OK);
@@ -720,12 +727,12 @@ spec("Raft FlowMQ caller-driven service")
 
         check_equal(tr_raft_flowmq_peer_service_start(service), SALTS_OK);
         check_equal(tr_raft_flowmq_peer_service_destroy(service), SALTS_EBUSY);
-        check_equal(tr_raft_flowmq_peer_service_enqueue(service, &message),
+        check_equal(tr_raft_flowmq_peer_service_enqueue_group(service, 1U, &message),
                     SALTS_OK);
         memset(&step, 0, sizeof(step));
         check_equal(tr_raft_flowmq_peer_service_step(service, &step), SALTS_OK);
         check_equal(tr_raft_flowmq_peer_service_stop(service), SALTS_OK);
-        check_equal(tr_raft_flowmq_peer_service_enqueue(service, &message),
+        check_equal(tr_raft_flowmq_peer_service_enqueue_group(service, 1U, &message),
                     SALTS_EPIPE);
         check_equal(tr_raft_flowmq_peer_service_destroy(service), SALTS_OK);
     }
