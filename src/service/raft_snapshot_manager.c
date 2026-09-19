@@ -15,7 +15,8 @@ struct tr_raft_snapshot_manager {
     size_t peer_count;
     tr_raft_snapshot_manager_payload_enqueue_fn enqueue;
     void *enqueue_context;
-    size_t max_snapshot_bytes;
+    uint64_t max_snapshot_bytes;
+    size_t max_buffered_snapshot_bytes;
     uint8_t *snapshot_buffer;
     tr_raft_snapshot_source_provider_fn source_provider;
     void *source_provider_context;
@@ -94,7 +95,13 @@ int tr_raft_snapshot_manager_create(
         config->peer_node_ids == NULL || config->peer_count == 0U ||
         config->peer_count > TR_RAFT_MAX_VOTERS - 1U ||
         config->max_snapshot_bytes == 0U ||
-        (config->source_provider != NULL && config->provider != NULL)) {
+        (config->source_provider != NULL && config->provider != NULL) ||
+        (config->source_provider != NULL &&
+         config->max_buffered_snapshot_bytes != 0U) ||
+        (config->provider != NULL &&
+         (config->max_buffered_snapshot_bytes == 0U ||
+          config->max_buffered_snapshot_bytes > config->max_snapshot_bytes ||
+          config->max_buffered_snapshot_bytes > (uint64_t)SIZE_MAX))) {
         return SALTS_EINVAL;
     }
     for (index = 0U; index < config->peer_count; ++index) {
@@ -117,6 +124,8 @@ int tr_raft_snapshot_manager_create(
     manager->enqueue = config->enqueue;
     manager->enqueue_context = config->enqueue_context;
     manager->max_snapshot_bytes = config->max_snapshot_bytes;
+    manager->max_buffered_snapshot_bytes =
+        (size_t)config->max_buffered_snapshot_bytes;
     manager->source_provider = config->source_provider;
     manager->source_provider_context = config->source_provider_context;
     manager->provider = config->provider;
@@ -125,7 +134,7 @@ int tr_raft_snapshot_manager_create(
     manager->complete_context = config->complete_context;
     if (manager->provider != NULL) {
         manager->snapshot_buffer = (uint8_t *) malloc(
-            manager->max_snapshot_bytes);
+            manager->max_buffered_snapshot_bytes);
         if (manager->snapshot_buffer == NULL) {
             free(manager);
             return SALTS_ENOMEM;
@@ -276,14 +285,14 @@ int tr_raft_snapshot_manager_enqueue_request(
         result = manager->provider(
             manager->provider_context, request->snapshot_index,
             request->snapshot_term, &point, manager->snapshot_buffer,
-            manager->max_snapshot_bytes, &snapshot_size);
+            manager->max_buffered_snapshot_bytes, &snapshot_size);
         if (result != SALTS_OK) {
             return result;
         }
         if (point.index != request->snapshot_index ||
             point.term != request->snapshot_term ||
             tr_raft_conf_validate(&point.configuration) != SALTS_OK ||
-            snapshot_size > manager->max_snapshot_bytes) {
+            snapshot_size > manager->max_buffered_snapshot_bytes) {
             return SALTS_EPROTO;
         }
         result = tr_raft_snapshot_peer_begin(
