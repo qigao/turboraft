@@ -212,6 +212,13 @@ add_test(NAME turboraft.service_wal_reload
                TIMEOUT 600
                LABELS "chaos;multiprocess")
 
+add_executable(turboraft_multigroup_wire_tests
+               test_raft_multigroup_wire.c)
+target_link_libraries(turboraft_multigroup_wire_tests
+                      PRIVATE TurboRaft::Core TurboRaft::CNet)
+add_test(NAME turboraft.multigroup_wire
+         COMMAND turboraft_multigroup_wire_tests)
+
 add_executable(turboraft_wire_tests test_raft_wire_codec.c)
 target_link_libraries(turboraft_wire_tests PRIVATE TurboRaft::Core
                                                    Salts::TinyTest)
