@@ -11,6 +11,52 @@ static const tr_raft_conf_t sender_configuration = {
     {{1U, TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER}}
 };
 
+typedef struct generated_snapshot_source {
+    uint64_t size;
+    size_t read_calls;
+    size_t max_requested;
+    size_t release_calls;
+} generated_snapshot_source_t;
+
+static int generated_snapshot_read(
+    void *context,
+    uint64_t offset,
+    uint8_t *buffer,
+    size_t capacity,
+    size_t *out_size)
+{
+    generated_snapshot_source_t *source =
+        (generated_snapshot_source_t *)context;
+    size_t index;
+
+    if (source == NULL || out_size == NULL ||
+        offset > source->size ||
+        capacity > source->size - offset ||
+        (capacity != 0U && buffer == NULL)) {
+        return SALTS_EINVAL;
+    }
+    ++source->read_calls;
+    if (capacity > source->max_requested) {
+        source->max_requested = capacity;
+    }
+    for (index = 0U; index < capacity; ++index) {
+        buffer[index] = (uint8_t)((offset + index) & 0xffU);
+    }
+    *out_size = capacity;
+    return SALTS_OK;
+}
+
+static void generated_snapshot_release(void *context)
+{
+    generated_snapshot_source_t *source =
+        (generated_snapshot_source_t *)context;
+
+    if (source != NULL) {
+        ++source->release_calls;
+    }
+}
+
+
 spec("raft snapshot sender")
 {
     it("advances only after an acknowledgement")
@@ -201,4 +247,85 @@ spec("raft snapshot sender")
         tr_raft_snapshot_sender_destroy(sender);
         free(snapshot);
     }
+    it("streams snapshot bytes from a bounded read-at source")
+    {
+        enum {
+            SNAPSHOT_BYTES =
+                3U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES + 17U
+        };
+        tr_raft_snapshot_sender_config_t config;
+        tr_raft_snapshot_sender_t *sender = NULL;
+        tr_raft_snapshot_source_t source;
+        generated_snapshot_source_t generated;
+        tr_raft_snapshot_chunk_t chunk;
+        tr_raft_snapshot_ack_t ack;
+        uint64_t expected_offset = 0U;
+        size_t chunk_count = 0U;
+
+        memset(&config, 0, sizeof(config));
+        memset(&source, 0, sizeof(source));
+        memset(&generated, 0, sizeof(generated));
+        memset(&ack, 0, sizeof(ack));
+
+        generated.size = SNAPSHOT_BYTES;
+        source.context = &generated;
+        source.size = SNAPSHOT_BYTES;
+        memset(source.digest, 0x5a, sizeof(source.digest));
+        source.read_at = generated_snapshot_read;
+        source.release = generated_snapshot_release;
+
+        config.self_id = 1U;
+        config.peer_id = 2U;
+        config.max_snapshot_bytes = SNAPSHOT_BYTES;
+        config.chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+        config.max_inflight_chunks = 1U;
+
+        check_equal(tr_raft_snapshot_sender_create(&config, &sender),
+                    SALTS_OK);
+        check_equal(tr_raft_snapshot_sender_begin_source(
+                         sender, 7U, 9U, 6U,
+                         &sender_configuration, &source),
+                    SALTS_OK);
+
+        ack.from = 2U;
+        ack.to = 1U;
+        ack.term = 7U;
+        ack.snapshot_index = 9U;
+        ack.snapshot_size = SNAPSHOT_BYTES;
+        ack.accepted = true;
+        memcpy(ack.snapshot_digest, source.digest,
+               sizeof(ack.snapshot_digest));
+
+        while (expected_offset < SNAPSHOT_BYTES) {
+            size_t index;
+
+            check_equal(tr_raft_snapshot_sender_next_chunk(
+                             sender, &chunk),
+                        SALTS_OK);
+            check_equal(chunk.snapshot_offset, expected_offset);
+            check(chunk.data_length <=
+                  TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
+            for (index = 0U; index < chunk.data_length; ++index) {
+                check_equal(chunk.data[index],
+                            (uint8_t)((expected_offset + index) & 0xffU));
+            }
+            expected_offset += chunk.data_length;
+            ++chunk_count;
+
+            ack.next_offset = expected_offset;
+            check_equal(tr_raft_snapshot_sender_acknowledge(
+                             sender, &ack),
+                        SALTS_OK);
+        }
+
+        check_equal(chunk_count, 4U);
+        check_equal(generated.read_calls, 4U);
+        check_equal(generated.max_requested,
+                    TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
+        check_equal(generated.release_calls, 1U);
+
+        tr_raft_snapshot_sender_destroy(sender);
+        check_equal(generated.release_calls, 1U);
+    }
+
 }
