@@ -115,6 +115,31 @@ int tr_raft_snapshot_coordinator_begin(
     return tr_snapshot_coordinator_fill_window(coordinator);
 }
 
+int tr_raft_snapshot_coordinator_begin_source(
+    tr_raft_snapshot_coordinator_t *coordinator,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source)
+{
+    int result;
+
+    if (coordinator == NULL || source == NULL) {
+        return SALTS_EINVAL;
+    }
+    result = tr_raft_snapshot_sender_begin_source(
+        coordinator->sender, leader_term, snapshot_index, snapshot_term,
+        configuration, source);
+    if (result != SALTS_OK) {
+        if (source->release != NULL) {
+            source->release(source->context);
+        }
+        return result;
+    }
+    return tr_snapshot_coordinator_fill_window(coordinator);
+}
+
 int tr_raft_snapshot_coordinator_handle_ack(
     tr_raft_snapshot_coordinator_t *coordinator,
     const tr_raft_snapshot_ack_t *ack)
