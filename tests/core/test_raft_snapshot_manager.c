@@ -80,6 +80,7 @@ static int manager_receive_and_ack(
         return status;
     }
     memset(&ack_payload, 0, sizeof(ack_payload));
+    ack_payload.group_id = chunk_payload->group_id;
     ack_payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
     ack_payload.data.snapshot_ack = result.ack;
     return tr_raft_snapshot_manager_handle_payload(manager, &ack_payload);
@@ -117,11 +118,11 @@ spec("raft snapshot manager")
         installed_three.expected_size = sizeof(snapshot_three);
 
         manager_config.self_id = 1U;
+        manager_config.group_id = 88U;
         manager_config.peer_node_ids = peer_ids;
         manager_config.peer_count = sizeof(peer_ids) / sizeof(peer_ids[0]);
         manager_config.max_snapshot_bytes = 1024U;
-        manager_config.snapshot_chunk_size =
-            TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+        manager_config.snapshot_chunk_size = 512U;
         manager_config.snapshot_max_inflight_chunks = 1U;
         manager_config.enqueue = manager_enqueue;
         manager_config.enqueue_context = &payloads;
@@ -148,6 +149,8 @@ spec("raft snapshot manager")
                          &manager_configuration,
                          snapshot_two, sizeof(snapshot_two)), SALTS_OK);
         check_equal(payloads.count, 2U);
+        check_equal(payloads.payloads[0].group_id, 88U);
+        check_equal(payloads.payloads[1].group_id, 88U);
         check_equal(payloads.payloads[0].data.snapshot_chunk.to, 3U);
         check_equal(payloads.payloads[1].data.snapshot_chunk.to, 2U);
 
@@ -158,6 +161,7 @@ spec("raft snapshot manager")
                          manager, receiver_two, &payloads.payloads[1]),
                      SALTS_OK);
         check_equal(payloads.count, 3U);
+        check_equal(payloads.payloads[2].group_id, 88U);
         check_equal(payloads.payloads[2].data.snapshot_chunk.to, 2U);
         check_equal(payloads.payloads[2].data.snapshot_chunk.snapshot_offset,
                       512U);
