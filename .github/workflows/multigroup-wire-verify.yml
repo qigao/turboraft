@@ -72,6 +72,14 @@ jobs:
           run_check "raft_wire_codec.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/wire/raft_wire_codec.c
           run_check "raft_peer_handshake.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/transport/raft_peer_handshake.c
           run_check "raft_transport.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/transport/raft_transport.c
+          run_check "raft_cnet_peer.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -Isrc/transport -fsyntax-only \
+            src/transport/raft_cnet_peer.c
           run_check "raft_group_queue.c" \
             cc -std=c11 -Wall -Wextra \
             -Werror=implicit-function-declaration \
