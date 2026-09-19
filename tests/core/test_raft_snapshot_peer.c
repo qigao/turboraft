@@ -116,9 +116,12 @@ spec("raft snapshot peer")
                          &payloads.payloads[0].data.snapshot_chunk,
                          &receive_result), SALTS_OK);
         memset(&ack_payload, 0, sizeof(ack_payload));
-        ack_payload.group_id = 77U;
+        ack_payload.group_id = 78U;
         ack_payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
         ack_payload.data.snapshot_ack = receive_result.ack;
+        check_equal(tr_raft_snapshot_peer_handle_payload(peer, &ack_payload),
+                     SALTS_EPROTO);
+        ack_payload.group_id = 77U;
         check_equal(tr_raft_snapshot_peer_handle_payload(peer, &ack_payload),
                      SALTS_OK);
         check_equal(payloads.count, 2U);
