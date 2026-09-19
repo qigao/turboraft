@@ -70,6 +70,8 @@ jobs:
           run_check "raft_peer_handshake.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/transport/raft_peer_handshake.c
           run_check "raft_transport.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/transport/raft_transport.c
           run_check "test_raft_multigroup_wire.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only tests/core/test_raft_multigroup_wire.c
+          run_check "test_raft_snapshot_peer.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -Isrc/service -fsyntax-only tests/core/test_raft_snapshot_peer.c
+          run_check "test_raft_snapshot_manager.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -Isrc/service -fsyntax-only tests/core/test_raft_snapshot_manager.c
 
       - name: Verify current public group API
         shell: bash
