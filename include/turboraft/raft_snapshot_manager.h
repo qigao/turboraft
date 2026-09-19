@@ -45,7 +45,7 @@ typedef struct tr_raft_snapshot_manager_config {
     /* Strictly ascending, unique, non-zero peer IDs excluding self_id. */
     const tr_raft_node_id_t *peer_node_ids;
     size_t peer_count;
-    size_t max_snapshot_bytes;
+    uint64_t max_snapshot_bytes;
     /* Both limits are required and validated; zero is rejected. */
     size_t snapshot_chunk_size;
     size_t snapshot_max_inflight_chunks;
