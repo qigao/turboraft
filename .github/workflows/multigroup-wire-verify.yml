@@ -1119,8 +1119,13 @@ jobs:
               if (tr_raft_snapshot_receiver_create(
                       &config, &receiver) != SALTS_OK)
                   return 20;
-              chunk = make_chunk(3U);
-              chunk.done = true;
+              {
+                  static const uint8_t three[] = {0x61U, 0x62U, 0x63U};
+                  chunk = make_chunk(3U);
+                  chunk.data = three;
+                  chunk.data_length = sizeof(three);
+                  chunk.done = true;
+              }
               if (tr_raft_snapshot_receiver_handle(
                       receiver, &chunk, &result) != SALTS_EFBIG)
                   return 21;
