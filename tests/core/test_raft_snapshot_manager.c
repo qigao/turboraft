@@ -131,6 +131,7 @@ spec("raft snapshot manager")
 
         receiver_config.self_id = 2U;
         receiver_config.max_snapshot_bytes = 1024U;
+        receiver_config.max_buffered_snapshot_bytes = 1024U;
         receiver_config.install = manager_install;
         receiver_config.install_context = &installed_two;
         check_equal(tr_raft_snapshot_receiver_create(
