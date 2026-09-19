@@ -79,7 +79,7 @@ spec("raft snapshot sender")
         config.self_id = 1U;
         config.peer_id = 2U;
         config.max_snapshot_bytes = 1024U;
-        config.chunk_size = TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+        config.chunk_size = 512U;
         config.max_inflight_chunks = 1U;
 
         check_equal(tr_raft_snapshot_sender_create(&config, &sender), SALTS_OK);
@@ -160,7 +160,7 @@ spec("raft snapshot sender")
         config.self_id = 1U;
         config.peer_id = 2U;
         config.max_snapshot_bytes = 1024U;
-        config.chunk_size = TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+        config.chunk_size = 512U;
         config.max_inflight_chunks = 1U;
         check_equal(tr_raft_snapshot_sender_create(&config, &sender), SALTS_OK);
         check_equal(tr_raft_snapshot_sender_begin(
