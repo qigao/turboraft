@@ -198,6 +198,7 @@ spec("raft snapshot receiver")
         memset(&config, 0, sizeof(config));
         config.self_id = 2U;
         config.max_snapshot_bytes = 1024U;
+        config.max_buffered_snapshot_bytes = 1024U;
         config.install = snapshot_capture_install;
         config.install_context = &capture;
         check_equal(tr_raft_snapshot_receiver_create(&config, &receiver),
@@ -235,6 +236,7 @@ spec("raft snapshot receiver")
         memset(&config, 0, sizeof(config));
         config.self_id = 2U;
         config.max_snapshot_bytes = 1024U;
+        config.max_buffered_snapshot_bytes = 1024U;
         config.install = snapshot_capture_install;
         config.install_context = &capture;
         chunk.snapshot_digest[0] ^= 0xffU;
