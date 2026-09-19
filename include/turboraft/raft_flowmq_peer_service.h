@@ -78,6 +78,7 @@ typedef struct tr_raft_flowmq_peer_service_status {
     size_t queued_data_bytes;
     uint64_t frames_sent;
     uint64_t frames_received;
+    uint64_t group_routing_rejections;
     int started;
     int stopping;
     int step_active;
@@ -124,6 +125,10 @@ int tr_raft_flowmq_peer_service_get_group_status(
     tr_raft_node_id_t peer_node_id,
     tr_raft_group_id_t group_id,
     tr_raft_transport_group_queue_status_t *out_status);
+int tr_raft_flowmq_peer_service_get_peer_transport_status(
+    const tr_raft_flowmq_peer_service_t *service,
+    tr_raft_node_id_t peer_node_id,
+    tr_raft_transport_status_t *out_status);
 
 #ifdef __cplusplus
 }
