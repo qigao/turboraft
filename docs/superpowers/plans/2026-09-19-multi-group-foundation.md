@@ -15,7 +15,7 @@
 - `tr_raft_message_t` MUST NOT gain `group_id`.
 - One `tr_raft_service_t` remains exactly one independently recoverable Raft group.
 - Existing Raft Core election/replication/ReadIndex/membership semantics remain unchanged in R0.
-- Existing single-group public behavior must remain compatible through explicit adapters where practical.
+- Existing Core/Service/WAL semantics remain stable, but the peer transport API is intentionally breaking: every payload requires a non-zero `group_id` and no legacy wire adapter is retained.
 - All new queues, active-group tables, chunk windows, and retained payload budgets are explicitly bounded.
 - Unknown/stopped group traffic must not fault the physical peer session.
 - Malformed/identity-invalid wire traffic must continue to fail the session.
@@ -25,7 +25,7 @@
 
 ## Review Focus
 
-- Legacy/single-group peer negotiation must never be silently interpreted as group-aware traffic.
+- Pre-R0 legacy peer frames must be rejected explicitly; there is no downgrade or dual-protocol path.
 - Group saturation must not starve another group's heartbeat/election messages on the same peer.
 - Unknown or stopped group IDs must be rejected without destroying a valid authenticated peer session.
 - Snapshot retry after reconnect must keep immutable snapshot identity and cumulative-ACK semantics.
@@ -33,7 +33,7 @@
 
 ---
 
-### Task 1: Add group-aware wire metadata and negotiated capability (#26)
+### Task 1: Replace the peer wire contract with mandatory group-aware transport (#26)
 
 **Files:**
 - Modify: `include/turboraft/raft_wire_codec.h`
@@ -50,12 +50,12 @@
 **Interfaces:**
 - Produces: `typedef uint64_t tr_raft_group_id_t;`
 - Produces: group-aware `tr_raft_wire_metadata_t { cluster_id, group_id, message_id }`
-- Produces: `TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1`
-- Produces: transport callbacks that receive validated group identity without modifying `tr_raft_message_t`
+- Produces: one current wire version/header shared by Raft, snapshot, and data payloads
+- Produces: one transport payload callback carrying validated group identity without modifying `tr_raft_message_t`
 
 - [ ] **Step 1: Write RED tests for group identity in the wire envelope**
 
-Add tests that encode two otherwise-identical frames with group IDs 100 and 101 and assert the decoded metadata preserves the exact group ID. Add rejection tests for group ID 0 on a negotiated group-aware contract.
+Add tests that encode two otherwise-identical frames with group IDs 100 and 101 and assert the decoded metadata preserves the exact group ID. Add rejection tests for group ID 0 on every current-wire encode/decode path. Add compile-time/API tests proving there is no legacy header/version selector surface.
 
 Representative assertion:
 
@@ -84,11 +84,17 @@ ctest --preset win-release-user -R "turboraft\.(wire|peer_handshake|transport_co
 
 Expected: compile/test failure because group-aware metadata/capability does not yet exist.
 
-- [ ] **Step 3: Add the explicit group-multiplex handshake capability**
+- [ ] **Step 3: Collapse to one current wire contract**
 
-Add one new feature bit in `raft_peer_handshake.h`, include it in the current feature set only after the matching wire support is implemented, and validate that group-aware session creation requires the negotiated bit.
+Remove historical peer-wire compatibility from the public transport path:
+- one current wire version,
+- one header size,
+- mandatory non-zero `group_id`,
+- no `TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1`,
+- no Raft/snapshot/data wire-version selector functions,
+- no legacy single-group transport callback.
 
-Do not infer support from wire version alone.
+Handshake still validates cluster/node/process identity and negotiated bounds, but not historical payload versions.
 
 - [ ] **Step 4: Extend the common wire metadata, not individual payload structures**
 
@@ -103,15 +109,16 @@ The common envelope is the single routing fact source.
 
 - [ ] **Step 5: Add transport session contract validation**
 
-Update `tr_raft_transport_session_config_t` and session validation so a group-aware session requires a completed negotiated group-multiplex capability. Keep legacy single-group behavior explicit rather than auto-detecting packet format.
+Update `tr_raft_transport_session_config_t` and session validation so every session requires the unified payload callback. Every outbound payload requires a non-zero `group_id`; group-less encode attempts fail.
 
 - [ ] **Step 6: Extend fuzz/corruption coverage**
 
 Add corpus cases for:
-- zero group ID in group-aware format,
-- altered group ID with otherwise-valid checksum/envelope,
-- truncated group-aware header,
-- unknown version/capability combination.
+- zero group ID,
+- altered group ID with otherwise-valid envelope,
+- truncated current header,
+- pre-R0 legacy header/version input,
+- unknown future version.
 
 Protocol corruption must remain fail-closed.
 
@@ -128,7 +135,7 @@ Expected: PASS.
 
 ~~~bash
 git add include/turboraft/raft_wire_codec.h         include/turboraft/raft_peer_handshake.h         include/turboraft/raft_transport.h         src/transport/raft_peer_handshake.c         src/transport/raft_transport.c         tests/core/test_raft_wire_codec.c         tests/core/test_raft_peer_handshake.c         tests/core/test_raft_transport_contract.c         tests/core/test_raft_wire_fuzz_corpus.c
-git commit -m "feat(transport): add negotiated raft group identity"
+git commit -m "feat(transport): require raft group identity"
 ~~~
 
 ---
