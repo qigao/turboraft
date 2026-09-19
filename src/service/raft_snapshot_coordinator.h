@@ -13,7 +13,7 @@ typedef int (*tr_raft_snapshot_emit_fn)(
 typedef struct tr_raft_snapshot_coordinator_config {
     tr_raft_node_id_t self_id;
     tr_raft_node_id_t peer_id;
-    size_t max_snapshot_bytes;
+    uint64_t max_snapshot_bytes;
     size_t chunk_size;
     size_t max_inflight_chunks;
     tr_raft_snapshot_emit_fn emit;
