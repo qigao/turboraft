@@ -20,8 +20,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/qigao/salts.git ../salts
-          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils
+          mkdir -p diagnostics
+          git clone --depth 1 https://github.com/qigao/salts.git ../salts \
+            > diagnostics/salts-clone.log 2>&1
+          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils \
+            > diagnostics/salts-utils-clone.log 2>&1
 
       - name: Compile changed production sources and contract test
         shell: bash
@@ -44,16 +47,17 @@ jobs:
             local label="$1"
             shift
             set +e
-            "$@" > /tmp/multigroup-verify.log 2>&1
+            local logfile="diagnostics/${label}.log"
+            "$@" > "$logfile" 2>&1
             local rc=$?
             set -e
             {
               echo "### ${label}"
               echo '~~~text'
-              tail -n 120 /tmp/multigroup-verify.log
+              tail -n 120 "$logfile"
               echo '~~~'
             } >> "$GITHUB_STEP_SUMMARY"
-            cat /tmp/multigroup-verify.log
+            cat "$logfile"
             return "$rc"
           }
 
@@ -95,3 +99,11 @@ jobs:
 
           cc -std=c11 -Wall -Wextra -Werror             -Iinclude             /tmp/multigroup_api_smoke.c             -o /tmp/multigroup_api_smoke
           /tmp/multigroup_api_smoke
+
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: multigroup-wire-diagnostics
+          path: diagnostics
+          if-no-files-found: warn
