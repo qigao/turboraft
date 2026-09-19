@@ -5,10 +5,11 @@
 
 #include <string.h>
 
-static int ignore_message(void *context, const tr_raft_message_t *message)
+static int ignore_payload(void *context,
+                          const tr_raft_transport_payload_t *payload)
 {
     (void)context;
-    (void)message;
+    (void)payload;
     return SALTS_OK;
 }
 
@@ -34,14 +35,14 @@ static tr_raft_cnet_peer_t *make_peer(cnet_client *client, size_t capacity)
     handshake.local_node_id = 1U;
     handshake.peer_node_id = 2U;
     handshake.peer_process_incarnation.bytes[0] = 1U;
-    handshake.feature_bits = TR_RAFT_HANDSHAKE_FEATURE_CURRENT;
+    handshake.feature_bits = 0U;
     handshake.wire_major = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
     handshake.wire_minor = TR_RAFT_HANDSHAKE_WIRE_MINOR;
     handshake.max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
     handshake.max_snapshot_chunk_size =
         TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
     config.transport.handshake = &handshake;
-    config.transport.on_message = ignore_message;
+    config.transport.on_payload = ignore_payload;
     config.outbound_queue_capacity = capacity;
     check_equal(tr_raft_cnet_peer_create(&config, &peer), SALTS_OK);
     return peer;
@@ -49,7 +50,7 @@ static tr_raft_cnet_peer_t *make_peer(cnet_client *client, size_t capacity)
 
 spec("Raft CNet peer adapter")
 {
-    it("exposes callbacks and a bounded copied queue")
+    it("exposes callbacks and a bounded grouped queue")
     {
         cnet_client client;
         cnet_observer observer;
@@ -70,13 +71,18 @@ spec("Raft CNet peer adapter")
         message.from = 1U;
         message.to = 2U;
         message.term = 3U;
-        check_equal(tr_raft_cnet_peer_enqueue(peer, &message), SALTS_OK);
-        check_equal(tr_raft_cnet_peer_enqueue(peer, &message), SALTS_ENOSPC);
+        check_equal(tr_raft_cnet_peer_enqueue_group(peer, 1U, &message),
+                    SALTS_OK);
+        check_equal(tr_raft_cnet_peer_enqueue_group(peer, 1U, &message),
+                    SALTS_ENOSPC);
+        check_equal(tr_raft_cnet_peer_enqueue_group(peer, 0U, &message),
+                    SALTS_EINVAL);
         check_equal(tr_raft_cnet_peer_step(peer), SALTS_EBUSY);
         check_equal(tr_raft_cnet_peer_get_status(peer, &status), SALTS_OK);
         check_equal(status.queued_payload_count, 1U);
         check_equal(tr_raft_cnet_peer_stop(peer), SALTS_OK);
-        check_equal(tr_raft_cnet_peer_enqueue(peer, &message), SALTS_EPIPE);
+        check_equal(tr_raft_cnet_peer_enqueue_group(peer, 1U, &message),
+                    SALTS_EPIPE);
         check_equal(tr_raft_cnet_peer_destroy(peer), SALTS_OK);
     }
 }
