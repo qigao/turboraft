@@ -6,6 +6,10 @@ on:
       - feature/multi-group-wire
   workflow_dispatch:
 
+concurrency:
+  group: multigroup-wire-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
