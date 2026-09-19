@@ -1,9 +1,8 @@
 #include <turboraft/raft_flowmq_peer_service.h>
 
-#include "../turboraft_stl_status.h"
+#include "raft_group_queue.h"
 #include "raft_transport_payload_storage.h"
 
-#include <cstl/deque.h>
 #include <salts_error.h>
 
 #include <limits.h>
@@ -18,12 +17,12 @@ typedef struct tr_raft_flowmq_peer {
     char endpoint[TR_RAFT_FLOWMQ_ENDPOINT_CAPACITY];
     flowmq_socket_t *dealer;
     tr_raft_transport_session_t *session;
-    deque_t outbound;
+    tr_raft_group_queue_t outbound;
+    tr_raft_group_queue_token_t packet_token;
     uint8_t *packet;
     size_t packet_size;
-    size_t queued_data_bytes;
+    int packet_token_valid;
     int packet_ready;
-    int initialized;
     int faulted;
 } tr_raft_flowmq_peer_t;
 
@@ -32,10 +31,9 @@ struct tr_raft_flowmq_peer_service {
     flowmq_socket_t *router;
     tr_raft_flowmq_peer_t peers[TR_RAFT_MAX_VOTERS - 1U];
     size_t peer_count;
-    size_t outbound_queue_capacity;
+    tr_raft_transport_queue_limits_t outbound_limits;
     size_t max_send_batch_items;
     size_t max_receive_batch_items;
-    size_t max_inflight_data_bytes;
     char bind_endpoint[TR_RAFT_FLOWMQ_ENDPOINT_CAPACITY];
     uint8_t *packet;
     uint64_t frames_sent;
@@ -196,6 +194,28 @@ static size_t tr_raft_flowmq_payload_bytes(
     return 0U;
 }
 
+static void tr_raft_flowmq_release_owned(
+    tr_raft_owned_transport_payload_t *owned)
+{
+    tr_raft_owned_transport_payload_release(owned);
+}
+
+static int tr_raft_flowmq_limits_valid(
+    const tr_raft_transport_queue_limits_t *limits)
+{
+    return limits != NULL &&
+           limits->total_item_capacity != 0U &&
+           limits->total_item_capacity <=
+               TR_RAFT_FLOWMQ_MAX_OUTBOUND_QUEUE_CAPACITY &&
+           limits->total_data_bytes != 0U &&
+           limits->max_active_groups != 0U &&
+           limits->max_active_groups <= limits->total_item_capacity &&
+           limits->per_group_item_capacity != 0U &&
+           limits->per_group_item_capacity <= limits->total_item_capacity &&
+           limits->per_group_data_bytes != 0U &&
+           limits->per_group_data_bytes <= limits->total_data_bytes;
+}
+
 static tr_raft_node_id_t tr_raft_flowmq_payload_to(
     const tr_raft_transport_payload_t *payload)
 {
@@ -247,20 +267,14 @@ static tr_raft_flowmq_peer_t *tr_raft_flowmq_find_identity(
 
 static void tr_raft_flowmq_release_peer(tr_raft_flowmq_peer_t *peer)
 {
-    tr_raft_owned_transport_payload_t owned;
-
-    free(peer->packet);
-    peer->packet = NULL;
-    if (!peer->initialized) {
+    if (peer == NULL) {
         return;
     }
-    while (deque_pop_front(&peer->outbound, &owned) == STL_OK) {
-        tr_raft_owned_transport_payload_release(&owned);
-    }
-    deque_destroy(&peer->outbound);
+    free(peer->packet);
+    peer->packet = NULL;
+    tr_raft_group_queue_destroy(&peer->outbound);
     tr_raft_transport_session_destroy(peer->session);
     peer->session = NULL;
-    peer->initialized = 0;
 }
 
 static void tr_raft_flowmq_release(tr_raft_flowmq_peer_service_t *service)
@@ -325,20 +339,16 @@ int tr_raft_flowmq_peer_service_create(
         return SALTS_ENOMEM;
     }
     service->peer_count = config->peer_count;
-    service->outbound_queue_capacity = config->outbound_queue_capacity;
+    service->outbound_limits = config->outbound_limits;
     service->max_send_batch_items = config->max_send_batch_items;
     service->max_receive_batch_items = config->max_receive_batch_items;
-    service->max_inflight_data_bytes = config->max_inflight_data_bytes;
-    if (service->outbound_queue_capacity == 0U ||
-        service->outbound_queue_capacity >
-            TR_RAFT_FLOWMQ_MAX_OUTBOUND_QUEUE_CAPACITY ||
+    if (!tr_raft_flowmq_limits_valid(&service->outbound_limits) ||
         service->max_send_batch_items == 0U ||
         service->max_send_batch_items >
             TR_RAFT_FLOWMQ_MAX_OUTBOUND_QUEUE_CAPACITY ||
         service->max_receive_batch_items == 0U ||
         service->max_receive_batch_items >
             TR_RAFT_FLOWMQ_MAX_OUTBOUND_QUEUE_CAPACITY ||
-        service->max_inflight_data_bytes == 0U ||
         config->send_hwm_messages == 0U ||
         config->receive_hwm_messages == 0U ||
         config->send_hwm_bytes == 0U ||
@@ -347,7 +357,7 @@ int tr_raft_flowmq_peer_service_create(
         config->reconnect_max_ms < config->reconnect_initial_ms ||
         config->send_hwm_messages > INT_MAX ||
         config->receive_hwm_messages > INT_MAX ||
-        config->outbound_queue_capacity > INT_MAX ||
+        config->outbound_limits.total_item_capacity > INT_MAX ||
         config->reconnect_initial_ms > INT_MAX ||
         config->reconnect_max_ms > INT_MAX ||
         config->heartbeat_interval_ms > INT_MAX ||
@@ -420,14 +430,23 @@ int tr_raft_flowmq_peer_service_create(
             tr_raft_flowmq_release(service);
             return result;
         }
-        result = tr_raft_stl_status_to_error(deque_init_bytes(
-            &peer->outbound, sizeof(tr_raft_owned_transport_payload_t),
-            _Alignof(tr_raft_owned_transport_payload_t),
-            service->outbound_queue_capacity));
-        if (result == SALTS_OK) {
-            result = tr_raft_stl_status_to_error(
-                deque_reserve(&peer->outbound,
-                              service->outbound_queue_capacity));
+        {
+            tr_raft_group_queue_config_t queue_config;
+
+            memset(&queue_config, 0, sizeof(queue_config));
+            queue_config.max_groups =
+                service->outbound_limits.max_active_groups;
+            queue_config.total_item_capacity =
+                service->outbound_limits.total_item_capacity;
+            queue_config.total_data_bytes =
+                service->outbound_limits.total_data_bytes;
+            queue_config.per_group_item_capacity =
+                service->outbound_limits.per_group_item_capacity;
+            queue_config.per_group_data_bytes =
+                service->outbound_limits.per_group_data_bytes;
+            queue_config.release = tr_raft_flowmq_release_owned;
+            result = tr_raft_group_queue_init(
+                &peer->outbound, &queue_config);
         }
         if (result != SALTS_OK) {
             tr_raft_flowmq_release(service);
@@ -439,7 +458,6 @@ int tr_raft_flowmq_peer_service_create(
             tr_raft_flowmq_release(service);
             return SALTS_ENOMEM;
         }
-        peer->initialized = 1;
         memset(&session_config, 0, sizeof(session_config));
         session_config.cluster_id = config->protocol.cluster_id;
         session_config.local_node_id = config->protocol.local_node_id;
@@ -566,18 +584,17 @@ static int tr_raft_flowmq_send_peer(
     size_t sent = 0U;
 
     while (sent < service->max_send_batch_items &&
-           deque_size(&peer->outbound) != 0U) {
-        const tr_raft_owned_transport_payload_t *owned =
-            (const tr_raft_owned_transport_payload_t *)deque_at_const(
-                &peer->outbound, 0U);
+           tr_raft_group_queue_size(&peer->outbound) != 0U) {
+        const tr_raft_owned_transport_payload_t *owned = NULL;
         tr_raft_owned_transport_payload_t discard;
-        size_t data_bytes;
         int result;
 
-        if (owned == NULL) {
-            return SALTS_EPROTO;
-        }
         if (!peer->packet_ready) {
+            result = tr_raft_group_queue_peek_next(
+                &peer->outbound, &peer->packet_token, &owned);
+            if (result != SALTS_OK) {
+                return result;
+            }
             result = tr_raft_transport_encode_payload(
                 peer->session, &owned->payload, peer->packet,
                 TR_RAFT_TRANSPORT_MAX_PACKET_SIZE, &peer->packet_size);
@@ -585,21 +602,29 @@ static int tr_raft_flowmq_send_peer(
                 peer->faulted = 1;
                 return result;
             }
+            peer->packet_token_valid = 1;
             peer->packet_ready = 1;
         }
+
         result = flowmq_send(peer->dealer, peer->packet, peer->packet_size,
                              FLOWMQ_DONTWAIT);
         if (result != SALTS_OK) {
             return result;
         }
-        peer->packet_ready = 0;
-        peer->packet_size = 0U;
-        data_bytes = tr_raft_flowmq_payload_bytes(&owned->payload);
-        if (deque_pop_front(&peer->outbound, &discard) != STL_OK) {
+        if (!peer->packet_token_valid) {
             return SALTS_EPROTO;
         }
+
+        memset(&discard, 0, sizeof(discard));
+        result = tr_raft_group_queue_pop(
+            &peer->outbound, peer->packet_token, &discard, NULL);
+        if (result != SALTS_OK) {
+            return result;
+        }
         tr_raft_owned_transport_payload_release(&discard);
-        peer->queued_data_bytes -= data_bytes;
+        peer->packet_token_valid = 0;
+        peer->packet_ready = 0;
+        peer->packet_size = 0U;
         ++service->frames_sent;
         ++step->sent_frames;
         ++sent;
@@ -655,7 +680,7 @@ int tr_raft_flowmq_peer_service_step(
             ++step.failed_peer_count;
             continue;
         }
-        if (deque_size(&peer->outbound) == 0U) {
+        if (tr_raft_group_queue_size(&peer->outbound) == 0U) {
             continue;
         }
         if ((items[index + 1U].revents & FLOWMQ_POLLOUT) == 0) {
@@ -764,7 +789,7 @@ int tr_raft_flowmq_peer_service_enqueue_payload(
     size_t data_bytes;
     int result;
 
-    if (service == NULL || payload == NULL) {
+    if (service == NULL || payload == NULL || payload->group_id == 0U) {
         return SALTS_EINVAL;
     }
     if (service->stopping) {
@@ -778,26 +803,18 @@ int tr_raft_flowmq_peer_service_enqueue_payload(
     if (peer->faulted) {
         return SALTS_EPROTO;
     }
-    if (deque_size(&peer->outbound) >= service->outbound_queue_capacity) {
-        return SALTS_ENOSPC;
-    }
+
     data_bytes = tr_raft_flowmq_payload_bytes(payload);
-    if (data_bytes > service->max_inflight_data_bytes -
-                         peer->queued_data_bytes) {
-        return SALTS_ENOSPC;
-    }
     result = tr_raft_owned_transport_payload_copy(&owned, payload);
     if (result != SALTS_OK) {
         return result;
     }
-    result = tr_raft_stl_status_to_error(
-        deque_push_back(&peer->outbound, &owned));
+    result = tr_raft_group_queue_enqueue(
+        &peer->outbound, &owned, data_bytes);
     if (result != SALTS_OK) {
         tr_raft_owned_transport_payload_release(&owned);
-        return result;
     }
-    peer->queued_data_bytes += data_bytes;
-    return SALTS_OK;
+    return result;
 }
 
 int tr_raft_flowmq_peer_service_get_status(
@@ -811,8 +828,7 @@ int tr_raft_flowmq_peer_service_get_status(
     }
     memset(out_status, 0, sizeof(*out_status));
     out_status->peer_count = service->peer_count;
-    out_status->outbound_queue_capacity = service->outbound_queue_capacity;
-    out_status->max_inflight_data_bytes = service->max_inflight_data_bytes;
+    out_status->outbound_limits = service->outbound_limits;
     out_status->frames_sent = service->frames_sent;
     out_status->frames_received = service->frames_received;
     out_status->started = service->started;
@@ -820,10 +836,43 @@ int tr_raft_flowmq_peer_service_get_status(
     out_status->step_active = service->step_active;
     out_status->last_error = service->last_error;
     for (index = 0U; index < service->peer_count; ++index) {
+        out_status->active_group_count +=
+            tr_raft_group_queue_active_groups(&service->peers[index].outbound);
         out_status->queued_payload_count +=
-            deque_size(&service->peers[index].outbound);
+            tr_raft_group_queue_size(&service->peers[index].outbound);
         out_status->queued_data_bytes +=
-            service->peers[index].queued_data_bytes;
+            tr_raft_group_queue_data_bytes(&service->peers[index].outbound);
     }
     return SALTS_OK;
+}
+
+int tr_raft_flowmq_peer_service_get_group_status(
+    const tr_raft_flowmq_peer_service_t *service,
+    tr_raft_node_id_t peer_node_id,
+    tr_raft_group_id_t group_id,
+    tr_raft_transport_group_queue_status_t *out_status)
+{
+    size_t index;
+
+    if (service == NULL || peer_node_id == 0U || group_id == 0U ||
+        out_status == NULL) {
+        return SALTS_EINVAL;
+    }
+    for (index = 0U; index < service->peer_count; ++index) {
+        if (service->peers[index].node_id == peer_node_id) {
+            tr_raft_group_queue_group_status_t status;
+            int result = tr_raft_group_queue_get_group_status(
+                &service->peers[index].outbound, group_id, &status);
+
+            if (result != SALTS_OK) {
+                return result;
+            }
+            memset(out_status, 0, sizeof(*out_status));
+            out_status->group_id = status.group_id;
+            out_status->queued_payload_count = status.queued_item_count;
+            out_status->queued_data_bytes = status.queued_data_bytes;
+            return SALTS_OK;
+        }
+    }
+    return SALTS_ENOENT;
 }

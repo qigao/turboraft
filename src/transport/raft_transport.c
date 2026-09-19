@@ -64,6 +64,11 @@ static int tr_raft_transport_fault(tr_raft_transport_session_t *session,
     return error;
 }
 
+static int tr_raft_transport_group_routing_rejection(int error)
+{
+    return error == SALTS_ENOENT || error == SALTS_ESHUTDOWN;
+}
+
 static int tr_raft_transport_cluster_id_is_valid(
     const tr_raft_cluster_id_t *cluster_id)
 {
@@ -164,6 +169,12 @@ static int tr_raft_transport_dispatch_frame(
     if (session->destroy_pending) {
         tr_raft_transport_session_finalize(session);
         return SALTS_ECANCELED;
+    }
+    if (tr_raft_transport_group_routing_rejection(result)) {
+        ++session->status.group_routing_rejections;
+        session->status.last_rejected_group_id = metadata.group_id;
+        session->status.last_group_routing_error = result;
+        return SALTS_OK;
     }
     if (result != SALTS_OK) {
         return tr_raft_transport_fault(session, result);
