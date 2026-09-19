@@ -43,6 +43,7 @@ jobs:
             -I../salts/platform/include
             -I../salts/concurrency/include
             -I../salts/cnet/include
+            -I../salts/native-io/include
             -I../salts/cstl/include
             -I../salts/cmeta/include
             -I../salts/tinytest/include
