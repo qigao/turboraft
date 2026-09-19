@@ -82,24 +82,22 @@ jobs:
                          TR_RAFT_WIRE_SNAPSHOT_VERSION,
                          "group format must use a distinct version");
 
-          static void smoke(void)
+          static int smoke(void)
           {
               tr_raft_wire_metadata_t metadata = {0};
               tr_raft_transport_payload_t payload = {0};
 
               metadata.group_id = (tr_raft_group_id_t)100U;
               payload.group_id = metadata.group_id;
+              return payload.group_id == metadata.group_id &&
+                             payload.group_id == 100U
+                         ? 0
+                         : 1;
           }
 
           int main(void)
           {
-              tr_raft_wire_metadata_t metadata = {0};
-              tr_raft_transport_payload_t payload = {0};
-
-              smoke();
-              metadata.group_id = (tr_raft_group_id_t)100U;
-              payload.group_id = metadata.group_id;
-              return payload.group_id == 100U ? 0 : 1;
+              return smoke();
           }
           EOF
 
