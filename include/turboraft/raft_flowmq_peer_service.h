@@ -44,8 +44,9 @@ typedef struct tr_raft_flowmq_peer_service_config {
     tr_raft_flowmq_tls_config_t tls;
     const tr_raft_flowmq_peer_config_t *peers;
     size_t peer_count;
-    /** All capacity, batch, HWM, and reconnect fields are required. */
+    /** Applied independently to every physical peer link. */
     tr_raft_transport_queue_limits_t outbound_limits;
+    /** All batch, HWM, and reconnect fields are required. */
     size_t max_send_batch_items;
     size_t max_receive_batch_items;
     size_t send_hwm_messages;
@@ -71,6 +72,7 @@ typedef struct tr_raft_flowmq_peer_service_step_result {
 typedef struct tr_raft_flowmq_peer_service_status {
     size_t peer_count;
     tr_raft_transport_queue_limits_t outbound_limits;
+    /** Sum of active (peer, group) queues; not distinct group IDs globally. */
     size_t active_group_count;
     size_t queued_payload_count;
     size_t queued_data_bytes;
@@ -105,7 +107,7 @@ int tr_raft_flowmq_peer_service_stop(tr_raft_flowmq_peer_service_t *service);
 /** Requires stop after start; releases queued payloads and service storage. */
 int tr_raft_flowmq_peer_service_destroy(tr_raft_flowmq_peer_service_t *service);
 
-/** Copies one Raft message with explicit group identity into the peer FIFO. */
+/** Copies one Raft message into the destination peer's group scheduler. */
 int tr_raft_flowmq_peer_service_enqueue_group(
     tr_raft_flowmq_peer_service_t *service,
     tr_raft_group_id_t group_id,
