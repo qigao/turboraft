@@ -154,9 +154,27 @@ spec("raft snapshot manager")
         check_equal(payloads.payloads[0].data.snapshot_chunk.to, 3U);
         check_equal(payloads.payloads[1].data.snapshot_chunk.to, 2U);
 
-        check_equal(manager_receive_and_ack(
-                         manager, receiver_three, &payloads.payloads[0]),
-                     SALTS_OK);
+        {
+            tr_raft_snapshot_receive_result_t wrong_result;
+            tr_raft_transport_payload_t wrong_ack;
+
+            check_equal(tr_raft_snapshot_receiver_handle(
+                             receiver_three,
+                             &payloads.payloads[0].data.snapshot_chunk,
+                             &wrong_result),
+                        SALTS_OK);
+            memset(&wrong_ack, 0, sizeof(wrong_ack));
+            wrong_ack.group_id = 89U;
+            wrong_ack.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
+            wrong_ack.data.snapshot_ack = wrong_result.ack;
+            check_equal(tr_raft_snapshot_manager_handle_payload(
+                             manager, &wrong_ack),
+                        SALTS_EPROTO);
+            wrong_ack.group_id = 88U;
+            check_equal(tr_raft_snapshot_manager_handle_payload(
+                             manager, &wrong_ack),
+                        SALTS_OK);
+        }
         check_equal(manager_receive_and_ack(
                          manager, receiver_two, &payloads.payloads[1]),
                      SALTS_OK);
