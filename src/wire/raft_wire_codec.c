@@ -860,18 +860,21 @@ int tr_raft_wire_encode_snapshot_chunk_version(
     size_t payload_length = 0U;
     uint8_t encoded_configuration[TR_RAFT_CONF_MAX_ENCODED_SIZE];
     size_t encoded_configuration_size = 0U;
+    size_t header_size = tr_wire_header_size(wire_version);
     int result;
 
     if (output_length != NULL) {
         *output_length = 0U;
     }
-    if (codec == NULL || codec->binding_v2 == NULL || metadata == NULL ||
+    if (codec == NULL || codec->binding_v2 == NULL ||
+        !tr_wire_metadata_valid(wire_version, metadata) ||
         !tr_snapshot_chunk_valid(chunk) || output == NULL ||
         output_length == NULL) {
         return SALTS_EINVAL;
     }
     if ((wire_version != TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
-         wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION) ||
+         wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION &&
+         wire_version != TR_RAFT_WIRE_GROUP_VERSION) ||
         (wire_version == TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
          (chunk->data_length > TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES ||
           chunk->data_length !=
@@ -882,8 +885,8 @@ int tr_raft_wire_encode_snapshot_chunk_version(
                               chunk->snapshot_offset))))) {
         return SALTS_EPROTO;
     }
-    if (output_capacity < TR_RAFT_WIRE_HEADER_SIZE) {
-        *output_length = TR_RAFT_WIRE_HEADER_SIZE;
+    if (output_capacity < header_size) {
+        *output_length = header_size;
         return SALTS_ENOSPC;
     }
     result = chunk->has_configuration
@@ -897,8 +900,8 @@ int tr_raft_wire_encode_snapshot_chunk_version(
     }
 
     if (!InstallSnapshotChunk_builder_bind(
-            &builder, output + TR_RAFT_WIRE_HEADER_SIZE,
-            output_capacity - TR_RAFT_WIRE_HEADER_SIZE) ||
+            &builder, output + header_size,
+            output_capacity - header_size) ||
         !InstallSnapshotChunk_from_node_set(&builder, chunk->from) ||
         !InstallSnapshotChunk_to_node_set(&builder, chunk->to) ||
         !InstallSnapshotChunk_term_set(&builder, chunk->term) ||
@@ -918,7 +921,7 @@ int tr_raft_wire_encode_snapshot_chunk_version(
             TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) ||
         !InstallSnapshotChunk_chunk_data_set(
             &builder, chunk->data, chunk->data_length)) {
-        *output_length = TR_RAFT_WIRE_HEADER_SIZE +
+        *output_length = header_size +
                          InstallSnapshotChunk_BLOCK_LENGTH + 12U +
                          encoded_configuration_size +
                          TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE +
@@ -926,19 +929,19 @@ int tr_raft_wire_encode_snapshot_chunk_version(
         return SALTS_ENOSPC;
     }
     if (!InstallSnapshotChunk_view_bind(
-            &view, output + TR_RAFT_WIRE_HEADER_SIZE,
-            output_capacity - TR_RAFT_WIRE_HEADER_SIZE) ||
+            &view, output + header_size,
+            output_capacity - header_size) ||
         !InstallSnapshotChunk_chunk_data(&view, &encoded_data)) {
         return SALTS_EPROTO;
     }
     payload_length = (size_t)(tbe_wire_var_data_end(&encoded_data) -
-                              (output + TR_RAFT_WIRE_HEADER_SIZE));
+                              (output + header_size));
     if (payload_length > tr_wire_payload_limit(
                              wire_version,
                              TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK)) {
         return SALTS_EPROTO;
     }
-    *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
+    *output_length = header_size + payload_length;
     tr_wire_write_envelope(output, wire_version,
                            TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK,
                            payload_length, metadata);
@@ -970,6 +973,7 @@ int tr_raft_wire_decode_snapshot_chunk(
     tbe_var_data_t configuration;
     tbe_var_data_t data;
     uint32_t payload_length;
+    size_t header_size;
     uint16_t wire_version;
 
     if (codec == NULL || codec->binding_v2 == NULL || frame == NULL ||
@@ -979,13 +983,15 @@ int tr_raft_wire_decode_snapshot_chunk(
     }
     if (tr_wire_read_envelope(frame, frame_length,
                               TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK, metadata,
-                              &payload_length, &wire_version) != SALTS_OK ||
+                              &payload_length, &wire_version,
+                              &header_size) != SALTS_OK ||
         (wire_version != TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
-         wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION)) {
+         wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION &&
+         wire_version != TR_RAFT_WIRE_GROUP_VERSION)) {
         return SALTS_EPROTO;
     }
     if (!InstallSnapshotChunk_view_bind(
-            &wire, frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length) ||
+            &wire, frame + header_size, payload_length) ||
         !InstallSnapshotChunk_snapshot_configuration(&wire, &configuration) ||
         !InstallSnapshotChunk_snapshot_digest(&wire, &digest) ||
         !InstallSnapshotChunk_chunk_data(&wire, &data) ||
@@ -1045,22 +1051,25 @@ int tr_raft_wire_encode_snapshot_ack_version(
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBindStatus status;
     size_t payload_length = 0U;
+    size_t header_size = tr_wire_header_size(wire_version);
     int result;
 
     if (output_length != NULL) {
         *output_length = 0U;
     }
-    if (codec == NULL || codec->binding_v2 == NULL || metadata == NULL ||
+    if (codec == NULL || codec->binding_v2 == NULL ||
+        !tr_wire_metadata_valid(wire_version, metadata) ||
         !tr_snapshot_ack_valid(ack) || output == NULL ||
         output_length == NULL) {
         return SALTS_EINVAL;
     }
     if (wire_version != TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
-        wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION) {
+        wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION &&
+        wire_version != TR_RAFT_WIRE_GROUP_VERSION) {
         return SALTS_EPROTO;
     }
-    if (output_capacity < TR_RAFT_WIRE_HEADER_SIZE) {
-        *output_length = TR_RAFT_WIRE_HEADER_SIZE;
+    if (output_capacity < header_size) {
+        *output_length = header_size;
         return SALTS_ENOSPC;
     }
     InstallSnapshotAck_init(&wire);
@@ -1082,10 +1091,10 @@ int tr_raft_wire_encode_snapshot_ack_version(
         return result;
     }
     status = InstallSnapshotAck_to_bin_into(
-        &wire, output + TR_RAFT_WIRE_HEADER_SIZE,
-        output_capacity - TR_RAFT_WIRE_HEADER_SIZE, &payload_length, &error);
+        &wire, output + header_size,
+        output_capacity - header_size, &payload_length, &error);
     InstallSnapshotAck_clear(&wire);
-    *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
+    *output_length = header_size + payload_length;
     if (status != DATA_BIND_OK) {
         return *output_length > output_capacity ? SALTS_ENOSPC : SALTS_EPROTO;
     }
@@ -1123,6 +1132,7 @@ int tr_raft_wire_decode_snapshot_ack(
     InstallSnapshotAck_t wire;
     DataBindError error = DATA_BIND_ERROR_INIT;
     uint32_t payload_length;
+    size_t header_size;
     uint16_t wire_version;
     size_t digest_length;
     DataBindStatus status;
@@ -1134,14 +1144,16 @@ int tr_raft_wire_decode_snapshot_ack(
     }
     if (tr_wire_read_envelope(frame, frame_length,
                               TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK, metadata,
-                              &payload_length, &wire_version) != SALTS_OK ||
+                              &payload_length, &wire_version,
+                              &header_size) != SALTS_OK ||
         (wire_version != TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION &&
-         wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION)) {
+         wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION &&
+         wire_version != TR_RAFT_WIRE_GROUP_VERSION)) {
         return SALTS_EPROTO;
     }
     InstallSnapshotAck_init(&wire);
     status = InstallSnapshotAck_from_bin(
-        codec->binding_v2, &wire, frame + TR_RAFT_WIRE_HEADER_SIZE,
+        codec->binding_v2, &wire, frame + header_size,
         payload_length, &error);
     if (status != DATA_BIND_OK) {
         InstallSnapshotAck_clear(&wire);
@@ -1170,8 +1182,9 @@ int tr_raft_wire_decode_snapshot_ack(
 #define TR_DATA_CHUNK_FIXED_SIZE 85U
 #define TR_DATA_ACK_FIXED_SIZE 82U
 
-int tr_raft_wire_encode_data_chunk(
+int tr_raft_wire_encode_data_chunk_version(
     tr_raft_wire_codec_t *codec,
+    uint16_t wire_version,
     const tr_raft_wire_metadata_t *metadata,
     const tr_raft_data_chunk_t *chunk,
     uint8_t *output,
@@ -1179,21 +1192,28 @@ int tr_raft_wire_encode_data_chunk(
     size_t *output_length)
 {
     size_t payload_length;
+    size_t header_size;
     uint8_t *payload;
 
     if (output_length != NULL) {
         *output_length = 0U;
     }
-    if (codec == NULL || metadata == NULL || !tr_data_chunk_valid(chunk) ||
-        output == NULL || output_length == NULL) {
+    if (codec == NULL || !tr_wire_metadata_valid(wire_version, metadata) ||
+        !tr_data_chunk_valid(chunk) || output == NULL ||
+        output_length == NULL) {
         return SALTS_EINVAL;
     }
+    if (wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION &&
+        wire_version != TR_RAFT_WIRE_GROUP_VERSION) {
+        return SALTS_EPROTO;
+    }
+    header_size = tr_wire_header_size(wire_version);
     payload_length = TR_DATA_CHUNK_FIXED_SIZE + chunk->data_length;
-    if (output_capacity < TR_RAFT_WIRE_HEADER_SIZE + payload_length) {
-        *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
+    if (output_capacity < header_size + payload_length) {
+        *output_length = header_size + payload_length;
         return SALTS_ENOSPC;
     }
-    payload = output + TR_RAFT_WIRE_HEADER_SIZE;
+    payload = output + header_size;
     tr_put_u64(payload, chunk->from);
     tr_put_u64(payload + 8U, chunk->to);
     tr_put_u64(payload + 16U, chunk->term);
@@ -1208,11 +1228,24 @@ int tr_raft_wire_encode_data_chunk(
         memcpy(payload + TR_DATA_CHUNK_FIXED_SIZE, chunk->data,
                chunk->data_length);
     }
-    *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
-    tr_wire_write_envelope(output, TR_RAFT_WIRE_SNAPSHOT_VERSION,
+    *output_length = header_size + payload_length;
+    tr_wire_write_envelope(output, wire_version,
                            TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK, payload_length,
                            metadata);
     return SALTS_OK;
+}
+
+int tr_raft_wire_encode_data_chunk(
+    tr_raft_wire_codec_t *codec,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_data_chunk_t *chunk,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length)
+{
+    return tr_raft_wire_encode_data_chunk_version(
+        codec, TR_RAFT_WIRE_SNAPSHOT_VERSION, metadata, chunk, output,
+        output_capacity, output_length);
 }
 
 int tr_raft_wire_decode_data_chunk(
@@ -1225,6 +1258,7 @@ int tr_raft_wire_decode_data_chunk(
     const uint8_t *payload;
     uint32_t payload_length;
     uint32_t data_length;
+    size_t header_size;
     uint16_t wire_version;
 
     if (codec == NULL || frame == NULL || metadata == NULL || chunk == NULL ||
@@ -1233,12 +1267,14 @@ int tr_raft_wire_decode_data_chunk(
     }
     if (tr_wire_read_envelope(frame, frame_length,
                               TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK, metadata,
-                              &payload_length, &wire_version) != SALTS_OK ||
-        wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION ||
+                              &payload_length, &wire_version,
+                              &header_size) != SALTS_OK ||
+        (wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION &&
+         wire_version != TR_RAFT_WIRE_GROUP_VERSION) ||
         payload_length < TR_DATA_CHUNK_FIXED_SIZE) {
         return SALTS_EPROTO;
     }
-    payload = frame + TR_RAFT_WIRE_HEADER_SIZE;
+    payload = frame + header_size;
     data_length = tr_get_u32(payload + 81U);
     if ((size_t)data_length != payload_length - TR_DATA_CHUNK_FIXED_SIZE) {
         return SALTS_EPROTO;
@@ -1263,28 +1299,35 @@ int tr_raft_wire_decode_data_chunk(
     return tr_data_chunk_valid(chunk) ? SALTS_OK : SALTS_EPROTO;
 }
 
-int tr_raft_wire_encode_data_ack(
+int tr_raft_wire_encode_data_ack_version(
     tr_raft_wire_codec_t *codec,
+    uint16_t wire_version,
     const tr_raft_wire_metadata_t *metadata,
     const tr_raft_data_ack_t *ack,
     uint8_t *output,
     size_t output_capacity,
     size_t *output_length)
 {
+    size_t header_size;
     uint8_t *payload;
 
     if (output_length != NULL) {
         *output_length = 0U;
     }
-    if (codec == NULL || metadata == NULL || !tr_data_ack_valid(ack) ||
-        output == NULL || output_length == NULL) {
+    if (codec == NULL || !tr_wire_metadata_valid(wire_version, metadata) ||
+        !tr_data_ack_valid(ack) || output == NULL || output_length == NULL) {
         return SALTS_EINVAL;
     }
-    if (output_capacity < TR_RAFT_WIRE_HEADER_SIZE + TR_DATA_ACK_FIXED_SIZE) {
-        *output_length = TR_RAFT_WIRE_HEADER_SIZE + TR_DATA_ACK_FIXED_SIZE;
+    if (wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION &&
+        wire_version != TR_RAFT_WIRE_GROUP_VERSION) {
+        return SALTS_EPROTO;
+    }
+    header_size = tr_wire_header_size(wire_version);
+    if (output_capacity < header_size + TR_DATA_ACK_FIXED_SIZE) {
+        *output_length = header_size + TR_DATA_ACK_FIXED_SIZE;
         return SALTS_ENOSPC;
     }
-    payload = output + TR_RAFT_WIRE_HEADER_SIZE;
+    payload = output + header_size;
     tr_put_u64(payload, ack->from);
     tr_put_u64(payload + 8U, ack->to);
     tr_put_u64(payload + 16U, ack->term);
@@ -1295,11 +1338,24 @@ int tr_raft_wire_encode_data_ack(
            TR_RAFT_WIRE_DATA_DIGEST_SIZE);
     payload[80U] = ack->accepted ? 1U : 0U;
     payload[81U] = ack->durable ? 1U : 0U;
-    *output_length = TR_RAFT_WIRE_HEADER_SIZE + TR_DATA_ACK_FIXED_SIZE;
-    tr_wire_write_envelope(output, TR_RAFT_WIRE_SNAPSHOT_VERSION,
+    *output_length = header_size + TR_DATA_ACK_FIXED_SIZE;
+    tr_wire_write_envelope(output, wire_version,
                            TR_RAFT_WIRE_PAYLOAD_DATA_ACK,
                            TR_DATA_ACK_FIXED_SIZE, metadata);
     return SALTS_OK;
+}
+
+int tr_raft_wire_encode_data_ack(
+    tr_raft_wire_codec_t *codec,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_data_ack_t *ack,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length)
+{
+    return tr_raft_wire_encode_data_ack_version(
+        codec, TR_RAFT_WIRE_SNAPSHOT_VERSION, metadata, ack, output,
+        output_capacity, output_length);
 }
 
 int tr_raft_wire_decode_data_ack(
@@ -1311,6 +1367,7 @@ int tr_raft_wire_decode_data_ack(
 {
     const uint8_t *payload;
     uint32_t payload_length;
+    size_t header_size;
     uint16_t wire_version;
 
     if (codec == NULL || frame == NULL || metadata == NULL || ack == NULL ||
@@ -1319,12 +1376,14 @@ int tr_raft_wire_decode_data_ack(
     }
     if (tr_wire_read_envelope(frame, frame_length,
                               TR_RAFT_WIRE_PAYLOAD_DATA_ACK, metadata,
-                              &payload_length, &wire_version) != SALTS_OK ||
-        wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION ||
+                              &payload_length, &wire_version,
+                              &header_size) != SALTS_OK ||
+        (wire_version != TR_RAFT_WIRE_SNAPSHOT_VERSION &&
+         wire_version != TR_RAFT_WIRE_GROUP_VERSION) ||
         payload_length != TR_DATA_ACK_FIXED_SIZE) {
         return SALTS_EPROTO;
     }
-    payload = frame + TR_RAFT_WIRE_HEADER_SIZE;
+    payload = frame + header_size;
     if (payload[80U] > 1U || payload[81U] > 1U) {
         return SALTS_EPROTO;
     }
@@ -1350,22 +1409,27 @@ int tr_raft_wire_peek_version(
     uint32_t payload_length;
     uint32_t payload_kind;
     uint16_t wire_version;
+    size_t header_size;
 
     if (frame == NULL || out_version == NULL ||
-        frame_length < TR_RAFT_WIRE_HEADER_SIZE) {
+        frame_length < TR_RAFT_WIRE_LEGACY_HEADER_SIZE) {
         return SALTS_EINVAL;
     }
     wire_version = tr_get_u16(frame + 4U);
+    if (wire_version < TR_RAFT_WIRE_MIN_VERSION ||
+        wire_version > TR_RAFT_WIRE_MAX_VERSION) {
+        return SALTS_EPROTO;
+    }
+    header_size = tr_wire_header_size(wire_version);
     if (memcmp(frame, TR_RAFT_WIRE_MAGIC, sizeof(TR_RAFT_WIRE_MAGIC)) != 0 ||
-        wire_version < TR_RAFT_WIRE_MIN_VERSION ||
-        wire_version > TR_RAFT_WIRE_MAX_VERSION ||
-        tr_get_u16(frame + 6U) != TR_RAFT_WIRE_HEADER_SIZE) {
+        tr_get_u16(frame + 6U) != header_size ||
+        frame_length < header_size) {
         return SALTS_EPROTO;
     }
     payload_length = tr_get_u32(frame + 8U);
     payload_kind = tr_get_u32(frame + 12U);
     if (payload_length > tr_wire_payload_limit(wire_version, payload_kind) ||
-        frame_length != TR_RAFT_WIRE_HEADER_SIZE + payload_length) {
+        frame_length != header_size + payload_length) {
         return SALTS_EPROTO;
     }
     *out_version = wire_version;
