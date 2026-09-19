@@ -81,6 +81,14 @@ jobs:
             -Werror=return-type \
             "${INC[@]}" -Isrc/transport -fsyntax-only \
             src/transport/raft_cnet_peer.c
+          run_check "raft_snapshot_sender.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            src/snapshot/raft_snapshot_sender.c
           run_check "raft_group_queue.c" \
             cc -std=c11 -Wall -Wextra \
             -Werror=implicit-function-declaration \
@@ -549,6 +557,152 @@ jobs:
             src/transport/raft_transport.c \
             -o /tmp/group_routing_behavior
           /tmp/group_routing_behavior
+
+      - name: Run bounded streaming snapshot sender behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/streaming_sender_behavior.c <<'EOF'
+          #include <turboraft/raft_snapshot_sender.h>
+          #include <salts_error.h>
+
+          #include <stdint.h>
+          #include <string.h>
+
+          typedef struct generated_source {
+              uint64_t size;
+              size_t reads;
+              size_t max_requested;
+              size_t releases;
+          } generated_source_t;
+
+          static int read_at(void *context,
+                             uint64_t offset,
+                             uint8_t *buffer,
+                             size_t capacity,
+                             size_t *out_size)
+          {
+              generated_source_t *source = (generated_source_t *)context;
+              size_t i;
+
+              if (source == NULL || out_size == NULL ||
+                  offset > source->size ||
+                  capacity > source->size - offset ||
+                  (capacity != 0U && buffer == NULL)) {
+                  return SALTS_EINVAL;
+              }
+              ++source->reads;
+              if (capacity > source->max_requested) {
+                  source->max_requested = capacity;
+              }
+              for (i = 0U; i < capacity; ++i) {
+                  buffer[i] = (uint8_t)((offset + i) & 0xffU);
+              }
+              *out_size = capacity;
+              return SALTS_OK;
+          }
+
+          static void release_source(void *context)
+          {
+              generated_source_t *source = (generated_source_t *)context;
+              if (source != NULL) ++source->releases;
+          }
+
+          int main(void)
+          {
+              const uint64_t snapshot_size =
+                  3U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES + 17U;
+              const tr_raft_conf_t configuration = {
+                  TR_RAFT_CONF_FINAL, 0U, 1U,
+                  {{1U, TR_RAFT_CONF_OLD_VOTER |
+                        TR_RAFT_CONF_NEW_VOTER}}
+              };
+              tr_raft_snapshot_sender_config_t config;
+              tr_raft_snapshot_sender_t *sender = NULL;
+              tr_raft_snapshot_source_t source;
+              generated_source_t generated;
+              tr_raft_snapshot_chunk_t chunk;
+              tr_raft_snapshot_ack_t ack;
+              uint64_t offset = 0U;
+              size_t chunks = 0U;
+
+              memset(&config, 0, sizeof(config));
+              memset(&source, 0, sizeof(source));
+              memset(&generated, 0, sizeof(generated));
+              memset(&ack, 0, sizeof(ack));
+
+              generated.size = snapshot_size;
+              source.context = &generated;
+              source.size = snapshot_size;
+              memset(source.digest, 0x5a, sizeof(source.digest));
+              source.read_at = read_at;
+              source.release = release_source;
+
+              config.self_id = 1U;
+              config.peer_id = 2U;
+              config.max_snapshot_bytes = (size_t)snapshot_size;
+              config.chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+              config.max_inflight_chunks = 1U;
+
+              if (tr_raft_snapshot_sender_create(&config, &sender) !=
+                  SALTS_OK) return 10;
+              if (tr_raft_snapshot_sender_begin_source(
+                      sender, 7U, 9U, 6U, &configuration, &source) !=
+                  SALTS_OK) return 11;
+
+              ack.from = 2U;
+              ack.to = 1U;
+              ack.term = 7U;
+              ack.snapshot_index = 9U;
+              ack.snapshot_size = snapshot_size;
+              ack.accepted = true;
+              memcpy(ack.snapshot_digest, source.digest,
+                     sizeof(ack.snapshot_digest));
+
+              while (offset < snapshot_size) {
+                  size_t i;
+                  if (tr_raft_snapshot_sender_next_chunk(sender, &chunk) !=
+                      SALTS_OK) return 20;
+                  if (chunk.snapshot_offset != offset ||
+                      chunk.data_length >
+                          TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES)
+                      return 21;
+                  for (i = 0U; i < chunk.data_length; ++i) {
+                      if (chunk.data[i] !=
+                          (uint8_t)((offset + i) & 0xffU))
+                          return 22;
+                  }
+                  offset += chunk.data_length;
+                  ++chunks;
+                  ack.next_offset = offset;
+                  if (tr_raft_snapshot_sender_acknowledge(
+                          sender, &ack) != SALTS_OK)
+                      return 23;
+              }
+
+              if (chunks != 4U ||
+                  generated.reads != 4U ||
+                  generated.max_requested >
+                      TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES ||
+                  generated.releases != 1U)
+                  return 30;
+
+              tr_raft_snapshot_sender_destroy(sender);
+              return generated.releases == 1U ? 0 : 31;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/concurrency/include \
+            -I../salts/cmeta/include \
+            /tmp/streaming_sender_behavior.c \
+            src/snapshot/raft_snapshot_sender.c \
+            -lcrypto \
+            -o /tmp/streaming_sender_behavior
+          /tmp/streaming_sender_behavior
 
       - name: Verify current public group API
         shell: bash
