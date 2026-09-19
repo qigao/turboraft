@@ -2,6 +2,7 @@
 
 #include <salts_error.h>
 #include <salts_fs.h>
+#include <openssl/sha.h>
 #include <xxhash.h>
 
 #include <limits.h>
@@ -136,113 +137,404 @@ static int tr_wal_read_exact(salts_file_t file, uint64_t offset,
     return SALTS_OK;
 }
 
-static int tr_wal_read_snapshot_file(tr_raft_wal_storage_t *storage,
-                                     tr_raft_wal_recovery_t *recovery,
-                                     uint64_t expected_checksum);
+typedef struct tr_wal_snapshot_file_source {
+    char path[SALTS_FS_MAX_PATH];
+    uint64_t size;
+} tr_wal_snapshot_file_source_t;
 
-static int tr_wal_write_snapshot_file(tr_raft_wal_storage_t *storage,
-                                      tr_raft_index_t index,
-                                      tr_raft_term_t term,
-                                      const uint8_t *data, size_t size,
-                                      uint64_t checksum)
+typedef struct tr_wal_memory_snapshot_source {
+    const uint8_t *data;
+    size_t size;
+} tr_wal_memory_snapshot_source_t;
+
+static int tr_wal_memory_snapshot_read(
+    void *context,
+    uint64_t offset,
+    uint8_t *buffer,
+    size_t capacity,
+    size_t *out_size)
+{
+    tr_wal_memory_snapshot_source_t *source =
+        (tr_wal_memory_snapshot_source_t *)context;
+
+    if (source == NULL || out_size == NULL ||
+        offset > source->size ||
+        capacity > source->size - (size_t)offset ||
+        (capacity != 0U && buffer == NULL)) {
+        return SALTS_EINVAL;
+    }
+    if (capacity != 0U) {
+        memcpy(buffer, source->data + (size_t)offset, capacity);
+    }
+    *out_size = capacity;
+    return SALTS_OK;
+}
+
+static int tr_wal_snapshot_file_source_read(
+    void *context,
+    uint64_t offset,
+    uint8_t *buffer,
+    size_t capacity,
+    size_t *out_size)
+{
+    tr_wal_snapshot_file_source_t *source =
+        (tr_wal_snapshot_file_source_t *)context;
+    salts_file_t file;
+    int result;
+
+    if (source == NULL || out_size == NULL ||
+        offset > source->size ||
+        capacity > source->size - offset ||
+        (capacity != 0U && buffer == NULL)) {
+        return SALTS_EINVAL;
+    }
+    *out_size = 0U;
+    if (capacity == 0U) {
+        return SALTS_OK;
+    }
+
+    file = salts_fs_open(source->path, SALTS_FS_O_RDONLY, 0);
+    if (file == SALTS_INVALID_FILE) {
+        return SALTS_EIO;
+    }
+    result = tr_wal_read_exact(
+        file, TR_WAL_SNAPSHOT_HEADER_SIZE + offset, buffer, capacity);
+    {
+        int close_result = salts_fs_close(file);
+        if (result == SALTS_OK) {
+            result = close_result;
+        }
+    }
+    if (result == SALTS_OK) {
+        *out_size = capacity;
+    }
+    return result;
+}
+
+static void tr_wal_snapshot_file_source_release(void *context)
+{
+    free(context);
+}
+
+static int tr_wal_snapshot_file_header(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_index_t index,
+    tr_raft_term_t term,
+    uint64_t expected_size,
+    uint64_t *out_checksum,
+    char *out_path,
+    size_t out_path_size)
+{
+    uint8_t header[TR_WAL_SNAPSHOT_HEADER_SIZE];
+    salts_fs_stat_t stat;
+    salts_file_t file;
+    int result;
+
+    if (storage == NULL || out_checksum == NULL || out_path == NULL) {
+        return SALTS_EINVAL;
+    }
+    result = tr_wal_snapshot_path(
+        storage, index, term, "", out_path, out_path_size);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    result = salts_fs_stat(out_path, &stat);
+    if (result != SALTS_OK || !stat.is_file ||
+        stat.size != TR_WAL_SNAPSHOT_HEADER_SIZE + expected_size) {
+        return SALTS_EPROTO;
+    }
+    file = salts_fs_open(out_path, SALTS_FS_O_RDONLY, 0);
+    if (file == SALTS_INVALID_FILE) {
+        return SALTS_EIO;
+    }
+    result = tr_wal_read_exact(file, 0U, header, sizeof(header));
+    {
+        int close_result = salts_fs_close(file);
+        if (result == SALTS_OK) {
+            result = close_result;
+        }
+    }
+    if (result != SALTS_OK) {
+        return result;
+    }
+    if (memcmp(header, TR_WAL_SNAPSHOT_MAGIC, 8U) != 0 ||
+        tr_wal_get_u32(header + 8U) != TR_WAL_FORMAT_VERSION ||
+        tr_wal_get_u32(header + 12U) != TR_WAL_SNAPSHOT_HEADER_SIZE ||
+        tr_wal_get_u64(header + 16U) != index ||
+        tr_wal_get_u64(header + 24U) != term ||
+        tr_wal_get_u64(header + 32U) != expected_size) {
+        return SALTS_EPROTO;
+    }
+    *out_checksum = tr_wal_get_u64(header + 40U);
+    return SALTS_OK;
+}
+
+static int tr_wal_read_snapshot_file(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_wal_recovery_t *recovery,
+    uint64_t expected_checksum,
+    const uint8_t *expected_digest,
+    size_t expected_digest_size)
+{
+    tr_wal_snapshot_file_source_t *source_context = NULL;
+    XXH3_state_t *xxh_state = NULL;
+    SHA256_CTX sha;
+    uint8_t digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE];
+    uint8_t *buffer = NULL;
+    char path[SALTS_FS_MAX_PATH];
+    uint64_t header_checksum = 0U;
+    uint64_t offset = 0U;
+    int result;
+
+    if (storage == NULL || recovery == NULL ||
+        (expected_digest_size != 0U &&
+         expected_digest_size != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) ||
+        (expected_digest_size != 0U && expected_digest == NULL)) {
+        return SALTS_EINVAL;
+    }
+
+    result = tr_wal_snapshot_file_header(
+        storage, recovery->snapshot_index, recovery->snapshot_term,
+        recovery->snapshot_size, &header_checksum, path, sizeof(path));
+    if (result != SALTS_OK || header_checksum != expected_checksum) {
+        return result == SALTS_OK ? SALTS_EPROTO : result;
+    }
+
+    buffer = (uint8_t *)malloc(TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
+    xxh_state = XXH3_createState();
+    if (buffer == NULL || xxh_state == NULL) {
+        result = SALTS_ENOMEM;
+        goto cleanup;
+    }
+    if (XXH3_64bits_reset(xxh_state) != XXH_OK ||
+        SHA256_Init(&sha) != 1) {
+        result = SALTS_EIO;
+        goto cleanup;
+    }
+
+    while (offset < recovery->snapshot_size) {
+        size_t request = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+        size_t remaining = recovery->snapshot_size - (size_t)offset;
+        salts_file_t file;
+
+        if (request > remaining) {
+            request = remaining;
+        }
+        file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
+        if (file == SALTS_INVALID_FILE) {
+            result = SALTS_EIO;
+            goto cleanup;
+        }
+        result = tr_wal_read_exact(
+            file, TR_WAL_SNAPSHOT_HEADER_SIZE + offset, buffer, request);
+        {
+            int close_result = salts_fs_close(file);
+            if (result == SALTS_OK) {
+                result = close_result;
+            }
+        }
+        if (result != SALTS_OK) {
+            goto cleanup;
+        }
+        if (XXH3_64bits_update(xxh_state, buffer, request) != XXH_OK ||
+            SHA256_Update(&sha, buffer, request) != 1) {
+            result = SALTS_EIO;
+            goto cleanup;
+        }
+        offset += request;
+    }
+
+    if (XXH3_64bits_digest(xxh_state) != expected_checksum ||
+        SHA256_Final(digest, &sha) != 1) {
+        result = SALTS_EPROTO;
+        goto cleanup;
+    }
+    if (expected_digest_size != 0U &&
+        memcmp(digest, expected_digest, expected_digest_size) != 0) {
+        result = SALTS_EPROTO;
+        goto cleanup;
+    }
+
+    source_context =
+        (tr_wal_snapshot_file_source_t *)calloc(1U, sizeof(*source_context));
+    if (source_context == NULL) {
+        result = SALTS_ENOMEM;
+        goto cleanup;
+    }
+    memcpy(source_context->path, path, strlen(path) + 1U);
+    source_context->size = recovery->snapshot_size;
+
+    memset(&recovery->snapshot_source, 0, sizeof(recovery->snapshot_source));
+    recovery->snapshot_source.context = source_context;
+    recovery->snapshot_source.size = recovery->snapshot_size;
+    memcpy(recovery->snapshot_source.digest, digest, sizeof(digest));
+    recovery->snapshot_source.read_at = tr_wal_snapshot_file_source_read;
+    recovery->snapshot_source.release = tr_wal_snapshot_file_source_release;
+    source_context = NULL;
+    result = SALTS_OK;
+
+cleanup:
+    free(source_context);
+    if (xxh_state != NULL) {
+        XXH3_freeState(xxh_state);
+    }
+    free(buffer);
+    return result;
+}
+
+static int tr_wal_write_snapshot_source_file(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_index_t index,
+    tr_raft_term_t term,
+    const tr_raft_snapshot_source_t *source,
+    uint64_t *out_checksum)
 {
     uint8_t header[TR_WAL_SNAPSHOT_HEADER_SIZE] = {0};
     char temporary_path[SALTS_FS_MAX_PATH];
     char final_path[SALTS_FS_MAX_PATH];
+    XXH3_state_t *xxh_state = NULL;
+    SHA256_CTX sha;
+    uint8_t digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE];
+    uint8_t *buffer = NULL;
     salts_file_t file = SALTS_INVALID_FILE;
-    int result = tr_wal_snapshot_path(storage, index, term, ".tmp",
-                                      temporary_path,
-                                      sizeof(temporary_path));
-    if (result == SALTS_OK) {
-        result = tr_wal_snapshot_path(storage, index, term, "", final_path,
-                                      sizeof(final_path));
+    uint64_t offset = 0U;
+    uint64_t checksum = 0U;
+    int result;
+
+    if (storage == NULL || source == NULL || source->read_at == NULL ||
+        out_checksum == NULL ||
+        source->size > storage->max_snapshot_bytes) {
+        return SALTS_EINVAL;
     }
-    if (result != SALTS_OK) return result;
+
+    result = tr_wal_snapshot_path(
+        storage, index, term, ".tmp", temporary_path, sizeof(temporary_path));
+    if (result == SALTS_OK) {
+        result = tr_wal_snapshot_path(
+            storage, index, term, "", final_path, sizeof(final_path));
+    }
+    if (result != SALTS_OK) {
+        return result;
+    }
+
     if (salts_fs_access(final_path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
         tr_raft_wal_recovery_t existing;
+        uint64_t existing_checksum = 0U;
+
         memset(&existing, 0, sizeof(existing));
         existing.snapshot_index = index;
         existing.snapshot_term = term;
-        existing.snapshot_size = size;
-        result = tr_wal_read_snapshot_file(storage, &existing, checksum);
-        if (result == SALTS_OK &&
-            (size == 0U || memcmp(existing.snapshot_data, data, size) != 0))
-            result = SALTS_EPROTO;
-        free(existing.snapshot_data);
+        existing.snapshot_size = (size_t)source->size;
+        result = tr_wal_snapshot_file_header(
+            storage, index, term, source->size, &existing_checksum,
+            final_path, sizeof(final_path));
+        if (result == SALTS_OK) {
+            result = tr_wal_read_snapshot_file(
+                storage, &existing, existing_checksum,
+                source->digest, sizeof(source->digest));
+        }
+        if (existing.snapshot_source.release != NULL) {
+            existing.snapshot_source.release(existing.snapshot_source.context);
+        }
+        if (result == SALTS_OK) {
+            *out_checksum = existing_checksum;
+        }
         return result;
     }
-    file = salts_fs_open(temporary_path,
-                         SALTS_FS_O_RDWR | SALTS_FS_O_CREAT |
-                             SALTS_FS_O_TRUNC,
-                         SALTS_FS_DEFAULT_MODE);
-    if (file == SALTS_INVALID_FILE) return SALTS_EIO;
-    memcpy(header, TR_WAL_SNAPSHOT_MAGIC, 8U);
-    tr_wal_put_u32(header + 8U, TR_WAL_FORMAT_VERSION);
-    tr_wal_put_u32(header + 12U, TR_WAL_SNAPSHOT_HEADER_SIZE);
-    tr_wal_put_u64(header + 16U, index);
-    tr_wal_put_u64(header + 24U, term);
-    tr_wal_put_u64(header + 32U, size);
-    tr_wal_put_u64(header + 40U, checksum);
+
+    file = salts_fs_open(
+        temporary_path,
+        SALTS_FS_O_RDWR | SALTS_FS_O_CREAT | SALTS_FS_O_TRUNC,
+        SALTS_FS_DEFAULT_MODE);
+    if (file == SALTS_INVALID_FILE) {
+        return SALTS_EIO;
+    }
+
+    buffer = (uint8_t *)malloc(TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
+    xxh_state = XXH3_createState();
+    if (buffer == NULL || xxh_state == NULL ||
+        XXH3_64bits_reset(xxh_state) != XXH_OK ||
+        SHA256_Init(&sha) != 1) {
+        result = SALTS_ENOMEM;
+        goto cleanup_write;
+    }
+
     result = tr_wal_write_all(file, header, sizeof(header));
-    if (result == SALTS_OK && size != 0U)
-        result = tr_wal_write_all(file, data, size);
-    if (result == SALTS_OK) result = salts_fs_fsync(file);
+    while (result == SALTS_OK && offset < source->size) {
+        size_t request = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+        uint64_t remaining64 = source->size - offset;
+        size_t read_size = 0U;
+
+        if (remaining64 < request) {
+            request = (size_t)remaining64;
+        }
+        result = source->read_at(
+            source->context, offset, buffer, request, &read_size);
+        if (result != SALTS_OK) {
+            break;
+        }
+        if (read_size == 0U || read_size > request) {
+            result = SALTS_EPROTO;
+            break;
+        }
+        if (XXH3_64bits_update(xxh_state, buffer, read_size) != XXH_OK ||
+            SHA256_Update(&sha, buffer, read_size) != 1) {
+            result = SALTS_EIO;
+            break;
+        }
+        result = tr_wal_write_all(file, buffer, read_size);
+        offset += read_size;
+    }
+
+    if (result == SALTS_OK && offset != source->size) {
+        result = SALTS_EPROTO;
+    }
+    if (result == SALTS_OK) {
+        checksum = XXH3_64bits_digest(xxh_state);
+        if (SHA256_Final(digest, &sha) != 1 ||
+            memcmp(digest, source->digest, sizeof(digest)) != 0) {
+            result = SALTS_EPROTO;
+        }
+    }
+    if (result == SALTS_OK) {
+        memcpy(header, TR_WAL_SNAPSHOT_MAGIC, 8U);
+        tr_wal_put_u32(header + 8U, TR_WAL_FORMAT_VERSION);
+        tr_wal_put_u32(header + 12U, TR_WAL_SNAPSHOT_HEADER_SIZE);
+        tr_wal_put_u64(header + 16U, index);
+        tr_wal_put_u64(header + 24U, term);
+        tr_wal_put_u64(header + 32U, source->size);
+        tr_wal_put_u64(header + 40U, checksum);
+        if (salts_fs_pwrite(
+                file, (const char *)header, sizeof(header), 0) !=
+            (int)sizeof(header)) {
+            result = SALTS_EIO;
+        }
+    }
+    if (result == SALTS_OK) {
+        result = salts_fs_fsync(file);
+    }
+
+cleanup_write:
     {
         int close_result = salts_fs_close(file);
-        if (result == SALTS_OK) result = close_result;
+        if (result == SALTS_OK) {
+            result = close_result;
+        }
     }
-    if (result == SALTS_OK)
-        result = salts_fs_rename(temporary_path, final_path);
-    if (result != SALTS_OK) salts_fs_unlink(temporary_path);
-    return result;
-}
+    if (xxh_state != NULL) {
+        XXH3_freeState(xxh_state);
+    }
+    free(buffer);
 
-static int tr_wal_read_snapshot_file(tr_raft_wal_storage_t *storage,
-                                     tr_raft_wal_recovery_t *recovery,
-                                     uint64_t expected_checksum)
-{
-    uint8_t header[TR_WAL_SNAPSHOT_HEADER_SIZE];
-    char path[SALTS_FS_MAX_PATH];
-    salts_fs_stat_t stat;
-    salts_file_t file;
-    int result = tr_wal_snapshot_path(storage, recovery->snapshot_index,
-                                      recovery->snapshot_term, "", path,
-                                      sizeof(path));
-    if (result != SALTS_OK) return result;
-    result = salts_fs_stat(path, &stat);
-    if (result != SALTS_OK || !stat.is_file ||
-        stat.size != TR_WAL_SNAPSHOT_HEADER_SIZE + recovery->snapshot_size)
-        return SALTS_EPROTO;
-    file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
-    if (file == SALTS_INVALID_FILE) return SALTS_EIO;
-    result = tr_wal_read_exact(file, 0U, header, sizeof(header));
-    if (result == SALTS_OK &&
-        (memcmp(header, TR_WAL_SNAPSHOT_MAGIC, 8U) != 0 ||
-         tr_wal_get_u32(header + 8U) != TR_WAL_FORMAT_VERSION ||
-         tr_wal_get_u32(header + 12U) != TR_WAL_SNAPSHOT_HEADER_SIZE ||
-         tr_wal_get_u64(header + 16U) != recovery->snapshot_index ||
-         tr_wal_get_u64(header + 24U) != recovery->snapshot_term ||
-         tr_wal_get_u64(header + 32U) != recovery->snapshot_size ||
-         tr_wal_get_u64(header + 40U) != expected_checksum))
-        result = SALTS_EPROTO;
-    if (result == SALTS_OK && recovery->snapshot_size != 0U) {
-        recovery->snapshot_data = (uint8_t *)malloc(recovery->snapshot_size);
-        if (recovery->snapshot_data == NULL) result = SALTS_ENOMEM;
+    if (result == SALTS_OK) {
+        result = salts_fs_rename(temporary_path, final_path);
     }
-    if (result == SALTS_OK && recovery->snapshot_size != 0U)
-        result = tr_wal_read_exact(file, sizeof(header),
-                                   recovery->snapshot_data,
-                                   recovery->snapshot_size);
-    if (result == SALTS_OK &&
-        XXH3_64bits(recovery->snapshot_data, recovery->snapshot_size) !=
-            expected_checksum)
-        result = SALTS_EPROTO;
-    salts_fs_close(file);
     if (result != SALTS_OK) {
-        free(recovery->snapshot_data);
-        recovery->snapshot_data = NULL;
+        (void)salts_fs_unlink(temporary_path);
+        return result;
     }
-    return result;
+    *out_checksum = checksum;
+    return SALTS_OK;
 }
 
 static uint64_t tr_wal_segment_checksum(const uint8_t *header)
