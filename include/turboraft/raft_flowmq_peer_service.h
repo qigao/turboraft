@@ -57,8 +57,6 @@ typedef struct tr_raft_flowmq_peer_service_config {
     uint32_t reconnect_max_ms;
     uint32_t heartbeat_interval_ms;
     uint32_t heartbeat_timeout_ms;
-    tr_raft_transport_message_handler_fn on_message;
-    void *message_context;
     tr_raft_transport_payload_handler_fn on_payload;
     void *payload_context;
 } tr_raft_flowmq_peer_service_config_t;
@@ -108,9 +106,11 @@ int tr_raft_flowmq_peer_service_stop(tr_raft_flowmq_peer_service_t *service);
 /** Requires stop after start; releases queued payloads and service storage. */
 int tr_raft_flowmq_peer_service_destroy(tr_raft_flowmq_peer_service_t *service);
 
-/** Runtime adapter. Copies one message into the destination peer FIFO. */
-int tr_raft_flowmq_peer_service_enqueue(void *context,
-                                        const tr_raft_message_t *message);
+/** Copies one Raft message with explicit group identity into the peer FIFO. */
+int tr_raft_flowmq_peer_service_enqueue_group(
+    tr_raft_flowmq_peer_service_t *service,
+    tr_raft_group_id_t group_id,
+    const tr_raft_message_t *message);
 int tr_raft_flowmq_peer_service_enqueue_payload(
     tr_raft_flowmq_peer_service_t *service,
     const tr_raft_transport_payload_t *payload);
