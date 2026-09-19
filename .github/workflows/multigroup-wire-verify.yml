@@ -40,10 +40,27 @@ jobs:
             -I../salts-utils/tbe/schema/include
           )
 
-          cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/wire/raft_wire_codec.c
-          cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/transport/raft_peer_handshake.c
-          cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/transport/raft_transport.c
-          cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             tests/core/test_raft_multigroup_wire.c
+          run_check() {
+            local label="$1"
+            shift
+            set +e
+            "$@" > /tmp/multigroup-verify.log 2>&1
+            local rc=$?
+            set -e
+            {
+              echo "### ${label}"
+              echo '~~~text'
+              tail -n 120 /tmp/multigroup-verify.log
+              echo '~~~'
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/multigroup-verify.log
+            return "$rc"
+          }
+
+          run_check "raft_wire_codec.c"             cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/wire/raft_wire_codec.c
+          run_check "raft_peer_handshake.c"             cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/transport/raft_peer_handshake.c
+          run_check "raft_transport.c"             cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             src/transport/raft_transport.c
+          run_check "test_raft_multigroup_wire.c"             cc -std=c11 -Wall -Wextra -Werror "${INC[@]}" -fsyntax-only             tests/core/test_raft_multigroup_wire.c
 
       - name: Verify public group API constants compile
         shell: bash
