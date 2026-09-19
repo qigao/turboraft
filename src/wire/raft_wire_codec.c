@@ -66,6 +66,24 @@ static uint64_t tr_get_u64(const uint8_t *input)
     return value;
 }
 
+static size_t tr_wire_header_size(uint16_t wire_version)
+{
+    return wire_version == TR_RAFT_WIRE_GROUP_VERSION
+               ? TR_RAFT_WIRE_GROUP_HEADER_SIZE
+               : TR_RAFT_WIRE_LEGACY_HEADER_SIZE;
+}
+
+static bool tr_wire_metadata_valid(uint16_t wire_version,
+                                   const tr_raft_wire_metadata_t *metadata)
+{
+    if (metadata == NULL) {
+        return false;
+    }
+    return wire_version == TR_RAFT_WIRE_GROUP_VERSION
+               ? metadata->group_id != 0U
+               : metadata->group_id == 0U;
+}
+
 static bool tr_message_valid(const tr_raft_message_t *message)
 {
     bool read_message;
@@ -135,6 +153,20 @@ static bool tr_snapshot_chunk_valid(const tr_raft_snapshot_chunk_t *chunk)
 static size_t tr_wire_payload_limit(uint16_t wire_version,
                                     uint32_t payload_kind)
 {
+    if (wire_version == TR_RAFT_WIRE_GROUP_VERSION) {
+        switch (payload_kind) {
+        case TR_RAFT_WIRE_PAYLOAD_RAFT:
+            return TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE;
+        case TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK:
+        case TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK:
+            return TR_RAFT_WIRE_MAX_SNAPSHOT_PAYLOAD_SIZE;
+        case TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK:
+        case TR_RAFT_WIRE_PAYLOAD_DATA_ACK:
+            return TR_RAFT_WIRE_MAX_DATA_PAYLOAD_SIZE;
+        default:
+            return 0U;
+        }
+    }
     if (payload_kind == TR_RAFT_WIRE_PAYLOAD_RAFT) {
         return wire_version <= TR_RAFT_WIRE_VERSION
                    ? TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE
@@ -197,14 +229,21 @@ static void tr_wire_write_envelope(
     size_t payload_length,
     const tr_raft_wire_metadata_t *metadata)
 {
+    size_t header_size = tr_wire_header_size(wire_version);
+
     memcpy(output, TR_RAFT_WIRE_MAGIC, sizeof(TR_RAFT_WIRE_MAGIC));
     tr_put_u16(output + 4U, wire_version);
-    tr_put_u16(output + 6U, TR_RAFT_WIRE_HEADER_SIZE);
+    tr_put_u16(output + 6U, (uint16_t)header_size);
     tr_put_u32(output + 8U, (uint32_t) payload_length);
     tr_put_u32(output + 12U, payload_kind);
     memcpy(output + 16U, metadata->cluster_id.bytes,
            sizeof(metadata->cluster_id.bytes));
-    tr_put_u64(output + 32U, metadata->message_id);
+    if (wire_version == TR_RAFT_WIRE_GROUP_VERSION) {
+        tr_put_u64(output + 32U, metadata->group_id);
+        tr_put_u64(output + 40U, metadata->message_id);
+    } else {
+        tr_put_u64(output + 32U, metadata->message_id);
+    }
 }
 
 static int tr_wire_read_envelope(
@@ -213,31 +252,53 @@ static int tr_wire_read_envelope(
     uint32_t expected_payload_kind,
     tr_raft_wire_metadata_t *metadata,
     uint32_t *out_payload_length,
-    uint16_t *out_wire_version)
+    uint16_t *out_wire_version,
+    size_t *out_header_size)
 {
     uint32_t payload_length;
-    uint16_t wire_version = tr_get_u16(frame + 4U);
+    uint16_t wire_version;
+    size_t header_size;
 
+    if (frame == NULL || metadata == NULL || out_payload_length == NULL ||
+        frame_length < TR_RAFT_WIRE_LEGACY_HEADER_SIZE) {
+        return SALTS_EPROTO;
+    }
+    wire_version = tr_get_u16(frame + 4U);
+    if (wire_version < TR_RAFT_WIRE_MIN_VERSION ||
+        wire_version > TR_RAFT_WIRE_MAX_VERSION) {
+        return SALTS_EPROTO;
+    }
+    header_size = tr_wire_header_size(wire_version);
     if (memcmp(frame, TR_RAFT_WIRE_MAGIC, sizeof(TR_RAFT_WIRE_MAGIC)) != 0 ||
-        wire_version < TR_RAFT_WIRE_MIN_VERSION ||
-        wire_version > TR_RAFT_WIRE_MAX_VERSION ||
-        tr_get_u16(frame + 6U) != TR_RAFT_WIRE_HEADER_SIZE ||
-        tr_get_u32(frame + 12U) != expected_payload_kind) {
+        tr_get_u16(frame + 6U) != header_size ||
+        tr_get_u32(frame + 12U) != expected_payload_kind ||
+        frame_length < header_size) {
         return SALTS_EPROTO;
     }
     payload_length = tr_get_u32(frame + 8U);
     if (payload_length > tr_wire_payload_limit(wire_version,
                                                expected_payload_kind) ||
-        frame_length != TR_RAFT_WIRE_HEADER_SIZE + payload_length) {
+        frame_length != header_size + payload_length) {
         return SALTS_EPROTO;
     }
     memset(metadata, 0, sizeof(*metadata));
     memcpy(metadata->cluster_id.bytes, frame + 16U,
            sizeof(metadata->cluster_id.bytes));
-    metadata->message_id = tr_get_u64(frame + 32U);
+    if (wire_version == TR_RAFT_WIRE_GROUP_VERSION) {
+        metadata->group_id = tr_get_u64(frame + 32U);
+        metadata->message_id = tr_get_u64(frame + 40U);
+        if (metadata->group_id == 0U) {
+            return SALTS_EPROTO;
+        }
+    } else {
+        metadata->message_id = tr_get_u64(frame + 32U);
+    }
     *out_payload_length = payload_length;
     if (out_wire_version != NULL) {
         *out_wire_version = wire_version;
+    }
+    if (out_header_size != NULL) {
+        *out_header_size = header_size;
     }
     return SALTS_OK;
 }
@@ -303,6 +364,7 @@ static int tr_wire_v3_from_message(RaftWireMessageV3_t *wire,
 }
 
 static int tr_raft_wire_encode_v3(tr_raft_wire_codec_t *codec,
+                                  uint16_t wire_version,
                                   const tr_raft_wire_metadata_t *metadata,
                                   const tr_raft_message_t *message,
                                   uint8_t *output,
@@ -313,6 +375,7 @@ static int tr_raft_wire_encode_v3(tr_raft_wire_codec_t *codec,
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBindStatus status;
     size_t payload_length = 0U;
+    size_t header_size = tr_wire_header_size(wire_version);
     int result;
 
     RaftWireMessageV3_init(&wire);
@@ -322,17 +385,17 @@ static int tr_raft_wire_encode_v3(tr_raft_wire_codec_t *codec,
         return result;
     }
     status = RaftWireMessageV3_to_bin_into(
-        &wire, output + TR_RAFT_WIRE_HEADER_SIZE,
-        output_capacity - TR_RAFT_WIRE_HEADER_SIZE, &payload_length, &error);
+        &wire, output + header_size,
+        output_capacity - header_size, &payload_length, &error);
     RaftWireMessageV3_clear(&wire);
-    *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
+    *output_length = header_size + payload_length;
     if (status != DATA_BIND_OK) {
         return *output_length > output_capacity ? SALTS_ENOSPC : SALTS_EPROTO;
     }
     if (payload_length > TR_RAFT_WIRE_MAX_RAFT_PAYLOAD_SIZE) {
         return SALTS_EPROTO;
     }
-    tr_wire_write_envelope(output, TR_RAFT_WIRE_VERSION,
+    tr_wire_write_envelope(output, wire_version,
                            TR_RAFT_WIRE_PAYLOAD_RAFT, payload_length,
                            metadata);
     return SALTS_OK;
@@ -417,29 +480,35 @@ int tr_raft_wire_encode_version(tr_raft_wire_codec_t *codec,
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBindStatus status;
     size_t payload_length = 0U;
+    size_t header_size;
     int resize_result;
 
     if (output_length != NULL) {
         *output_length = 0U;
     }
     if (codec == NULL || codec->binding_v2 == NULL ||
-        codec->binding_v3 == NULL || metadata == NULL ||
+        codec->binding_v3 == NULL || !tr_wire_metadata_valid(wire_version,
+                                                              metadata) ||
         !tr_message_valid(message) || output == NULL || output_length == NULL) {
         return SALTS_EINVAL;
     }
-    if (wire_version < TR_RAFT_WIRE_MIN_VERSION ||
-        wire_version > TR_RAFT_WIRE_VERSION ||
-        (wire_version == 2U && message->entry_count > 1U)) {
+    if ((wire_version != TR_RAFT_WIRE_MIN_VERSION &&
+         wire_version != TR_RAFT_WIRE_VERSION &&
+         wire_version != TR_RAFT_WIRE_GROUP_VERSION) ||
+        (wire_version == TR_RAFT_WIRE_MIN_VERSION &&
+         message->entry_count > 1U)) {
         return SALTS_EPROTO;
     }
-    if (output_capacity < TR_RAFT_WIRE_HEADER_SIZE) {
-        *output_length = TR_RAFT_WIRE_HEADER_SIZE;
+    header_size = tr_wire_header_size(wire_version);
+    if (output_capacity < header_size) {
+        *output_length = header_size;
         return SALTS_ENOSPC;
     }
 
-    if (wire_version == TR_RAFT_WIRE_VERSION) {
-        return tr_raft_wire_encode_v3(codec, metadata, message, output,
-                                      output_capacity, output_length);
+    if (wire_version == TR_RAFT_WIRE_VERSION ||
+        wire_version == TR_RAFT_WIRE_GROUP_VERSION) {
+        return tr_raft_wire_encode_v3(codec, wire_version, metadata, message,
+                                      output, output_capacity, output_length);
     }
     RaftWireMessage_init(&wire);
     tr_wire_from_message(&wire, message);
@@ -455,10 +524,10 @@ int tr_raft_wire_encode_version(tr_raft_wire_codec_t *codec,
     }
 
     status = RaftWireMessage_to_bin_into(
-        &wire, output + TR_RAFT_WIRE_HEADER_SIZE,
-        output_capacity - TR_RAFT_WIRE_HEADER_SIZE, &payload_length, &error);
+        &wire, output + header_size, output_capacity - header_size,
+        &payload_length, &error);
     RaftWireMessage_clear(&wire);
-    *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
+    *output_length = header_size + payload_length;
     if (status != DATA_BIND_OK) {
         return *output_length > output_capacity ? SALTS_ENOSPC : SALTS_EPROTO;
     }
@@ -692,6 +761,7 @@ int tr_raft_wire_decode(tr_raft_wire_codec_t *codec,
     DataBindStatus status;
     uint32_t payload_length;
     size_t entry_data_length;
+    size_t header_size;
     uint16_t wire_version;
 
     if (codec == NULL || codec->binding_v2 == NULL ||
@@ -702,12 +772,14 @@ int tr_raft_wire_decode(tr_raft_wire_codec_t *codec,
     }
     if (tr_wire_read_envelope(frame, frame_length,
                               TR_RAFT_WIRE_PAYLOAD_RAFT, metadata,
-                              &payload_length, &wire_version) != SALTS_OK) {
+                              &payload_length, &wire_version,
+                              &header_size) != SALTS_OK) {
         return SALTS_EPROTO;
     }
-    if (wire_version == TR_RAFT_WIRE_VERSION) {
-        return tr_raft_wire_decode_v3(
-            frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length, message);
+    if (wire_version == TR_RAFT_WIRE_VERSION ||
+        wire_version == TR_RAFT_WIRE_GROUP_VERSION) {
+        return tr_raft_wire_decode_v3(frame + header_size, payload_length,
+                                      message);
     }
     if (wire_version != TR_RAFT_WIRE_MIN_VERSION) {
         return SALTS_EPROTO;
@@ -715,7 +787,7 @@ int tr_raft_wire_decode(tr_raft_wire_codec_t *codec,
 
     RaftWireMessage_init(&wire);
     status = RaftWireMessage_from_bin(
-        codec->binding_v2, &wire, frame + TR_RAFT_WIRE_HEADER_SIZE,
+        codec->binding_v2, &wire, frame + header_size,
         payload_length, &error);
     if (status != DATA_BIND_OK) {
         RaftWireMessage_clear(&wire);
