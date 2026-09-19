@@ -170,6 +170,14 @@ jobs:
             -Werror=return-type \
             "${INC[@]}" -fsyntax-only \
             tests/core/test_raft_snapshot_manager_runtime.c
+          run_check "raft_wal_storage.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            src/storage/raft_wal_storage.c
           run_check "test_raft_wal_storage.c" \
             cc -std=c11 -Wall -Wextra \
             -Werror=implicit-function-declaration \
