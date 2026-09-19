@@ -88,6 +88,14 @@ jobs:
             "${INC[@]}" -Isrc/transport -fsyntax-only \
             tests/core/test_raft_group_queue.c
           run_check "test_raft_transport.c" \
+          run_check "test_raft_cnet_peer.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            tests/core/test_raft_cnet_peer.c
             cc -std=c11 -Wall -Wextra \
             -Werror=implicit-function-declaration \
             -Werror=incompatible-pointer-types \
