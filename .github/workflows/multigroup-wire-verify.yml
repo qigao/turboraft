@@ -70,6 +70,14 @@ jobs:
           run_check "raft_wire_codec.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/wire/raft_wire_codec.c
           run_check "raft_peer_handshake.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/transport/raft_peer_handshake.c
           run_check "raft_transport.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/transport/raft_transport.c
+          run_check "raft_group_queue.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -Isrc/transport -fsyntax-only \
+            src/transport/raft_group_queue.c
           run_check "test_raft_multigroup_wire.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only tests/core/test_raft_multigroup_wire.c
           run_check "test_raft_group_queue.c" \
             cc -std=c11 -Wall -Wextra \
@@ -81,6 +89,120 @@ jobs:
             tests/core/test_raft_group_queue.c
           run_check "test_raft_snapshot_peer.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -Isrc/service -fsyntax-only tests/core/test_raft_snapshot_peer.c
           run_check "test_raft_snapshot_manager.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -Isrc/service -fsyntax-only tests/core/test_raft_snapshot_manager.c
+
+      - name: Run bounded fair group queue behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/group_queue_behavior.c <<'EOF'
+          #include "raft_group_queue.h"
+          #include <salts_error.h>
+          #include <stdint.h>
+          #include <string.h>
+
+          static void release_owned(tr_raft_owned_transport_payload_t *owned)
+          {
+              if (owned != NULL) {
+                  memset(owned, 0, sizeof(*owned));
+              }
+          }
+
+          static tr_raft_owned_transport_payload_t make_item(
+              tr_raft_group_id_t group_id,
+              uint64_t term)
+          {
+              tr_raft_owned_transport_payload_t owned;
+              memset(&owned, 0, sizeof(owned));
+              owned.payload.group_id = group_id;
+              owned.payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+              owned.payload.data.raft.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+              owned.payload.data.raft.from = 1U;
+              owned.payload.data.raft.to = 2U;
+              owned.payload.data.raft.term = term;
+              return owned;
+          }
+
+          int main(void)
+          {
+              tr_raft_group_queue_t queue;
+              tr_raft_group_queue_config_t config;
+              tr_raft_owned_transport_payload_t item;
+              const tr_raft_owned_transport_payload_t *front = NULL;
+              tr_raft_group_queue_token_t token;
+              const tr_raft_group_id_t groups[] = {
+                  10U, 20U, 10U, 20U, 10U
+              };
+              const uint64_t terms[] = {1U, 4U, 2U, 5U, 3U};
+              size_t i;
+
+              memset(&queue, 0, sizeof(queue));
+              memset(&config, 0, sizeof(config));
+              config.max_groups = 2U;
+              config.total_item_capacity = 5U;
+              config.total_data_bytes = 10U;
+              config.per_group_item_capacity = 3U;
+              config.per_group_data_bytes = 6U;
+              config.release = release_owned;
+
+              if (tr_raft_group_queue_init(&queue, &config) != SALTS_OK) {
+                  return 10;
+              }
+
+              item = make_item(10U, 1U);
+              if (tr_raft_group_queue_enqueue(&queue, &item, 2U) != SALTS_OK)
+                  return 11;
+              item = make_item(10U, 2U);
+              if (tr_raft_group_queue_enqueue(&queue, &item, 2U) != SALTS_OK)
+                  return 12;
+              item = make_item(10U, 3U);
+              if (tr_raft_group_queue_enqueue(&queue, &item, 2U) != SALTS_OK)
+                  return 13;
+              item = make_item(20U, 4U);
+              if (tr_raft_group_queue_enqueue(&queue, &item, 2U) != SALTS_OK)
+                  return 14;
+              item = make_item(20U, 5U);
+              if (tr_raft_group_queue_enqueue(&queue, &item, 2U) != SALTS_OK)
+                  return 15;
+
+              item = make_item(20U, 6U);
+              if (tr_raft_group_queue_enqueue(&queue, &item, 1U) !=
+                  SALTS_ENOSPC)
+                  return 16;
+
+              for (i = 0U; i < 5U; ++i) {
+                  if (tr_raft_group_queue_peek_next(
+                          &queue, &token, &front) != SALTS_OK)
+                      return 20;
+                  if (front->payload.group_id != groups[i] ||
+                      front->payload.data.raft.term != terms[i])
+                      return 21;
+                  if (tr_raft_group_queue_pop(
+                          &queue, token, &item, NULL) != SALTS_OK)
+                      return 22;
+              }
+
+              if (tr_raft_group_queue_size(&queue) != 0U ||
+                  tr_raft_group_queue_active_groups(&queue) != 0U ||
+                  tr_raft_group_queue_data_bytes(&queue) != 0U)
+                  return 30;
+
+              tr_raft_group_queue_destroy(&queue);
+              return 0;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -Isrc/transport \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/concurrency/include \
+            -I../salts/cmeta/include \
+            -I../salts/cstl/include \
+            /tmp/group_queue_behavior.c \
+            src/transport/raft_group_queue.c \
+            -o /tmp/group_queue_behavior
+          /tmp/group_queue_behavior
 
       - name: Verify current public group API
         shell: bash
