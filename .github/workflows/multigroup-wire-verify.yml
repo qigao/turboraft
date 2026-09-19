@@ -694,12 +694,14 @@ jobs:
 
           cc -std=c11 -Wall -Wextra \
             -Iinclude \
+            -Isrc/core \
             -I../salts/utils/include \
             -I../salts/platform/include \
             -I../salts/concurrency/include \
             -I../salts/cmeta/include \
             /tmp/streaming_sender_behavior.c \
             src/snapshot/raft_snapshot_sender.c \
+            src/core/raft_configuration.c \
             -lcrypto \
             -o /tmp/streaming_sender_behavior
           /tmp/streaming_sender_behavior
