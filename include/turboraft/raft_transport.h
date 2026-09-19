@@ -21,6 +21,21 @@ typedef enum tr_raft_transport_state {
     TR_RAFT_TRANSPORT_STATE_FAULTED
 } tr_raft_transport_state_t;
 
+typedef struct tr_raft_transport_queue_limits {
+    size_t total_item_capacity;
+    size_t total_data_bytes;
+    size_t max_active_groups;
+    size_t per_group_item_capacity;
+    size_t per_group_data_bytes;
+} tr_raft_transport_queue_limits_t;
+
+typedef struct tr_raft_transport_group_queue_status {
+    tr_raft_group_id_t group_id;
+    size_t queued_payload_count;
+    size_t queued_data_bytes;
+} tr_raft_transport_group_queue_status_t;
+
+
 typedef struct tr_raft_transport_payload {
     tr_raft_group_id_t group_id;
     tr_raft_wire_payload_kind_t kind;
