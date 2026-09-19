@@ -7,6 +7,7 @@
 
 struct tr_raft_snapshot_peer {
     tr_raft_snapshot_coordinator_t *coordinator;
+    tr_raft_group_id_t group_id;
     tr_raft_snapshot_payload_enqueue_fn enqueue;
     void *enqueue_context;
 };
@@ -22,6 +23,7 @@ static int tr_snapshot_peer_emit(
         return SALTS_EINVAL;
     }
     memset(&payload, 0, sizeof(payload));
+    payload.group_id = peer->group_id;
     payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
     payload.data.snapshot_chunk = *chunk;
     return peer->enqueue(peer->enqueue_context, &payload);
@@ -35,7 +37,8 @@ int tr_raft_snapshot_peer_create(
     tr_raft_snapshot_peer_t *peer;
     int result;
 
-    if (config == NULL || out_peer == NULL || config->enqueue == NULL) {
+    if (config == NULL || out_peer == NULL || config->enqueue == NULL ||
+        config->group_id == 0U) {
         return SALTS_EINVAL;
     }
     *out_peer = NULL;
@@ -44,6 +47,7 @@ int tr_raft_snapshot_peer_create(
     if (peer == NULL) {
         return SALTS_ENOMEM;
     }
+    peer->group_id = config->group_id;
     peer->enqueue = config->enqueue;
     peer->enqueue_context = config->enqueue_context;
 
@@ -95,6 +99,7 @@ int tr_raft_snapshot_peer_handle_payload(
     const tr_raft_transport_payload_t *payload)
 {
     if (peer == NULL || payload == NULL ||
+        payload->group_id != peer->group_id ||
         payload->kind != TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK) {
         return SALTS_EPROTO;
     }
