@@ -16,6 +16,7 @@ typedef struct tr_raft_cnet_peer tr_raft_cnet_peer_t;
 typedef struct tr_raft_cnet_peer_config {
     cnet_client *client;
     tr_raft_transport_session_config_t transport;
+    /** Bounded scheduler limits for this physical peer link. */
     tr_raft_transport_queue_limits_t outbound_limits;
 } tr_raft_cnet_peer_config_t;
 
@@ -41,7 +42,7 @@ int tr_raft_cnet_peer_create(const tr_raft_cnet_peer_config_t *config,
                              tr_raft_cnet_peer_t **out_peer);
 cnet_observer tr_raft_cnet_peer_observer(tr_raft_cnet_peer_t *peer);
 
-/** Copies a payload into the peer FIFO. */
+/** Copies a payload into the bounded per-group peer scheduler. */
 int tr_raft_cnet_peer_enqueue_payload(
     tr_raft_cnet_peer_t *peer,
     const tr_raft_transport_payload_t *payload);
