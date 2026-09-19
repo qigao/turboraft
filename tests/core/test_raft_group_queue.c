@@ -7,6 +7,13 @@
 
 #include <string.h>
 
+static void release_owned(tr_raft_owned_transport_payload_t *owned)
+{
+    if (owned != NULL) {
+        memset(owned, 0, sizeof(*owned));
+    }
+}
+
 static tr_raft_owned_transport_payload_t owned_raft(
     tr_raft_group_id_t group_id,
     uint64_t term)
@@ -34,6 +41,7 @@ spec("raft bounded group queue")
             .total_data_bytes = 16U,
             .per_group_item_capacity = 3U,
             .per_group_data_bytes = 8U,
+            .release = release_owned,
         };
         tr_raft_owned_transport_payload_t item;
 
@@ -71,6 +79,7 @@ spec("raft bounded group queue")
             .total_data_bytes = 16U,
             .per_group_item_capacity = 2U,
             .per_group_data_bytes = 8U,
+            .release = release_owned,
         };
         tr_raft_owned_transport_payload_t item;
         tr_raft_group_queue_token_t token;
@@ -110,6 +119,7 @@ spec("raft bounded group queue")
             .total_data_bytes = 32U,
             .per_group_item_capacity = 4U,
             .per_group_data_bytes = 16U,
+            .release = release_owned,
         };
         tr_raft_owned_transport_payload_t item;
         tr_raft_group_queue_token_t token;
@@ -161,6 +171,7 @@ spec("raft bounded group queue")
             .total_data_bytes = 10U,
             .per_group_item_capacity = 4U,
             .per_group_data_bytes = 6U,
+            .release = release_owned,
         };
         tr_raft_owned_transport_payload_t item;
 
