@@ -18,6 +18,7 @@ struct tr_raft_transport_session {
     uint16_t data_wire_version;
     uint32_t snapshot_chunk_size;
     uint32_t max_frame_size;
+    int group_aware;
     uint64_t next_outbound_message_id;
     uint64_t last_inbound_message_id;
     int outbound_ids_exhausted;
@@ -158,12 +159,17 @@ static int tr_raft_transport_dispatch_frame(tr_raft_transport_session_t *session
     if (result != SALTS_OK) {
         return tr_raft_transport_fault(session, result);
     }
+    payload.group_id = metadata.group_id;
     if (memcmp(metadata.cluster_id.bytes, session->cluster_id.bytes,
                sizeof(metadata.cluster_id.bytes)) != 0 ||
         metadata.message_id == 0U ||
         metadata.message_id <= session->last_inbound_message_id ||
+        (session->group_aware ? metadata.group_id == 0U
+                              : metadata.group_id != 0U) ||
         from != session->peer_node_id || to != session->local_node_id ||
-        (kind != TR_RAFT_WIRE_PAYLOAD_RAFT &&
+        (session->group_aware && session->on_payload == NULL) ||
+        (!session->group_aware &&
+         kind != TR_RAFT_WIRE_PAYLOAD_RAFT &&
          session->on_payload == NULL)) {
         return tr_raft_transport_fault(session, SALTS_EPROTO);
     }
@@ -172,10 +178,14 @@ static int tr_raft_transport_dispatch_frame(tr_raft_transport_session_t *session
     session->status.last_inbound_message_id = metadata.message_id;
     session->status.frames_decoded++;
     session->callback_active = 1;
-    result = kind == TR_RAFT_WIRE_PAYLOAD_RAFT
-                 ? session->on_message(session->message_context,
-                                       &payload.data.raft)
-                 : session->on_payload(session->payload_context, &payload);
+    if (session->group_aware) {
+        result = session->on_payload(session->payload_context, &payload);
+    } else {
+        result = kind == TR_RAFT_WIRE_PAYLOAD_RAFT
+                     ? session->on_message(session->message_context,
+                                           &payload.data.raft)
+                     : session->on_payload(session->payload_context, &payload);
+    }
     session->callback_active = 0;
     if (session->destroy_pending) {
         tr_raft_transport_session_finalize(session);
@@ -194,7 +204,7 @@ int tr_raft_transport_session_create(
     tr_raft_transport_session_t *session;
     int result;
 
-    if (config == NULL || out_session == NULL || config->on_message == NULL ||
+    if (config == NULL || out_session == NULL ||
         config->handshake == NULL ||
         !tr_raft_transport_cluster_id_is_valid(&config->cluster_id) ||
         config->local_node_id == 0U || config->peer_node_id == 0U ||
@@ -208,12 +218,26 @@ int tr_raft_transport_session_create(
     if (result != SALTS_OK) {
         return result;
     }
+    {
+        int group_aware =
+            (config->handshake->feature_bits &
+             TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1) != 0U;
+
+        if ((group_aware && config->on_payload == NULL) ||
+            (!group_aware && config->on_message == NULL)) {
+            return SALTS_EINVAL;
+        }
+    }
     if ((config->handshake->feature_bits &
          TR_RAFT_HANDSHAKE_FEATURE_CURRENT) !=
             TR_RAFT_HANDSHAKE_FEATURE_CURRENT ||
         config->handshake->wire_major != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
         config->handshake->wire_minor != TR_RAFT_HANDSHAKE_WIRE_MINOR ||
-        config->handshake->max_frame_size < TR_RAFT_WIRE_MAX_FRAME_SIZE ||
+        config->handshake->max_frame_size <
+            (((config->handshake->feature_bits &
+               TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1) != 0U)
+                 ? TR_RAFT_WIRE_MAX_FRAME_SIZE
+                 : TR_RAFT_WIRE_LEGACY_MAX_FRAME_SIZE) ||
         config->handshake->max_snapshot_chunk_size <
             TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
         return SALTS_EPROTONOSUPPORT;
@@ -248,11 +272,19 @@ int tr_raft_transport_session_create(
         return result;
     }
     session->max_frame_size = config->handshake->max_frame_size;
-    session->data_wire_version =
+    session->group_aware =
         (config->handshake->feature_bits &
-         TR_RAFT_HANDSHAKE_FEATURE_DATA_STREAM_V5) != 0U
-            ? TR_RAFT_WIRE_SNAPSHOT_VERSION
-            : 0U;
+         TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1) != 0U;
+    if ((config->handshake->feature_bits &
+         TR_RAFT_HANDSHAKE_FEATURE_DATA_STREAM_V5) != 0U) {
+        result = tr_raft_handshake_select_data_wire_version(
+            config->handshake, &session->data_wire_version);
+        if (result != SALTS_OK) {
+            tr_raft_wire_codec_destroy(session->codec);
+            free(session);
+            return result;
+        }
+    }
     session->next_outbound_message_id = config->first_outbound_message_id;
     session->on_message = config->on_message;
     session->message_context = config->message_context;
@@ -338,9 +370,14 @@ int tr_raft_transport_encode_payload(
         from != session->local_node_id || to != session->peer_node_id) {
         return SALTS_EPROTO;
     }
+    if ((session->group_aware && payload->group_id == 0U) ||
+        (!session->group_aware && payload->group_id != 0U)) {
+        return SALTS_EPROTONOSUPPORT;
+    }
 
     memset(&metadata, 0, sizeof(metadata));
     metadata.cluster_id = session->cluster_id;
+    metadata.group_id = payload->group_id;
     metadata.message_id = session->next_outbound_message_id;
     switch (payload->kind) {
     case TR_RAFT_WIRE_PAYLOAD_RAFT:
@@ -375,8 +412,9 @@ int tr_raft_transport_encode_payload(
         if (session->data_wire_version == 0U) {
             return SALTS_EPROTONOSUPPORT;
         }
-        result = tr_raft_wire_encode_data_chunk(
-            session->codec, &metadata, &payload->data.data_chunk,
+        result = tr_raft_wire_encode_data_chunk_version(
+            session->codec, session->data_wire_version, &metadata,
+            &payload->data.data_chunk,
             output + TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE,
             output_capacity - TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE,
             &frame_size);
@@ -385,8 +423,9 @@ int tr_raft_transport_encode_payload(
         if (session->data_wire_version == 0U) {
             return SALTS_EPROTONOSUPPORT;
         }
-        result = tr_raft_wire_encode_data_ack(
-            session->codec, &metadata, &payload->data.data_ack,
+        result = tr_raft_wire_encode_data_ack_version(
+            session->codec, session->data_wire_version, &metadata,
+            &payload->data.data_ack,
             output + TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE,
             output_capacity - TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE,
             &frame_size);
@@ -427,6 +466,27 @@ int tr_raft_transport_encode(tr_raft_transport_session_t *session,
         return SALTS_EINVAL;
     }
     memset(&payload, 0, sizeof(payload));
+    payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+    payload.data.raft = *message;
+    return tr_raft_transport_encode_payload(
+        session, &payload, output, output_capacity, output_size);
+}
+
+int tr_raft_transport_encode_group(
+    tr_raft_transport_session_t *session,
+    tr_raft_group_id_t group_id,
+    const tr_raft_message_t *message,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_size)
+{
+    tr_raft_transport_payload_t payload;
+
+    if (message == NULL || group_id == 0U) {
+        return SALTS_EINVAL;
+    }
+    memset(&payload, 0, sizeof(payload));
+    payload.group_id = group_id;
     payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
     payload.data.raft = *message;
     return tr_raft_transport_encode_payload(
