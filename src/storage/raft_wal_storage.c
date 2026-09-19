@@ -1234,67 +1234,94 @@ int tr_raft_wal_storage_load(tr_raft_wal_storage_t *storage,
                          &last_transaction_id);
 }
 
-static int tr_wal_persist_snapshot(
-    tr_raft_wal_storage_t *storage, tr_raft_term_t leader_term,
-    tr_raft_index_t snapshot_index, tr_raft_term_t snapshot_term,
-    const tr_raft_conf_t *configuration, const void *data, size_t size,
+static int tr_wal_persist_snapshot_source(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source,
     int remote_install)
 {
     tr_raft_wal_recovery_t recovery;
-    uint8_t payload[64U + TR_RAFT_CONF_MAX_ENCODED_SIZE];
+    uint8_t payload[
+        64U + TR_RAFT_CONF_MAX_ENCODED_SIZE +
+        TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE];
     size_t configuration_size = 0U;
     tr_raft_index_t recovered_last_index;
     tr_raft_index_t committed_index;
     tr_raft_index_t retained_last_index;
     tr_raft_index_t previous_snapshot_index;
     tr_raft_term_t previous_snapshot_term;
-    uint64_t checksum;
+    uint64_t checksum = 0U;
     size_t checkpoint_segment;
     int matching_entry = 0;
     int checkpoint_compaction;
     int result;
 
-    if (storage == NULL || configuration == NULL || leader_term == 0U ||
+    if (storage == NULL || configuration == NULL || source == NULL ||
+        source->read_at == NULL || leader_term == 0U ||
         snapshot_index == 0U || snapshot_term == 0U ||
-        snapshot_term > leader_term || (size != 0U && data == NULL))
+        snapshot_term > leader_term) {
         return SALTS_EINVAL;
-    if (storage->faulted) return SALTS_EIO;
-    if (storage->transaction_active) return SALTS_EBUSY;
-    if (size > storage->max_snapshot_bytes) return SALTS_ERANGE;
+    }
+    if (storage->faulted) {
+        return SALTS_EIO;
+    }
+    if (storage->transaction_active) {
+        return SALTS_EBUSY;
+    }
+    if (source->size > storage->max_snapshot_bytes) {
+        return SALTS_ERANGE;
+    }
+
     memset(&recovery, 0, sizeof(recovery));
     previous_snapshot_index = storage->snapshot_index;
     previous_snapshot_term = storage->snapshot_term;
     result = tr_raft_wal_storage_load(storage, &recovery);
-    if (result != SALTS_OK) return result;
+    if (result != SALTS_OK) {
+        return result;
+    }
+
     recovered_last_index = recovery.snapshot_index + recovery.entry_count;
-    if (leader_term < recovery.term || snapshot_index <= recovery.snapshot_index ||
+    if (leader_term < recovery.term ||
+        snapshot_index <= recovery.snapshot_index ||
         (remote_install && snapshot_index < recovery.commit_index) ||
         (!remote_install && snapshot_index > recovery.commit_index)) {
         result = SALTS_EPROTO;
         goto cleanup;
     }
+
     if (snapshot_index > recovery.snapshot_index &&
         snapshot_index <= recovered_last_index) {
         size_t entry_offset =
             (size_t)(snapshot_index - recovery.snapshot_index - 1U);
-        matching_entry = recovery.entries[entry_offset].term == snapshot_term;
+        matching_entry =
+            recovery.entries[entry_offset].term == snapshot_term;
     }
     if (!remote_install && !matching_entry) {
         result = SALTS_EPROTO;
         goto cleanup;
     }
+
     committed_index = remote_install ? snapshot_index : recovery.commit_index;
     retained_last_index = matching_entry ? recovered_last_index
                                          : snapshot_index;
     checkpoint_compaction = retained_last_index == snapshot_index;
-    result = tr_raft_conf_encode(configuration, payload + 64U,
-                                 TR_RAFT_CONF_MAX_ENCODED_SIZE,
-                                 &configuration_size);
-    if (result != SALTS_OK) goto cleanup;
-    checksum = XXH3_64bits(data, size);
-    result = tr_wal_write_snapshot_file(storage, snapshot_index, snapshot_term,
-                                        (const uint8_t *)data, size, checksum);
-    if (result != SALTS_OK) goto cleanup;
+
+    result = tr_raft_conf_encode(
+        configuration, payload + 64U, TR_RAFT_CONF_MAX_ENCODED_SIZE,
+        &configuration_size);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+
+    result = tr_wal_write_snapshot_source_file(
+        storage, snapshot_index, snapshot_term, source, &checksum);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+
     if (checkpoint_compaction &&
         storage->current_offset != TR_WAL_SEGMENT_HEADER_SIZE) {
         if (storage->current_segment >= storage->max_segments) {
@@ -1303,50 +1330,69 @@ static int tr_wal_persist_snapshot(
         }
         result = salts_fs_close(storage->current_file);
         storage->current_file = SALTS_INVALID_FILE;
-        if (result == SALTS_OK)
-            result = tr_wal_create_segment(storage,
-                                           storage->current_segment + 1U);
+        if (result == SALTS_OK) {
+            result = tr_wal_create_segment(
+                storage, storage->current_segment + 1U);
+        }
         if (result != SALTS_OK) {
             storage->faulted = 1;
             goto cleanup;
         }
     }
+
     checkpoint_segment = storage->current_segment;
     memset(payload, 0, 64U);
     tr_wal_put_u64(payload, leader_term);
     tr_wal_put_u64(payload + 8U, snapshot_index);
     tr_wal_put_u64(payload + 16U, snapshot_term);
-    tr_wal_put_u64(payload + 24U, size);
+    tr_wal_put_u64(payload + 24U, source->size);
     tr_wal_put_u64(payload + 32U, checksum);
     tr_wal_put_u64(payload + 40U, committed_index);
-    tr_wal_put_u64(payload + 48U,
-                   leader_term > storage->term ? 0U : storage->voted_for);
+    tr_wal_put_u64(
+        payload + 48U,
+        leader_term > storage->term ? 0U : storage->voted_for);
     tr_wal_put_u32(payload + 56U, (uint32_t)configuration_size);
+    tr_wal_put_u32(
+        payload + 60U, TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE);
+    memcpy(
+        payload + 64U + configuration_size, source->digest,
+        TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE);
+
     result = tr_wal_begin(storage);
-    if (result == SALTS_OK)
-        result = tr_wal_append_operation(storage, TR_WAL_OP_SNAPSHOT, payload,
-                                         64U + configuration_size);
+    if (result == SALTS_OK) {
+        result = tr_wal_append_operation(
+            storage, TR_WAL_OP_SNAPSHOT, payload,
+            64U + configuration_size +
+                TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE);
+    }
     if (result == SALTS_OK) {
         storage->pending_term = leader_term;
-        if (leader_term > storage->term) storage->pending_voted_for = 0U;
+        if (leader_term > storage->term) {
+            storage->pending_voted_for = 0U;
+        }
         storage->pending_commit_index = committed_index;
         storage->pending_last_log_index = retained_last_index;
         result = tr_wal_commit(storage);
     } else if (storage->transaction_active) {
         tr_wal_rollback(storage);
     }
+
     if (result == SALTS_OK) {
         size_t sequence;
+
         storage->snapshot_index = snapshot_index;
         storage->snapshot_term = snapshot_term;
-        for (sequence = 1U; checkpoint_compaction &&
-                            sequence < checkpoint_segment; ++sequence) {
+        for (sequence = 1U;
+             checkpoint_compaction && sequence < checkpoint_segment;
+             ++sequence) {
             char path[SALTS_FS_MAX_PATH];
-            result = tr_wal_segment_path(storage, sequence, path,
-                                         sizeof(path));
+
+            result = tr_wal_segment_path(
+                storage, sequence, path, sizeof(path));
             if (result == SALTS_OK &&
-                salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
+                salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
                 result = salts_fs_unlink(path);
+            }
             if (result != SALTS_OK) {
                 storage->faulted = 1;
                 break;
@@ -1354,16 +1400,34 @@ static int tr_wal_persist_snapshot(
         }
         if (result == SALTS_OK && previous_snapshot_index != 0U) {
             char path[SALTS_FS_MAX_PATH];
-            result = tr_wal_snapshot_path(storage, previous_snapshot_index,
-                                          previous_snapshot_term, "", path,
-                                          sizeof(path));
-            if (result == SALTS_OK) result = salts_fs_unlink(path);
-            if (result != SALTS_OK) storage->faulted = 1;
+
+            result = tr_wal_snapshot_path(
+                storage, previous_snapshot_index, previous_snapshot_term,
+                "", path, sizeof(path));
+            if (result == SALTS_OK) {
+                result = salts_fs_unlink(path);
+            }
+            if (result != SALTS_OK) {
+                storage->faulted = 1;
+            }
         }
     }
+
 cleanup:
     tr_raft_wal_recovery_destroy(&recovery);
     return result;
+}
+
+int tr_raft_wal_storage_store_snapshot_source(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_index_t last_included_index,
+    tr_raft_term_t last_included_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source)
+{
+    return tr_wal_persist_snapshot_source(
+        storage, storage != NULL ? storage->term : 0U,
+        last_included_index, last_included_term, configuration, source, 0);
 }
 
 int tr_raft_wal_storage_store_snapshot(
@@ -1374,10 +1438,38 @@ int tr_raft_wal_storage_store_snapshot(
     const void *data,
     size_t size)
 {
-    return tr_wal_persist_snapshot(storage,
-                                   storage != NULL ? storage->term : 0U,
-                                   last_included_index, last_included_term,
-                                   configuration, data, size, 0);
+    tr_wal_memory_snapshot_source_t memory;
+    tr_raft_snapshot_source_t source;
+
+    if (size != 0U && data == NULL) {
+        return SALTS_EINVAL;
+    }
+    memset(&memory, 0, sizeof(memory));
+    memset(&source, 0, sizeof(source));
+    memory.data = (const uint8_t *)data;
+    memory.size = size;
+    source.context = &memory;
+    source.size = size;
+    SHA256(
+        size != 0U ? (const uint8_t *)data : (const uint8_t *)"",
+        size, source.digest);
+    source.read_at = tr_wal_memory_snapshot_read;
+    return tr_raft_wal_storage_store_snapshot_source(
+        storage, last_included_index, last_included_term,
+        configuration, &source);
+}
+
+int tr_raft_wal_storage_install_snapshot_source(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t last_included_index,
+    tr_raft_term_t last_included_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source)
+{
+    return tr_wal_persist_snapshot_source(
+        storage, leader_term, last_included_index, last_included_term,
+        configuration, source, 1);
 }
 
 int tr_raft_wal_storage_install_snapshot(
@@ -1389,14 +1481,33 @@ int tr_raft_wal_storage_install_snapshot(
     const void *data,
     size_t size)
 {
-    return tr_wal_persist_snapshot(storage, leader_term,
-                                   last_included_index, last_included_term,
-                                   configuration, data, size, 1);
+    tr_wal_memory_snapshot_source_t memory;
+    tr_raft_snapshot_source_t source;
+
+    if (size != 0U && data == NULL) {
+        return SALTS_EINVAL;
+    }
+    memset(&memory, 0, sizeof(memory));
+    memset(&source, 0, sizeof(source));
+    memory.data = (const uint8_t *)data;
+    memory.size = size;
+    source.context = &memory;
+    source.size = size;
+    SHA256(
+        size != 0U ? (const uint8_t *)data : (const uint8_t *)"",
+        size, source.digest);
+    source.read_at = tr_wal_memory_snapshot_read;
+    return tr_raft_wal_storage_install_snapshot_source(
+        storage, leader_term, last_included_index, last_included_term,
+        configuration, &source);
 }
 
 void tr_raft_wal_recovery_destroy(tr_raft_wal_recovery_t *recovery)
 {
     if (recovery == NULL) return;
+    if (recovery->snapshot_source.release != NULL) {
+        recovery->snapshot_source.release(recovery->snapshot_source.context);
+    }
     free(recovery->snapshot_data);
     free(recovery->entries);
     memset(recovery, 0, sizeof(*recovery));
