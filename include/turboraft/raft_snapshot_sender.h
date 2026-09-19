@@ -19,7 +19,7 @@ typedef struct tr_raft_snapshot_sender tr_raft_snapshot_sender_t;
 typedef struct tr_raft_snapshot_sender_config {
     tr_raft_node_id_t self_id;
     tr_raft_node_id_t peer_id;
-    size_t max_snapshot_bytes;
+    uint64_t max_snapshot_bytes;
     /* Both limits are required and validated; zero is rejected. */
     size_t chunk_size;
     size_t max_inflight_chunks;
