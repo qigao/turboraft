@@ -25,6 +25,7 @@
 typedef struct tr_flowmq_message_capture {
     tr_raft_group_id_t group_id;
     tr_raft_message_t message;
+    tr_raft_group_id_t group_ids[8];
     size_t count;
 } tr_flowmq_message_capture_t;
 
@@ -161,8 +162,13 @@ static int capture_payload(void *context,
         payload->group_id == 0U) {
         return SALTS_EINVAL;
     }
+    if (capture->count >=
+        sizeof(capture->group_ids) / sizeof(capture->group_ids[0])) {
+        return SALTS_ENOSPC;
+    }
     capture->group_id = payload->group_id;
     capture->message = payload->data.raft;
+    capture->group_ids[capture->count] = payload->group_id;
     capture->count++;
     return SALTS_OK;
 }
@@ -659,6 +665,50 @@ spec("Raft FlowMQ caller-driven service")
         check_equal(close_live_pair(&pair), SALTS_OK);
     }
 
+    it("multiplexes three raft groups over one mutual TLS peer link")
+    {
+        tr_flowmq_live_pair_t pair;
+        tr_raft_flowmq_peer_service_step_result_t node1_step;
+        tr_raft_flowmq_peer_service_step_result_t node2_step;
+        tr_raft_message_t message = heartbeat();
+        const tr_raft_group_id_t groups[] = {10U, 20U, 30U};
+        size_t index;
+        uint32_t progress;
+        int result = open_live_pair(&pair, 1);
+
+        check_equal(result, SALTS_OK);
+        for (index = 0U;
+             result == SALTS_OK &&
+             index < sizeof(groups) / sizeof(groups[0]);
+             ++index) {
+            message.term = 10U + index;
+            result = tr_raft_flowmq_peer_service_enqueue_group(
+                pair.node1, groups[index], &message);
+            check_equal(result, SALTS_OK);
+        }
+
+        for (progress = 0U;
+             result == SALTS_OK && pair.node2_capture.count < 3U &&
+             progress < TR_FLOWMQ_TEST_PROGRESS_LIMIT;
+             ++progress) {
+            memset(&node1_step, 0, sizeof(node1_step));
+            memset(&node2_step, 0, sizeof(node2_step));
+            result = step_live_pair(&pair, &node1_step, &node2_step);
+            if (pair.node2_capture.count < 3U) {
+                salts_sleep_ms(1U);
+            }
+        }
+
+        check_equal(result, SALTS_OK);
+        check_equal(pair.node2_capture.count, 3U);
+        if (pair.node2_capture.count == 3U) {
+            check_equal(pair.node2_capture.group_ids[0], 10U);
+            check_equal(pair.node2_capture.group_ids[1], 20U);
+            check_equal(pair.node2_capture.group_ids[2], 30U);
+        }
+        check_equal(close_live_pair(&pair), SALTS_OK);
+    }
+
     it("rejects a peer without a client certificate")
     {
         tr_flowmq_live_pair_t pair;
@@ -713,7 +763,7 @@ spec("Raft FlowMQ caller-driven service")
         check_equal(close_live_pair(&pair), SALTS_OK);
     }
 
-    it("copies messages into a bounded peer FIFO")
+    it("copies messages into a bounded peer group queue")
     {
         tr_raft_flowmq_peer_service_t *service = make_service(2U, 1U, 2U);
         tr_raft_flowmq_peer_service_status_t status;
