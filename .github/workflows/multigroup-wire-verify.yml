@@ -28,7 +28,8 @@ jobs:
           set -euo pipefail
           mkdir -p diagnostics
           git clone --depth 1 https://github.com/qigao/salts.git ../salts             > diagnostics/salts-clone.log 2>&1
-          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils             > diagnostics/salts-utils-clone.log 2>&1
+          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils
+          git clone --depth 1 https://github.com/Cyan4973/xxHash.git ../xxhash             > diagnostics/salts-utils-clone.log 2>&1
 
       - name: Compile changed production sources and contract test
         shell: bash
@@ -50,6 +51,7 @@ jobs:
             -I../salts/tinytest/include
             -I../salts-utils/tbe/data_bind
             -I../salts-utils/tbe/schema/include
+            -I../xxhash
           )
 
           run_check() {
