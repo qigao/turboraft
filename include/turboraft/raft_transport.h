@@ -22,6 +22,7 @@ typedef enum tr_raft_transport_state {
 } tr_raft_transport_state_t;
 
 typedef struct tr_raft_transport_payload {
+    tr_raft_group_id_t group_id;
     tr_raft_wire_payload_kind_t kind;
     union {
         tr_raft_message_t raft;
@@ -69,6 +70,14 @@ int tr_raft_transport_session_destroy(tr_raft_transport_session_t *session);
 
 int tr_raft_transport_encode(
     tr_raft_transport_session_t *session,
+    const tr_raft_message_t *message,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_size);
+
+int tr_raft_transport_encode_group(
+    tr_raft_transport_session_t *session,
+    tr_raft_group_id_t group_id,
     const tr_raft_message_t *message,
     uint8_t *output,
     size_t output_capacity,
