@@ -584,18 +584,17 @@ static int tr_raft_flowmq_send_peer(
     size_t sent = 0U;
 
     while (sent < service->max_send_batch_items &&
-           deque_size(&peer->outbound) != 0U) {
-        const tr_raft_owned_transport_payload_t *owned =
-            (const tr_raft_owned_transport_payload_t *)deque_at_const(
-                &peer->outbound, 0U);
+           tr_raft_group_queue_size(&peer->outbound) != 0U) {
+        const tr_raft_owned_transport_payload_t *owned = NULL;
         tr_raft_owned_transport_payload_t discard;
-        size_t data_bytes;
         int result;
 
-        if (owned == NULL) {
-            return SALTS_EPROTO;
-        }
         if (!peer->packet_ready) {
+            result = tr_raft_group_queue_peek_next(
+                &peer->outbound, &peer->packet_token, &owned);
+            if (result != SALTS_OK) {
+                return result;
+            }
             result = tr_raft_transport_encode_payload(
                 peer->session, &owned->payload, peer->packet,
                 TR_RAFT_TRANSPORT_MAX_PACKET_SIZE, &peer->packet_size);
@@ -603,21 +602,29 @@ static int tr_raft_flowmq_send_peer(
                 peer->faulted = 1;
                 return result;
             }
+            peer->packet_token_valid = 1;
             peer->packet_ready = 1;
         }
+
         result = flowmq_send(peer->dealer, peer->packet, peer->packet_size,
                              FLOWMQ_DONTWAIT);
         if (result != SALTS_OK) {
             return result;
         }
-        peer->packet_ready = 0;
-        peer->packet_size = 0U;
-        data_bytes = tr_raft_flowmq_payload_bytes(&owned->payload);
-        if (deque_pop_front(&peer->outbound, &discard) != STL_OK) {
+        if (!peer->packet_token_valid) {
             return SALTS_EPROTO;
         }
+
+        memset(&discard, 0, sizeof(discard));
+        result = tr_raft_group_queue_pop(
+            &peer->outbound, peer->packet_token, &discard, NULL);
+        if (result != SALTS_OK) {
+            return result;
+        }
         tr_raft_owned_transport_payload_release(&discard);
-        peer->queued_data_bytes -= data_bytes;
+        peer->packet_token_valid = 0;
+        peer->packet_ready = 0;
+        peer->packet_size = 0U;
         ++service->frames_sent;
         ++step->sent_frames;
         ++sent;
@@ -673,7 +680,7 @@ int tr_raft_flowmq_peer_service_step(
             ++step.failed_peer_count;
             continue;
         }
-        if (deque_size(&peer->outbound) == 0U) {
+        if (tr_raft_group_queue_size(&peer->outbound) == 0U) {
             continue;
         }
         if ((items[index + 1U].revents & FLOWMQ_POLLOUT) == 0) {
@@ -782,7 +789,7 @@ int tr_raft_flowmq_peer_service_enqueue_payload(
     size_t data_bytes;
     int result;
 
-    if (service == NULL || payload == NULL) {
+    if (service == NULL || payload == NULL || payload->group_id == 0U) {
         return SALTS_EINVAL;
     }
     if (service->stopping) {
@@ -796,26 +803,18 @@ int tr_raft_flowmq_peer_service_enqueue_payload(
     if (peer->faulted) {
         return SALTS_EPROTO;
     }
-    if (deque_size(&peer->outbound) >= service->outbound_queue_capacity) {
-        return SALTS_ENOSPC;
-    }
+
     data_bytes = tr_raft_flowmq_payload_bytes(payload);
-    if (data_bytes > service->max_inflight_data_bytes -
-                         peer->queued_data_bytes) {
-        return SALTS_ENOSPC;
-    }
     result = tr_raft_owned_transport_payload_copy(&owned, payload);
     if (result != SALTS_OK) {
         return result;
     }
-    result = tr_raft_stl_status_to_error(
-        deque_push_back(&peer->outbound, &owned));
+    result = tr_raft_group_queue_enqueue(
+        &peer->outbound, &owned, data_bytes);
     if (result != SALTS_OK) {
         tr_raft_owned_transport_payload_release(&owned);
-        return result;
     }
-    peer->queued_data_bytes += data_bytes;
-    return SALTS_OK;
+    return result;
 }
 
 int tr_raft_flowmq_peer_service_get_status(
@@ -829,8 +828,7 @@ int tr_raft_flowmq_peer_service_get_status(
     }
     memset(out_status, 0, sizeof(*out_status));
     out_status->peer_count = service->peer_count;
-    out_status->outbound_queue_capacity = service->outbound_queue_capacity;
-    out_status->max_inflight_data_bytes = service->max_inflight_data_bytes;
+    out_status->outbound_limits = service->outbound_limits;
     out_status->frames_sent = service->frames_sent;
     out_status->frames_received = service->frames_received;
     out_status->started = service->started;
@@ -838,10 +836,43 @@ int tr_raft_flowmq_peer_service_get_status(
     out_status->step_active = service->step_active;
     out_status->last_error = service->last_error;
     for (index = 0U; index < service->peer_count; ++index) {
+        out_status->active_group_count +=
+            tr_raft_group_queue_active_groups(&service->peers[index].outbound);
         out_status->queued_payload_count +=
-            deque_size(&service->peers[index].outbound);
+            tr_raft_group_queue_size(&service->peers[index].outbound);
         out_status->queued_data_bytes +=
-            service->peers[index].queued_data_bytes;
+            tr_raft_group_queue_data_bytes(&service->peers[index].outbound);
     }
     return SALTS_OK;
+}
+
+int tr_raft_flowmq_peer_service_get_group_status(
+    const tr_raft_flowmq_peer_service_t *service,
+    tr_raft_node_id_t peer_node_id,
+    tr_raft_group_id_t group_id,
+    tr_raft_transport_group_queue_status_t *out_status)
+{
+    size_t index;
+
+    if (service == NULL || peer_node_id == 0U || group_id == 0U ||
+        out_status == NULL) {
+        return SALTS_EINVAL;
+    }
+    for (index = 0U; index < service->peer_count; ++index) {
+        if (service->peers[index].node_id == peer_node_id) {
+            tr_raft_group_queue_group_status_t status;
+            int result = tr_raft_group_queue_get_group_status(
+                &service->peers[index].outbound, group_id, &status);
+
+            if (result != SALTS_OK) {
+                return result;
+            }
+            memset(out_status, 0, sizeof(*out_status));
+            out_status->group_id = status.group_id;
+            out_status->queued_payload_count = status.queued_item_count;
+            out_status->queued_data_bytes = status.queued_data_bytes;
+            return SALTS_OK;
+        }
+    }
+    return SALTS_ENOENT;
 }
