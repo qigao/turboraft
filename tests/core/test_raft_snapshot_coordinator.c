@@ -97,7 +97,7 @@ spec("raft snapshot coordinator")
         coordinator_config.peer_id = 2U;
         coordinator_config.max_snapshot_bytes = 1024U;
         coordinator_config.chunk_size =
-            TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+            512U;
         coordinator_config.max_inflight_chunks = 1U;
         coordinator_config.emit = snapshot_capture_emit;
         coordinator_config.emit_context = &emitted;
