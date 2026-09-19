@@ -79,9 +79,8 @@ static bool tr_wire_metadata_valid(uint16_t wire_version,
     if (metadata == NULL) {
         return false;
     }
-    return wire_version == TR_RAFT_WIRE_GROUP_VERSION
-               ? metadata->group_id != 0U
-               : metadata->group_id == 0U;
+    return wire_version != TR_RAFT_WIRE_GROUP_VERSION ||
+           metadata->group_id != 0U;
 }
 
 static bool tr_message_valid(const tr_raft_message_t *message)
