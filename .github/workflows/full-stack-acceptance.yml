@@ -1,0 +1,63 @@
+name: Full TurboRaft stack acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-release:
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Checkout exact stack
+        uses: actions/checkout@v4
+
+      - name: Validate installed dependency roots
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SALTS_ROOT SALTS_UTILS_ROOT FLOWMQ_ROOT; do
+            value="${!name:-}"
+            if [[ -z "$value" ]]; then
+              echo "::error::${name} is not defined"
+              exit 2
+            fi
+            if [[ ! -d "$value" ]]; then
+              echo "::error::${name} is not a directory: $value"
+              exit 2
+            fi
+          done
+
+          test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake" ||
+            find "$SALTS_ROOT" -name SaltsConfig.cmake -print -quit |
+              grep -q .
+          test -f "$SALTS_UTILS_ROOT/bin/tbe_compiler" ||
+            test -f "$SALTS_UTILS_ROOT/bin/tbe_compiler.exe"
+          test -f "$FLOWMQ_ROOT/lib/cmake/FlowMQ/FlowMQConfig.cmake" ||
+            find "$FLOWMQ_ROOT" -name FlowMQConfig.cmake -print -quit |
+              grep -q .
+
+      - name: Configure Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset release-linux-ninja
+
+      - name: Build Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build --preset build-default-linux
+
+      - name: Targeted production integration gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --preset test-release-linux             -R "turboraft\.(flowmq_peer_service|multiprocess_chaos)$"             --output-on-failure
+
+      - name: Full Release CTest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --preset test-release-linux --output-on-failure
