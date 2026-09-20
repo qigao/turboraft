@@ -706,6 +706,85 @@ static int tr_chaos_deliver_one(
     return SALTS_OK;
 }
 
+static int tr_chaos_deliver_one_multigroup(
+    tr_chaos_process_node_t nodes[3],
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t safety[TR_CHAOS_GROUP_COUNT],
+    uint8_t *response_payload,
+    uint32_t *random_state,
+    tr_raft_group_id_t blocked_group)
+{
+    size_t candidates[TR_CHAOS_MAX_QUEUED_FRAMES];
+    size_t candidate_count = 0U;
+    size_t selected;
+    tr_chaos_frame_t frame;
+    tr_chaos_process_node_t *target;
+    size_t slot;
+    size_t index;
+    int operation_result = SALTS_OK;
+    int result;
+
+    if (network == NULL || codec == NULL || safety == NULL ||
+        response_payload == NULL || random_state == NULL) {
+        return SALTS_EINVAL;
+    }
+    for (index = 0U; index < network->count; ++index) {
+        if (blocked_group == 0U ||
+            network->frames[index].group_id != blocked_group) {
+            candidates[candidate_count++] = index;
+        }
+    }
+    if (candidate_count == 0U) {
+        return SALTS_EBUSY;
+    }
+
+    selected = candidates[tr_chaos_random(random_state) % candidate_count];
+    frame = network->frames[selected];
+    network->frames[selected] = network->frames[network->count - 1U];
+    network->count--;
+
+    if (frame.to == 0U || frame.to > 3U) {
+        return SALTS_EPROTO;
+    }
+    slot = tr_chaos_group_slot(frame.group_id);
+    if (slot == SIZE_MAX) {
+        return SALTS_EPROTO;
+    }
+    target = &nodes[frame.to - 1U];
+    if (!target->alive) {
+        network->dropped++;
+        return SALTS_OK;
+    }
+
+    result = tr_chaos_collect_group_command(
+        target, frame.group_id, TR_CHAOS_COMMAND_STEP,
+        frame.data, frame.size, network, codec, &safety[slot],
+        response_payload, &operation_result);
+    if (result != SALTS_OK || operation_result != SALTS_OK) {
+        return result != SALTS_OK ? result : operation_result;
+    }
+    return SALTS_OK;
+}
+
+static size_t tr_chaos_network_group_count(
+    const tr_chaos_network_t *network,
+    tr_raft_group_id_t group_id)
+{
+    size_t count = 0U;
+    size_t index;
+
+    if (network == NULL) {
+        return 0U;
+    }
+    for (index = 0U; index < network->count; ++index) {
+        if (network->frames[index].group_id == group_id) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 static int tr_chaos_recover_after_handoff(
     tr_chaos_process_node_t nodes[3],
     tr_chaos_network_t *network,
