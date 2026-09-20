@@ -24,8 +24,10 @@ struct tr_raft_service {
     size_t pending_snapshot_request_count;
     bool transport_backpressured;
     tr_raft_runtime_result_t last_runtime_result;
-    tr_raft_read_state_t read_state;
-    bool read_state_available;
+    tr_raft_read_state_t read_states[TR_RAFT_MAX_PENDING_READS];
+    size_t read_state_head;
+    size_t read_state_count;
+    size_t max_completed_reads;
     bool faulted;
     int cause;
 };
@@ -45,7 +47,8 @@ static bool tr_service_ready_has_effects(const tr_raft_ready_t *ready)
     return ready->message_count != 0U || ready->hard_state_changed ||
            ready->role_changed || ready->log_changed ||
            ready->commit_changed || ready->committed_entry_count != 0U ||
-           ready->read_state_ready || ready->snapshot_request_count != 0U;
+           ready->read_state_count != 0U ||
+           ready->snapshot_request_count != 0U;
 }
 
 static int tr_service_fault(tr_raft_service_t *service, int cause)
@@ -359,6 +362,36 @@ static int tr_service_snapshot(tr_raft_service_t *service, bool force)
     return SALTS_OK;
 }
 
+static bool tr_service_read_queue_empty(
+    const tr_raft_service_t *service)
+{
+    return service->read_state_count == 0U;
+}
+
+static int tr_service_enqueue_read_states(
+    tr_raft_service_t *service,
+    const tr_raft_ready_t *ready)
+{
+    size_t index;
+
+    if (ready->read_state_count == 0U) {
+        return SALTS_OK;
+    }
+    if (ready->read_state_count >
+        service->max_completed_reads - service->read_state_count) {
+        return SALTS_EPROTO;
+    }
+    for (index = 0U; index < ready->read_state_count; ++index) {
+        size_t slot =
+            (service->read_state_head + service->read_state_count) %
+            service->max_completed_reads;
+
+        service->read_states[slot] = ready->read_states[index];
+        ++service->read_state_count;
+    }
+    return SALTS_OK;
+}
+
 static int tr_service_process_ready(
     tr_raft_service_t *service,
     const tr_raft_ready_t *ready)
@@ -376,9 +409,9 @@ static int tr_service_process_ready(
         tr_service_clear_pending_transport(service);
         return tr_service_fault(service, result);
     }
-    if (ready->read_state_ready) {
-        service->read_state = ready->read_state;
-        service->read_state_available = true;
+    result = tr_service_enqueue_read_states(service, ready);
+    if (result != SALTS_OK) {
+        return tr_service_fault(service, result);
     }
     return tr_service_snapshot(service, false);
 }
@@ -425,6 +458,10 @@ int tr_raft_service_create(
     service->transport = config->transport;
     service->state_machine = config->state_machine;
     service->snapshot_policy = config->snapshot_policy;
+    service->max_completed_reads =
+        config->core.max_pending_reads == 0U
+            ? TR_RAFT_DEFAULT_MAX_PENDING_READS
+            : config->core.max_pending_reads;
     if (service->snapshot_policy.applied_entry_threshold != 0U &&
         service->snapshot_policy.create != NULL) {
         service->snapshot_buffer = (uint8_t *)malloc(
@@ -474,7 +511,8 @@ int tr_raft_service_prepare_backup(tr_raft_service_t *service)
     if (result != SALTS_OK) {
         return result;
     }
-    if (service->journal_compaction_pending || service->read_state_available) {
+    if (service->journal_compaction_pending ||
+        !tr_service_read_queue_empty(service)) {
         return SALTS_EBUSY;
     }
     result = tr_raft_core_status(service->core, &status);
@@ -674,6 +712,7 @@ int tr_raft_service_read_index(tr_raft_service_t *service,
                                uint64_t context_id)
 {
     tr_raft_ready_t ready;
+    tr_raft_status_t status;
     int result;
 
     if (service == NULL || context_id == 0U) {
@@ -683,9 +722,15 @@ int tr_raft_service_read_index(tr_raft_service_t *service,
     if (result != SALTS_OK) {
         return result;
     }
-    if (service->read_state_available) {
-        return SALTS_EBUSY;
+    result = tr_raft_core_status(service->core, &status);
+    if (result != SALTS_OK) {
+        return tr_service_fault(service, result);
     }
+    if (service->read_state_count + status.pending_read_count >=
+        service->max_completed_reads) {
+        return SALTS_ENOSPC;
+    }
+
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_read_index(service->core, context_id, &ready);
     if (result != SALTS_OK) {
@@ -698,6 +743,7 @@ int tr_raft_service_take_read_state(tr_raft_service_t *service,
                                     tr_raft_read_state_t *out_read_state)
 {
     tr_raft_status_t status;
+    tr_raft_read_state_t *state;
     int result;
 
     if (service == NULL || out_read_state == NULL) {
@@ -707,19 +753,25 @@ int tr_raft_service_take_read_state(tr_raft_service_t *service,
     if (result != SALTS_OK) {
         return result;
     }
-    if (!service->read_state_available) {
+    if (tr_service_read_queue_empty(service)) {
         return SALTS_ENOENT;
     }
     result = tr_raft_core_status(service->core, &status);
     if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
-    if (status.applied_index < service->read_state.index) {
+    state = &service->read_states[service->read_state_head];
+    if (status.applied_index < state->index) {
         return SALTS_EBUSY;
     }
-    *out_read_state = service->read_state;
-    memset(&service->read_state, 0, sizeof(service->read_state));
-    service->read_state_available = false;
+    *out_read_state = *state;
+    memset(state, 0, sizeof(*state));
+    service->read_state_head =
+        (service->read_state_head + 1U) % service->max_completed_reads;
+    --service->read_state_count;
+    if (service->read_state_count == 0U) {
+        service->read_state_head = 0U;
+    }
     return SALTS_OK;
 }
 
@@ -826,8 +878,9 @@ int tr_raft_service_reload(
     service->runtime = replacement_runtime;
     memset(&service->last_runtime_result, 0,
            sizeof(service->last_runtime_result));
-    memset(&service->read_state, 0, sizeof(service->read_state));
-    service->read_state_available = false;
+    memset(service->read_states, 0, sizeof(service->read_states));
+    service->read_state_head = 0U;
+    service->read_state_count = 0U;
     tr_service_clear_pending_transport(service);
     service->faulted = false;
     service->cause = SALTS_OK;
@@ -847,7 +900,9 @@ int tr_raft_service_status(
     out_status->faulted = service->faulted;
     out_status->cause = service->cause;
     out_status->backup_prepared = service->backup_prepared;
-    out_status->read_state_available = service->read_state_available;
+    out_status->read_state_available = service->read_state_count != 0U;
+    out_status->completed_read_count = service->read_state_count;
+    out_status->max_completed_reads = service->max_completed_reads;
     out_status->journal_compaction_pending =
         service->journal_compaction_pending;
     out_status->runtime = service->last_runtime_result;
