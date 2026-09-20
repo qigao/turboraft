@@ -178,10 +178,44 @@ static bool tr_service_snapshot_policy_disabled(
     const tr_raft_snapshot_policy_t *policy)
 {
     return policy->applied_entry_threshold == 0U &&
-           policy->max_snapshot_bytes == 0U && policy->create == NULL &&
-           policy->create_context == NULL && policy->store == NULL &&
-           policy->store_context == NULL && policy->journal_compact == NULL &&
+           policy->max_snapshot_bytes == 0U &&
+           policy->max_buffered_snapshot_bytes == 0U &&
+           policy->source_create == NULL &&
+           policy->source_create_context == NULL &&
+           policy->source_store == NULL &&
+           policy->source_store_context == NULL &&
+           policy->create == NULL &&
+           policy->create_context == NULL &&
+           policy->store == NULL &&
+           policy->store_context == NULL &&
+           policy->journal_compact == NULL &&
            policy->journal_compact_context == NULL;
+}
+
+static bool tr_service_snapshot_policy_streaming(
+    const tr_raft_snapshot_policy_t *policy)
+{
+    return policy->source_create != NULL || policy->source_store != NULL ||
+           policy->source_create_context != NULL ||
+           policy->source_store_context != NULL;
+}
+
+static bool tr_service_snapshot_policy_buffered(
+    const tr_raft_snapshot_policy_t *policy)
+{
+    return policy->create != NULL || policy->store != NULL ||
+           policy->create_context != NULL || policy->store_context != NULL;
+}
+
+static void tr_service_snapshot_source_release(
+    tr_raft_snapshot_source_t *source)
+{
+    if (source != NULL && source->release != NULL) {
+        source->release(source->context);
+    }
+    if (source != NULL) {
+        memset(source, 0, sizeof(*source));
+    }
 }
 
 static int tr_service_snapshot_policy_validate(
@@ -197,10 +231,26 @@ static int tr_service_snapshot_policy_validate(
     }
     if (policy->applied_entry_threshold == 0U ||
         policy->applied_entry_threshold > max_log_entries ||
-        policy->max_snapshot_bytes == 0U || policy->create == NULL ||
-        policy->store == NULL ||
+        policy->max_snapshot_bytes == 0U ||
         (policy->journal_compact == NULL &&
          policy->journal_compact_context != NULL)) {
+        return SALTS_EINVAL;
+    }
+
+    if (tr_service_snapshot_policy_streaming(policy)) {
+        if (tr_service_snapshot_policy_buffered(policy) ||
+            policy->source_create == NULL || policy->source_store == NULL ||
+            policy->max_buffered_snapshot_bytes != 0U) {
+            return SALTS_EINVAL;
+        }
+        return SALTS_OK;
+    }
+
+    if (!tr_service_snapshot_policy_buffered(policy) ||
+        policy->create == NULL || policy->store == NULL ||
+        policy->max_buffered_snapshot_bytes == 0U ||
+        policy->max_buffered_snapshot_bytes > policy->max_snapshot_bytes ||
+        policy->max_buffered_snapshot_bytes > (uint64_t)SIZE_MAX) {
         return SALTS_EINVAL;
     }
     return SALTS_OK;
@@ -254,21 +304,48 @@ static int tr_service_snapshot(tr_raft_service_t *service, bool force)
     if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
-    result = service->snapshot_policy.create(
-        service->snapshot_policy.create_context, point.index,
-        service->snapshot_buffer, service->snapshot_policy.max_snapshot_bytes,
-        &snapshot_size);
-    if (result != SALTS_OK) {
-        return tr_service_fault(service, result);
-    }
-    if (snapshot_size > service->snapshot_policy.max_snapshot_bytes) {
-        return tr_service_fault(service, SALTS_ENOSPC);
-    }
-    result = service->snapshot_policy.store(
-        service->snapshot_policy.store_context, point.index, point.term,
-        &point.configuration, service->snapshot_buffer, snapshot_size);
-    if (result != SALTS_OK) {
-        return tr_service_fault(service, result);
+    if (service->snapshot_policy.source_create != NULL) {
+        tr_raft_snapshot_source_t source;
+
+        memset(&source, 0, sizeof(source));
+        result = service->snapshot_policy.source_create(
+            service->snapshot_policy.source_create_context,
+            point.index, &source);
+        if (result != SALTS_OK) {
+            return tr_service_fault(service, result);
+        }
+        if (source.read_at == NULL ||
+            source.size > service->snapshot_policy.max_snapshot_bytes) {
+            tr_service_snapshot_source_release(&source);
+            return tr_service_fault(service, SALTS_EPROTO);
+        }
+
+        result = service->snapshot_policy.source_store(
+            service->snapshot_policy.source_store_context,
+            point.index, point.term, &point.configuration, &source);
+        tr_service_snapshot_source_release(&source);
+        if (result != SALTS_OK) {
+            return tr_service_fault(service, result);
+        }
+    } else {
+        result = service->snapshot_policy.create(
+            service->snapshot_policy.create_context, point.index,
+            service->snapshot_buffer,
+            (size_t)service->snapshot_policy.max_buffered_snapshot_bytes,
+            &snapshot_size);
+        if (result != SALTS_OK) {
+            return tr_service_fault(service, result);
+        }
+        if (snapshot_size >
+            (size_t)service->snapshot_policy.max_buffered_snapshot_bytes) {
+            return tr_service_fault(service, SALTS_ENOSPC);
+        }
+        result = service->snapshot_policy.store(
+            service->snapshot_policy.store_context, point.index, point.term,
+            &point.configuration, service->snapshot_buffer, snapshot_size);
+        if (result != SALTS_OK) {
+            return tr_service_fault(service, result);
+        }
     }
     if (service->snapshot_policy.journal_compact != NULL) {
         service->pending_snapshot = point;
@@ -348,9 +425,10 @@ int tr_raft_service_create(
     service->transport = config->transport;
     service->state_machine = config->state_machine;
     service->snapshot_policy = config->snapshot_policy;
-    if (service->snapshot_policy.applied_entry_threshold != 0U) {
-        service->snapshot_buffer = (uint8_t *) malloc(
-            service->snapshot_policy.max_snapshot_bytes);
+    if (service->snapshot_policy.applied_entry_threshold != 0U &&
+        service->snapshot_policy.create != NULL) {
+        service->snapshot_buffer = (uint8_t *)malloc(
+            (size_t)service->snapshot_policy.max_buffered_snapshot_bytes);
         if (service->snapshot_buffer == NULL) {
             free(service);
             return SALTS_ENOMEM;
