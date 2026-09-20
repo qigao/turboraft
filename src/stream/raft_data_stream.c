@@ -229,17 +229,22 @@ bool tr_raft_data_quorum_ready(const tr_raft_data_quorum_t *quorum)
             new_durable += quorum->durable[index] ? 1U : 0U;
         }
     }
-    if (old_voters == 0U || new_voters == 0U ||
-        old_durable < tr_data_majority(old_voters) ||
-        new_durable < tr_data_majority(new_voters)) {
+    return old_voters != 0U && new_voters != 0U &&
+           old_durable >= tr_data_majority(old_voters) &&
+           new_durable >= tr_data_majority(new_voters);
+}
+
+bool tr_raft_data_quorum_peer_durable(
+    const tr_raft_data_quorum_t *quorum,
+    tr_raft_node_id_t node_id)
+{
+    size_t index;
+
+    if (quorum == NULL || node_id == 0U) {
         return false;
     }
-    /* Every replication target must stage before it can receive and apply the
-     * descriptor. A future per-peer AppendEntries gate may safely relax this. */
-    for (index = 0U; index < quorum->config.configuration.member_count; ++index) {
-        if (!quorum->durable[index]) return false;
-    }
-    return true;
+    index = tr_data_member_index(&quorum->config.configuration, node_id);
+    return index != SIZE_MAX && quorum->durable[index];
 }
 
 int tr_raft_data_quorum_make_proposal(
