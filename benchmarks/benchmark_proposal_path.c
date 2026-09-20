@@ -277,6 +277,107 @@ static void bench_memory_storage_adapter(
     storage->rollback = bench_storage_rollback;
 }
 
+static int bench_wal_batch_path(size_t batch_size,
+                                double *out_ns_per_op)
+{
+    enum { MAX_BATCH = 16U };
+    char prefix[256];
+    char wal_path[320];
+    char lock_path[320];
+    tr_raft_wal_storage_config_t config;
+    tr_raft_wal_storage_t *wal = NULL;
+    tr_raft_storage_t storage;
+    tr_raft_entry_t entries[MAX_BATCH];
+    tr_raft_index_t next_index = 1U;
+    size_t batch;
+    uint64_t start;
+    uint64_t end;
+    int result = SALTS_OK;
+
+    if (out_ns_per_op == NULL || batch_size == 0U ||
+        batch_size > MAX_BATCH || BENCH_PROPOSALS % batch_size != 0U) {
+        return SALTS_EINVAL;
+    }
+
+    snprintf(prefix, sizeof(prefix),
+             "/tmp/turboraft-groupcommit-bench-%ld-%zu",
+             (long)getpid(), batch_size);
+    snprintf(wal_path, sizeof(wal_path), "%s.00000001.wal", prefix);
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", prefix);
+    (void)salts_fs_unlink(wal_path);
+    (void)salts_fs_unlink(lock_path);
+
+    memset(&config, 0, sizeof(config));
+    config.path_prefix = prefix;
+    config.segment_bytes = TR_RAFT_WAL_DEFAULT_SEGMENT_BYTES;
+    config.max_transaction_bytes =
+        TR_RAFT_WAL_DEFAULT_TRANSACTION_BYTES;
+    config.max_segments = 2U;
+    config.max_log_entries = BENCH_PROPOSALS + 16U;
+    config.max_snapshot_bytes = 1024U;
+    config.create_if_missing = true;
+
+    result = tr_raft_wal_storage_open(&config, &wal);
+    if (result == SALTS_OK) {
+        result = tr_raft_wal_storage_bind(wal, &storage);
+    }
+
+    start = bench_now_ns();
+    for (batch = 0U;
+         result == SALTS_OK && batch < BENCH_PROPOSALS / batch_size;
+         ++batch) {
+        size_t index;
+        tr_raft_index_t last_index;
+
+        for (index = 0U; index < batch_size; ++index) {
+            uint8_t payload[BENCH_PAYLOAD_BYTES];
+
+            memset(payload, 0x7c, sizeof(payload));
+            memset(&entries[index], 0, sizeof(entries[index]));
+            entries[index].index = next_index++;
+            entries[index].term = 1U;
+            entries[index].command_id = entries[index].index;
+            entries[index].data_length = sizeof(payload);
+            memcpy(entries[index].data, payload, sizeof(payload));
+        }
+        last_index = entries[batch_size - 1U].index;
+
+        result = storage.begin(storage.context);
+        if (result == SALTS_OK) {
+            result = storage.write_hard_state(storage.context, 1U, 1U);
+        }
+        if (result == SALTS_OK) {
+            result = storage.append_log(
+                storage.context, entries, batch_size);
+        }
+        if (result == SALTS_OK) {
+            result = storage.write_commit_index(
+                storage.context, last_index);
+        }
+        if (result == SALTS_OK) {
+            result = storage.commit(storage.context);
+        } else {
+            (void)storage.rollback(storage.context);
+        }
+    }
+    end = bench_now_ns();
+
+    if (result == SALTS_OK) {
+        *out_ns_per_op =
+            (double)(end - start) / (double)BENCH_PROPOSALS;
+    }
+    if (wal != NULL) {
+        int close_result = tr_raft_wal_storage_close(wal);
+        if (result == SALTS_OK) {
+            result = close_result;
+        }
+    }
+
+    (void)salts_fs_unlink(wal_path);
+    (void)salts_fs_unlink(lock_path);
+    return result;
+}
+
 static int bench_wal_path(double *out_ns_per_op)
 {
     char prefix[256];
@@ -334,6 +435,9 @@ int main(void)
     double core_ns = 0.0;
     double service_ns = 0.0;
     double wal_ns = 0.0;
+    double wal_batch4_ns = 0.0;
+    double wal_batch8_ns = 0.0;
+    double wal_batch16_ns = 0.0;
     int result;
 
     result = bench_core_path(&core_ns);
@@ -354,6 +458,21 @@ int main(void)
         fprintf(stderr, "wal benchmark failed: %d\n", result);
         return 30;
     }
+    result = bench_wal_batch_path(4U, &wal_batch4_ns);
+    if (result != SALTS_OK) {
+        fprintf(stderr, "wal batch4 benchmark failed: %d\n", result);
+        return 31;
+    }
+    result = bench_wal_batch_path(8U, &wal_batch8_ns);
+    if (result != SALTS_OK) {
+        fprintf(stderr, "wal batch8 benchmark failed: %d\n", result);
+        return 32;
+    }
+    result = bench_wal_batch_path(16U, &wal_batch16_ns);
+    if (result != SALTS_OK) {
+        fprintf(stderr, "wal batch16 benchmark failed: %d\n", result);
+        return 33;
+    }
 
     printf("boundary,operations,ns_per_op,ops_per_sec\n");
     printf("core_propose_advance,%u,%.2f,%.2f\n",
@@ -367,5 +486,20 @@ int main(void)
            wal_ns != 0.0 ? 1000000000.0 / wal_ns : 0.0);
     printf("wal_vs_memory_ratio,1,%.2f,0\n",
            service_ns != 0.0 ? wal_ns / service_ns : 0.0);
+    printf("wal_batch4,%u,%.2f,%.2f\n",
+           BENCH_PROPOSALS, wal_batch4_ns,
+           wal_batch4_ns != 0.0 ? 1000000000.0 / wal_batch4_ns : 0.0);
+    printf("wal_batch8,%u,%.2f,%.2f\n",
+           BENCH_PROPOSALS, wal_batch8_ns,
+           wal_batch8_ns != 0.0 ? 1000000000.0 / wal_batch8_ns : 0.0);
+    printf("wal_batch16,%u,%.2f,%.2f\n",
+           BENCH_PROPOSALS, wal_batch16_ns,
+           wal_batch16_ns != 0.0 ? 1000000000.0 / wal_batch16_ns : 0.0);
+    printf("wal_batch4_speedup,1,%.2f,0\n",
+           wal_batch4_ns != 0.0 ? wal_ns / wal_batch4_ns : 0.0);
+    printf("wal_batch8_speedup,1,%.2f,0\n",
+           wal_batch8_ns != 0.0 ? wal_ns / wal_batch8_ns : 0.0);
+    printf("wal_batch16_speedup,1,%.2f,0\n",
+           wal_batch16_ns != 0.0 ? wal_ns / wal_batch16_ns : 0.0);
     return 0;
 }
