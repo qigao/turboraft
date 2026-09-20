@@ -410,7 +410,8 @@ Focused evidence completed:
 - [x] perform one group's WAL backup handoff while sibling groups stay healthy;
 - [x] kill/restart a physical host and recover all independent group WALs;
 - [x] unknown/stopped-group rejection followed by valid traffic is covered by #27 transport isolation;
-- [ ] run one group's snapshot catch-up while sibling groups continue commits on the shared physical transport.
+- [x] stream a G100 snapshot through the shared per-peer scheduler while G101/G102 protocol traffic is scheduled between snapshot chunks and the receiver commits the verified snapshot;
+- [ ] run the authoritative production FlowMQ/mTLS snapshot-catch-up case while sibling groups continue commits.
 
 - [ ] **Step 4: Run the targeted acceptance test**
 
