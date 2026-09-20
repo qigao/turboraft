@@ -1269,6 +1269,7 @@ jobs:
             -Itests/chaos
             -I../xxhash
             -I../salts/utils/include
+            -I../salts/utils/parser
             -I../salts/platform/include
             -I../salts/concurrency/include
             -I../salts/cstl/include
