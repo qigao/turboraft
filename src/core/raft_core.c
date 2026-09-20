@@ -1984,7 +1984,8 @@ int tr_raft_core_transfer_leadership(tr_raft_core_t *core,
         core->in_call = false;
         return SALTS_EPROTO;
     }
-    if (core->leadership_transfer_target != 0U) {
+    if (core->leadership_transfer_target != 0U ||
+        tr_read_total_count(core) != 0U) {
         core->in_call = false;
         return SALTS_EBUSY;
     }
