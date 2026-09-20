@@ -31,6 +31,7 @@ static tr_raft_core_t *read_core(tr_raft_node_id_t self_id)
     config.election_max_ticks = 10U;
     config.initial_election_timeout_ticks = 5U;
     config.max_log_entries = 16U;
+    config.max_pending_reads = 4U;
     check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
     return core;
 }
@@ -89,7 +90,7 @@ static void read_commit_current_term(tr_raft_core_t *core,
 
 spec("raft read index")
 {
-    it("waits for a current-term commit and matching quorum context")
+    it("coalesces waiting contexts behind the next safe quorum barrier")
     {
         tr_raft_core_t *core = read_core(1U);
         tr_raft_message_t messages[4];
@@ -97,19 +98,37 @@ spec("raft read index")
         tr_raft_message_t response;
         tr_raft_status_t status;
         tr_raft_term_t term = read_elect(core);
+        uint64_t context;
 
         ready = read_ready(messages);
         check_equal(tr_raft_core_read_index(core, 40U, &ready), SALTS_EBUSY);
         read_commit_current_term(core, term);
+
         ready = read_ready(messages);
         check_equal(tr_raft_core_read_index(core, 41U, &ready), SALTS_OK);
         check_equal(ready.message_count, 2U);
         check_equal(ready.messages[0].type,
-                     TR_RAFT_MSG_READ_INDEX_REQUEST);
+                    TR_RAFT_MSG_READ_INDEX_REQUEST);
         check_equal(ready.messages[0].context_id, 41U);
+        check_equal(ready.messages[1].context_id, 41U);
+        check_equal(ready.read_state_count, 0U);
         check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        for (context = 42U; context <= 44U; ++context) {
+            ready = read_ready(messages);
+            check_equal(tr_raft_core_read_index(core, context, &ready),
+                        SALTS_OK);
+            check_equal(ready.message_count, 0U);
+            check_equal(ready.read_state_count, 0U);
+        }
+
         ready = read_ready(messages);
-        check_equal(tr_raft_core_read_index(core, 42U, &ready), SALTS_EBUSY);
+        check_equal(tr_raft_core_read_index(core, 45U, &ready),
+                    SALTS_ENOSPC);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.pending_read_context_id, 41U);
+        check_equal(status.pending_read_count, 4U);
+        check_equal(status.max_pending_reads, 4U);
 
         memset(&response, 0, sizeof(response));
         response.type = TR_RAFT_MSG_READ_INDEX_RESPONSE;
@@ -119,16 +138,68 @@ spec("raft read index")
         response.context_id = 99U;
         ready = read_ready(messages);
         check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
-        check(!ready.read_state_ready);
+        check_equal(ready.read_state_count, 0U);
+        check_equal(ready.message_count, 0U);
+
         response.context_id = 41U;
         ready = read_ready(messages);
         check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check_equal(ready.read_state_count, 1U);
         check(ready.read_state_ready);
         check_equal(ready.read_state.context_id, 41U);
-        check_equal(ready.read_state.index, 1U);
+        check_equal(ready.read_states[0].context_id, 41U);
+        check_equal(ready.read_states[0].index, 1U);
+
+        /* 42/43/44 were admitted before this new barrier starts. */
+        check_equal(ready.message_count, 2U);
+        check_equal(ready.messages[0].type,
+                    TR_RAFT_MSG_READ_INDEX_REQUEST);
+        check_equal(ready.messages[0].context_id, 42U);
+        check_equal(ready.messages[1].context_id, 42U);
         check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.pending_read_context_id, 42U);
+        check_equal(status.pending_read_count, 3U);
+
+        response.context_id = 42U;
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check_equal(ready.read_state_count, 3U);
+        for (context = 0U; context < 3U; ++context) {
+            check_equal(ready.read_states[context].context_id, 42U + context);
+            check_equal(ready.read_states[context].index, 1U);
+        }
+        check_equal(ready.message_count, 0U);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.pending_read_context_id, 0U);
+        check_equal(status.pending_read_count, 0U);
+        tr_raft_core_destroy(core);
+    }
+
+    it("rejects duplicate contexts while they remain outstanding")
+    {
+        tr_raft_core_t *core = read_core(1U);
+        tr_raft_message_t messages[4];
+        tr_raft_ready_t ready;
+        tr_raft_term_t term = read_elect(core);
+
+        read_commit_current_term(core, term);
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 71U, &ready), SALTS_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 72U, &ready), SALTS_OK);
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 71U, &ready),
+                    SALTS_EALREADY);
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 72U, &ready),
+                    SALTS_EALREADY);
+
         tr_raft_core_destroy(core);
     }
 
