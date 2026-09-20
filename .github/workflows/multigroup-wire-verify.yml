@@ -207,6 +207,22 @@ jobs:
             tests/core/test_raft_snapshot_receiver.c
           run_check "test_raft_snapshot_manager.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -Isrc/service -fsyntax-only tests/core/test_raft_snapshot_manager.c
           run_check "test_raft_snapshot_policy.c" \
+          run_check "raft_multiprocess_node.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -Itests/chaos -fsyntax-only \
+            tests/chaos/raft_multiprocess_node.c
+          run_check "test_raft_multiprocess_chaos.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -Itests/chaos -fsyntax-only \
+            tests/chaos/test_raft_multiprocess_chaos.c
             cc -std=c11 -Wall -Wextra \
             -Werror=implicit-function-declaration \
             -Werror=incompatible-pointer-types \
