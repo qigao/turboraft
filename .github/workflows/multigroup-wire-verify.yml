@@ -1546,6 +1546,301 @@ jobs:
             -o /tmp/turboraft_snapshot_policy_tests
           /tmp/turboraft_snapshot_policy_tests
 
+      - name: Run three-process multi-group acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/chaos_wire_shim.c <<'EOF'
+          #include <turboraft/raft_wire_codec.h>
+          #include <salts_error.h>
+          #include <stdlib.h>
+          #include <string.h>
+
+          #define SHIM_HEADER_SIZE 52U
+          static const uint8_t shim_magic[4] = {'T','C','F','W'};
+
+          struct tr_raft_wire_codec { int reserved; };
+
+          static void put_u64(uint8_t *out, uint64_t value)
+          {
+              size_t i;
+              for (i = 0U; i < 8U; ++i) {
+                  out[i] = (uint8_t)(value >> (56U - i * 8U));
+              }
+          }
+
+          static uint64_t get_u64(const uint8_t *in)
+          {
+              uint64_t value = 0U;
+              size_t i;
+              for (i = 0U; i < 8U; ++i) value = (value << 8U) | in[i];
+              return value;
+          }
+
+          int tr_raft_wire_codec_create(tr_raft_wire_codec_t **out_codec)
+          {
+              if (out_codec == NULL) return SALTS_EINVAL;
+              *out_codec = (tr_raft_wire_codec_t *)calloc(1U, sizeof(tr_raft_wire_codec_t));
+              return *out_codec != NULL ? SALTS_OK : SALTS_ENOMEM;
+          }
+
+          void tr_raft_wire_codec_destroy(tr_raft_wire_codec_t *codec)
+          {
+              free(codec);
+          }
+
+          int tr_raft_wire_encode(tr_raft_wire_codec_t *codec,
+                                  const tr_raft_wire_metadata_t *metadata,
+                                  const tr_raft_message_t *message,
+                                  uint8_t *output,
+                                  size_t output_capacity,
+                                  size_t *output_length)
+          {
+              size_t required = SHIM_HEADER_SIZE + sizeof(*message);
+              if (output_length != NULL) *output_length = 0U;
+              if (codec == NULL || metadata == NULL || message == NULL ||
+                  output == NULL || output_length == NULL ||
+                  metadata->group_id == 0U || metadata->message_id == 0U)
+                  return SALTS_EINVAL;
+              if (output_capacity < required) {
+                  *output_length = required;
+                  return SALTS_ENOSPC;
+              }
+              memcpy(output, shim_magic, sizeof(shim_magic));
+              memcpy(output + 4U, metadata->cluster_id.bytes,
+                     sizeof(metadata->cluster_id.bytes));
+              put_u64(output + 20U, metadata->group_id);
+              put_u64(output + 28U, metadata->message_id);
+              put_u64(output + 36U, message->from);
+              put_u64(output + 44U, message->to);
+              memcpy(output + SHIM_HEADER_SIZE, message, sizeof(*message));
+              *output_length = required;
+              return SALTS_OK;
+          }
+
+          int tr_raft_wire_decode(tr_raft_wire_codec_t *codec,
+                                  const uint8_t *frame,
+                                  size_t frame_length,
+                                  tr_raft_wire_metadata_t *metadata,
+                                  tr_raft_message_t *message)
+          {
+              if (codec == NULL || frame == NULL || metadata == NULL ||
+                  message == NULL ||
+                  frame_length != SHIM_HEADER_SIZE + sizeof(*message) ||
+                  memcmp(frame, shim_magic, sizeof(shim_magic)) != 0)
+                  return SALTS_EPROTO;
+              memset(metadata, 0, sizeof(*metadata));
+              memcpy(metadata->cluster_id.bytes, frame + 4U,
+                     sizeof(metadata->cluster_id.bytes));
+              metadata->group_id = get_u64(frame + 20U);
+              metadata->message_id = get_u64(frame + 28U);
+              memcpy(message, frame + SHIM_HEADER_SIZE, sizeof(*message));
+              if (metadata->group_id == 0U || metadata->message_id == 0U ||
+                  message->from != get_u64(frame + 36U) ||
+                  message->to != get_u64(frame + 44U))
+                  return SALTS_EPROTO;
+              return SALTS_OK;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra \
+            -D_DEFAULT_SOURCE=1 -D_POSIX_C_SOURCE=200809L \
+            -Iinclude -Isrc -Isrc/core -Itests/chaos \
+            -I../salts/utils/include -I../salts/platform/include \
+            -I../salts/concurrency/include -I../salts/cstl/include \
+            -I../salts/cmeta/include -I../xxhash \
+            tests/chaos/raft_multiprocess_node.c \
+            /tmp/chaos_wire_shim.c /tmp/salts_fs_shim.c \
+            src/service/raft_service.c src/runtime/raft_runtime.c \
+            src/core/raft_core.c src/core/raft_configuration.c \
+            src/core/raft_membership.c src/core/raft_membership_transition.c \
+            src/core/raft_peer_set.c src/core/raft_log.c \
+            src/storage/raft_wal_storage.c ../salts/cstl/src/vec.c \
+            ../xxhash/xxhash.c -lcrypto \
+            -o /tmp/turboraft_multigroup_node
+
+          cat > /tmp/multigroup_acceptance.py <<'PY'
+          import os, struct, subprocess, tempfile
+
+          MAGIC=b"TRCQ"; RESP=b"TRCR"; VERSION=2
+          TICK,STEP,PROPOSE,STATUS,STOP,BACKUP=1,2,3,4,5,6
+          GROUPS=(100,101,102)
+
+          def read_exact(pipe,n):
+              b=b""
+              while len(b)<n:
+                  x=pipe.read(n-len(b))
+                  if not x: raise RuntimeError("unexpected EOF")
+                  b+=x
+              return b
+
+          class Node:
+              def __init__(self,node_id,base):
+                  self.id=node_id; self.req=1; self.status={}
+                  self.p=subprocess.Popen(
+                      ["/tmp/turboraft_multigroup_node","--node",str(node_id),"--db",base],
+                      stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+              def cmd(self,group,kind,payload=b""):
+                  rid=self.req; self.req+=1
+                  h=struct.pack(">4sHHIIQ",MAGIC,VERSION,kind,rid,len(payload),group)
+                  self.p.stdin.write(h+payload); self.p.stdin.flush()
+                  r=read_exact(self.p.stdout,96)
+                  if r[:4]!=RESP or struct.unpack_from(">H",r,4)[0]!=VERSION:
+                      raise RuntimeError("bad response header")
+                  if struct.unpack_from(">I",r,8)[0]!=rid:
+                      raise RuntimeError("request mismatch")
+                  op=struct.unpack_from(">I",r,12)[0]
+                  if op & 0x80000000: op-=1<<32
+                  count=struct.unpack_from(">I",r,16)[0]
+                  size=struct.unpack_from(">I",r,20)[0]
+                  st=dict(
+                      node=struct.unpack_from(">Q",r,24)[0],
+                      role=struct.unpack_from(">I",r,32)[0],
+                      faulted=struct.unpack_from(">I",r,36)[0],
+                      cause=struct.unpack_from(">I",r,40)[0],
+                      applied_count=struct.unpack_from(">I",r,44)[0],
+                      term=struct.unpack_from(">Q",r,48)[0],
+                      leader=struct.unpack_from(">Q",r,56)[0],
+                      last=struct.unpack_from(">Q",r,64)[0],
+                      commit=struct.unpack_from(">Q",r,72)[0],
+                      applied=struct.unpack_from(">Q",r,80)[0],
+                      hash=struct.unpack_from(">Q",r,88)[0])
+                  self.status[group]=st
+                  body=read_exact(self.p.stdout,size) if size else b""
+                  frames=[]; off=0
+                  for _ in range(count):
+                      n=struct.unpack_from(">I",body,off)[0]; off+=4
+                      frame=body[off:off+n]; off+=n
+                      if frame[:4]!=b"TCFW": raise RuntimeError("bad shim frame")
+                      fg=struct.unpack_from(">Q",frame,20)[0]
+                      frm=struct.unpack_from(">Q",frame,36)[0]
+                      to=struct.unpack_from(">Q",frame,44)[0]
+                      frames.append((fg,frm,to,frame))
+                  if off!=len(body): raise RuntimeError("trailing frame bytes")
+                  return op,frames,st
+              def terminate(self):
+                  self.p.terminate(); self.p.wait(timeout=10)
+              def stop(self):
+                  if self.p.poll() is None:
+                      try: self.cmd(100,STOP)
+                      except Exception: self.p.terminate()
+                      self.p.wait(timeout=10)
+
+          def timeout(node,group):
+              preferred=GROUPS.index(group)+1
+              return 3+((node+3-preferred)%3)
+
+          def collect(nodes,network,group,node,kind,payload=b""):
+              op,frames,_=nodes[node-1].cmd(group,kind,payload)
+              if op!=0: raise RuntimeError(f"op {op} group={group} node={node}")
+              network.extend(frames)
+
+          def refresh(nodes):
+              for g in GROUPS:
+                  for n in range(1,4): nodes[n-1].cmd(g,STATUS)
+
+          def deliver(nodes,network,blocked=None,limit=256):
+              delivered=0
+              i=0
+              while delivered<limit:
+                  idx=next((j for j,f in enumerate(network)
+                            if blocked is None or f[0]!=blocked),None)
+                  if idx is None: break
+                  g,frm,to,frame=network.pop(idx)
+                  op,frames,_=nodes[to-1].cmd(g,STEP,frame)
+                  if op!=0: raise RuntimeError(f"step {op} g={g} {frm}->{to}")
+                  network.extend(frames); delivered+=1
+              return delivered
+
+          def round_all(nodes,network,blocked=None):
+              for g in GROUPS:
+                  for n in range(1,4):
+                      collect(nodes,network,g,n,TICK,
+                              struct.pack(">II",1,timeout(n,g)))
+              deliver(nodes,network,blocked)
+              refresh(nodes)
+
+          def leaders(nodes):
+              out=[]
+              for g in GROUPS:
+                  ls=[n.id for n in nodes if n.status[g]["role"]==3]
+                  if len(ls)!=1: return None
+                  out.append(ls[0])
+              return out
+
+          def converged(nodes,g,target):
+              s=[n.status[g] for n in nodes]
+              return all(x["faulted"]==0 and x["applied"]>=target for x in s) and \
+                     len({(x["applied"],x["hash"]) for x in s})==1
+
+          def propose(nodes,network,g,leader,cid):
+              payload=struct.pack(">QI",cid,8)+struct.pack(">II",GROUPS.index(g),cid & 0xffffffff)
+              collect(nodes,network,g,leader,PROPOSE,payload)
+              return nodes[leader-1].status[g]["last"]
+
+          with tempfile.TemporaryDirectory(prefix="turboraft-mg-") as d:
+              bases=[os.path.join(d,f"node-{i}") for i in range(1,4)]
+              nodes=[Node(i,bases[i-1]) for i in range(1,4)]
+              network=[]
+              try:
+                  refresh(nodes)
+                  ls=None
+                  for _ in range(24):
+                      round_all(nodes,network)
+                      ls=leaders(nodes)
+                      if ls is not None: break
+                  if ls != [1,2,3]:
+                      raise RuntimeError(f"leader diversity failed: {ls}")
+
+                  targets={}
+                  for i,g in enumerate(GROUPS):
+                      targets[g]=propose(nodes,network,g,ls[i],7000+i)
+                  for _ in range(32):
+                      round_all(nodes,network)
+                      if all(converged(nodes,g,targets[g]) for g in GROUPS): break
+                  if not all(converged(nodes,g,targets[g]) for g in GROUPS):
+                      raise RuntimeError("initial convergence failed")
+
+                  for i,g in enumerate(GROUPS[1:],start=1):
+                      targets[g]=propose(nodes,network,g,ls[i],8000+i)
+                  for _ in range(24):
+                      round_all(nodes,network,blocked=100)
+                      if converged(nodes,101,targets[101]) and converged(nodes,102,targets[102]):
+                          break
+                  if not any(f[0]==100 for f in network):
+                      raise RuntimeError("G100 did not accumulate blocked traffic")
+                  if not converged(nodes,101,targets[101]) or not converged(nodes,102,targets[102]):
+                      raise RuntimeError("unblocked groups stalled behind G100")
+
+                  op,_,_=nodes[1].cmd(100,BACKUP)
+                  if op!=0: raise RuntimeError(f"G100 handoff failed: {op}")
+                  for g in (101,102):
+                      op,_,st=nodes[1].cmd(g,STATUS)
+                      if op!=0 or st["faulted"]:
+                          raise RuntimeError("sibling group faulted after G100 handoff")
+
+                  nodes[1].terminate()
+                  nodes[1]=Node(2,bases[1])
+                  refresh(nodes)
+                  for _ in range(40):
+                      round_all(nodes,network)
+                      if all(converged(nodes,g,targets[g]) for g in GROUPS): break
+                  if not all(converged(nodes,g,targets[g]) for g in GROUPS):
+                      raise RuntimeError("restart convergence failed")
+
+                  for base in bases:
+                      for g in GROUPS:
+                          if not os.path.exists(f"{base}.g{g}.00000001.wal"):
+                              raise RuntimeError(f"missing independent WAL {base}.g{g}")
+                  print("multigroup acceptance: PASS")
+              finally:
+                  for n in nodes:
+                      n.stop()
+          PY
+
+          python3 /tmp/multigroup_acceptance.py
+
       - name: Verify current public group API
         shell: bash
         run: |
