@@ -556,6 +556,18 @@ static int tr_chaos_node_stop(tr_chaos_process_node_t *node,
     return result;
 }
 
+static int tr_chaos_collect_group_command(
+    tr_chaos_process_node_t *node,
+    tr_raft_group_id_t group_id,
+    tr_chaos_command_kind_t kind,
+    const uint8_t *command_payload,
+    size_t command_size,
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload,
+    int *out_operation_result);
+
 static int tr_chaos_collect_command(
     tr_chaos_process_node_t *node,
     tr_chaos_command_kind_t kind,
@@ -582,6 +594,36 @@ static int tr_chaos_node_backup_handoff(
     return result != SALTS_OK ? result : operation_result;
 }
 
+static int tr_chaos_collect_group_command(
+    tr_chaos_process_node_t *node,
+    tr_raft_group_id_t group_id,
+    tr_chaos_command_kind_t kind,
+    const uint8_t *command_payload,
+    size_t command_size,
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload,
+    int *out_operation_result)
+{
+    tr_chaos_response_t response;
+    int result = tr_chaos_node_group_command(
+        node, group_id, kind, command_payload, command_size,
+        response_payload, &response);
+
+    if (result == SALTS_OK) {
+        result = tr_chaos_track_status(safety, &response);
+    }
+    if (result == SALTS_OK) {
+        result = tr_chaos_network_collect_group(
+            network, codec, response_payload, &response, group_id);
+    }
+    if (out_operation_result != NULL) {
+        *out_operation_result = response.operation_result;
+    }
+    return result;
+}
+
 static int tr_chaos_collect_command(
     tr_chaos_process_node_t *node,
     tr_chaos_command_kind_t kind,
@@ -593,22 +635,10 @@ static int tr_chaos_collect_command(
     uint8_t *response_payload,
     int *out_operation_result)
 {
-    tr_chaos_response_t response;
-    int result = tr_chaos_node_command(
-        node, kind, command_payload, command_size, response_payload,
-        &response);
-
-    if (result == SALTS_OK) {
-        result = tr_chaos_track_status(safety, &response);
-    }
-    if (result == SALTS_OK) {
-        result = tr_chaos_network_collect(network, codec, response_payload,
-                                          &response);
-    }
-    if (out_operation_result != NULL) {
-        *out_operation_result = response.operation_result;
-    }
-    return result;
+    return tr_chaos_collect_group_command(
+        node, TR_CHAOS_PRIMARY_GROUP_ID, kind, command_payload,
+        command_size, network, codec, safety, response_payload,
+        out_operation_result);
 }
 
 static int tr_chaos_deliver_one(
