@@ -132,6 +132,7 @@ static int tr_chaos_enqueue(void *context, const tr_raft_message_t *message)
     remaining = TR_CHAOS_MAX_RESPONSE_BYTES - node->outbound_size - 4U;
     memset(&metadata, 0, sizeof(metadata));
     metadata.cluster_id = node->cluster_id;
+    metadata.group_id = TR_CHAOS_DEFAULT_GROUP_ID;
     metadata.message_id = node->next_message_id;
     result = tr_raft_wire_encode(
         node->codec, &metadata, message,
@@ -295,10 +296,18 @@ static int tr_chaos_node_backup_handoff(
 }
 
 static int tr_chaos_execute(tr_chaos_node_t *node,
+                            tr_raft_group_id_t group_id,
                             tr_chaos_command_kind_t kind,
                             const uint8_t *payload,
                             size_t payload_size)
 {
+    if (kind != TR_CHAOS_COMMAND_STOP &&
+        group_id != TR_CHAOS_DEFAULT_GROUP_ID) {
+        return SALTS_ENOENT;
+    }
+    if (kind == TR_CHAOS_COMMAND_STOP && group_id != 0U) {
+        return SALTS_EINVAL;
+    }
     switch (kind) {
     case TR_CHAOS_COMMAND_TICK:
         if (payload_size == 8U) {
@@ -319,6 +328,7 @@ static int tr_chaos_execute(tr_chaos_node_t *node,
                                              &message);
 
             if (result != SALTS_OK ||
+                metadata.group_id != group_id ||
                 memcmp(metadata.cluster_id.bytes, node->cluster_id.bytes,
                        sizeof(node->cluster_id.bytes)) != 0 ||
                 message.to != node->node_id) {
@@ -359,6 +369,7 @@ static int tr_chaos_execute(tr_chaos_node_t *node,
 }
 
 static int tr_chaos_respond(tr_chaos_node_t *node,
+                            tr_raft_group_id_t group_id,
                             uint32_t request_id,
                             int operation_result)
 {
@@ -388,6 +399,7 @@ static int tr_chaos_respond(tr_chaos_node_t *node,
     tr_chaos_put_u64(header + 72U, status.core.commit_index);
     tr_chaos_put_u64(header + 80U, status.core.applied_index);
     tr_chaos_put_u64(header + 88U, node->applied_hash);
+    tr_chaos_put_u64(header + TR_CHAOS_RESPONSE_GROUP_OFFSET, group_id);
     result = tr_chaos_stdio_write(header, sizeof(header));
     if (result == SALTS_OK && node->outbound_size != 0U) {
         result = tr_chaos_stdio_write(node->outbound, node->outbound_size);
@@ -430,6 +442,7 @@ int main(int argc, char **argv)
     for (;;) {
         uint32_t request_id;
         uint32_t payload_size;
+        tr_raft_group_id_t group_id;
         tr_chaos_command_kind_t kind;
         int result = tr_chaos_stdio_read(header, sizeof(header));
 
@@ -446,6 +459,8 @@ int main(int argc, char **argv)
         kind = (tr_chaos_command_kind_t) tr_chaos_get_u16(header + 6U);
         request_id = tr_chaos_get_u32(header + 8U);
         payload_size = tr_chaos_get_u32(header + 12U);
+        group_id = tr_chaos_get_u64(
+            header + TR_CHAOS_COMMAND_GROUP_OFFSET);
         if (payload_size > TR_CHAOS_MAX_FRAME_BYTES ||
             (payload_size != 0U &&
              tr_chaos_stdio_read(payload, payload_size) != SALTS_OK)) {
@@ -454,8 +469,10 @@ int main(int argc, char **argv)
         }
         node.outbound_size = 0U;
         node.outbound_count = 0U;
-        result = tr_chaos_execute(&node, kind, payload, payload_size);
-        if (tr_chaos_respond(&node, request_id, result) != SALTS_OK) {
+        result = tr_chaos_execute(
+            &node, group_id, kind, payload, payload_size);
+        if (tr_chaos_respond(
+                &node, group_id, request_id, result) != SALTS_OK) {
             exit_code = 8;
             break;
         }
