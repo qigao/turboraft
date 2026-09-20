@@ -24,6 +24,11 @@ typedef struct tr_raft_append_window {
     bool probe;
 } tr_raft_append_window_t;
 
+typedef struct tr_raft_pending_read {
+    uint64_t context_id;
+    tr_raft_index_t index;
+} tr_raft_pending_read_t;
+
 struct tr_raft_core {
     tr_raft_node_id_t self_id;
     tr_raft_membership_transition_t membership_transition;
