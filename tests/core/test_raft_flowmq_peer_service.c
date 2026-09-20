@@ -1,4 +1,6 @@
 #include <turboraft/raft_flowmq_peer_service.h>
+#include <turboraft/raft_snapshot_receiver.h>
+#include <turboraft/raft_snapshot_sender.h>
 
 #include <cnet/cnet.h>
 #include <salts_error.h>
@@ -468,8 +470,13 @@ static int close_live_pair(tr_flowmq_live_pair_t *pair)
     return first_error;
 }
 
-static int open_live_pair(tr_flowmq_live_pair_t *pair,
-                          int provide_client_certificate)
+static int open_live_pair_with_handlers(
+    tr_flowmq_live_pair_t *pair,
+    int provide_client_certificate,
+    tr_raft_transport_payload_handler_fn node1_handler,
+    void *node1_context,
+    tr_raft_transport_payload_handler_fn node2_handler,
+    void *node2_context)
 {
     char ca_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
     char node1_cert_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
@@ -535,6 +542,8 @@ static int open_live_pair(tr_flowmq_live_pair_t *pair,
         node1.peer_tls.key_file = node1_key_path;
     }
     node1.capture = &pair->node1_capture;
+    node1.on_payload = node1_handler;
+    node1.payload_context = node1_context;
 
     node2.local_node_id = 2U;
     node2.local_identity = "node-2";
@@ -547,6 +556,8 @@ static int open_live_pair(tr_flowmq_live_pair_t *pair,
     node2.peer_identity = "node-1";
     node2.peer_endpoint = pair->node1_endpoint;
     node2.capture = &pair->node2_capture;
+    node2.on_payload = node2_handler;
+    node2.payload_context = node2_context;
 
     stage = "create-node2";
     result = create_live_service(&node2, &pair->node2);
@@ -570,6 +581,14 @@ static int open_live_pair(tr_flowmq_live_pair_t *pair,
         (void)close_live_pair(pair);
     }
     return result;
+}
+
+static int open_live_pair(tr_flowmq_live_pair_t *pair,
+                          int provide_client_certificate)
+{
+    return open_live_pair_with_handlers(
+        pair, provide_client_certificate,
+        NULL, NULL, NULL, NULL);
 }
 
 static int step_live_pair(
