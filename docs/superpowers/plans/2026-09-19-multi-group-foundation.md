@@ -296,7 +296,9 @@ ctest --preset win-release-user -R "turboraft\.(snapshot_sender|snapshot_receive
 
 Add public types with explicit ownership:
 - manifest is copied/immutable for one transfer identity,
-- source is borrowed for transfer lifetime,
+- source descriptor/context ownership transfers to TurboRaft after a successful create/begin admission,
+- TurboRaft invokes source.release exactly once on completion/reset/destroy (when non-NULL),
+- failed create/provider calls retain ownership with the provider; no partially returned source is consumed,
 - `read_at` fills caller-owned bounded memory,
 - sink staging remains non-authoritative until `commit`,
 - `abort` is idempotent for incomplete staging.
