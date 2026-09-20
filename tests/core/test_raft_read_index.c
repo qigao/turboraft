@@ -121,6 +121,9 @@ spec("raft read index")
         check_equal(ready.message_count, 0U);
         check_equal(ready.read_state_count, 0U);
         ready = read_ready(messages);
+        check_equal(tr_raft_core_transfer_leadership(core, 2U, &ready),
+                    SALTS_EBUSY);
+        ready = read_ready(messages);
         check_equal(tr_raft_core_read_index(core, 43U, &ready), SALTS_OK);
         check_equal(ready.message_count, 0U);
         check_equal(ready.read_state_count, 0U);
