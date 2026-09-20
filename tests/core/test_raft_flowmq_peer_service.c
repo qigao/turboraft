@@ -965,6 +965,178 @@ spec("Raft FlowMQ caller-driven service")
         check_equal(close_live_pair(&pair), SALTS_OK);
     }
 
+    it("keeps sibling raft groups live during snapshot catch-up over mutual TLS")
+    {
+        static const uint8_t digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE] = {
+            0x7dU, 0xaaU, 0xfaU, 0x7aU, 0xedU, 0x7dU, 0x63U, 0xd0U,
+            0x6aU, 0x98U, 0xb7U, 0xb6U, 0xf7U, 0x85U, 0xeaU, 0xb5U,
+            0x42U, 0x7dU, 0x08U, 0x4fU, 0x30U, 0xd5U, 0xc9U, 0xeeU,
+            0x6dU, 0xd0U, 0xd2U, 0xf3U, 0xadU, 0xa3U, 0x29U, 0xe6U
+        };
+        tr_flowmq_live_pair_t pair;
+        tr_flowmq_snapshot_fixture_t fixture;
+        tr_raft_snapshot_sender_config_t sender_config;
+        tr_raft_snapshot_receiver_config_t receiver_config;
+        tr_raft_snapshot_source_t source;
+        tr_raft_conf_t configuration;
+        tr_raft_flowmq_peer_service_step_result_t node1_step;
+        tr_raft_flowmq_peer_service_step_result_t node2_step;
+        tr_raft_snapshot_sender_status_t sender_status;
+        uint64_t sibling_term = 20U;
+        uint32_t progress;
+        int next_done = 0;
+        int result;
+
+        memset(&pair, 0, sizeof(pair));
+        memset(&fixture, 0, sizeof(fixture));
+        memset(&sender_config, 0, sizeof(sender_config));
+        memset(&receiver_config, 0, sizeof(receiver_config));
+        memset(&source, 0, sizeof(source));
+        memset(&configuration, 0, sizeof(configuration));
+        memset(&sender_status, 0, sizeof(sender_status));
+
+        configuration.phase = TR_RAFT_CONF_FINAL;
+        configuration.transition_id = 1U;
+        configuration.member_count = 1U;
+        configuration.members[0].node_id = 1U;
+        configuration.members[0].roles =
+            TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+
+        source.context = &fixture;
+        source.size = sizeof(fixture.sink_data);
+        memcpy(source.digest, digest, sizeof(digest));
+        source.read_at = flowmq_snapshot_source_read;
+        source.release = flowmq_snapshot_source_release;
+
+        sender_config.self_id = 1U;
+        sender_config.peer_id = 2U;
+        sender_config.max_snapshot_bytes = 1024U;
+        sender_config.chunk_size = 64U;
+        sender_config.max_inflight_chunks = 1U;
+        check_equal(tr_raft_snapshot_sender_create(
+                        &sender_config, &fixture.sender),
+                    SALTS_OK);
+        check_equal(tr_raft_snapshot_sender_begin_source(
+                        fixture.sender, 3U, 10U, 2U,
+                        &configuration, &source),
+                    SALTS_OK);
+
+        receiver_config.self_id = 2U;
+        receiver_config.max_snapshot_bytes = 1024U;
+        receiver_config.stream.begin = flowmq_snapshot_sink_begin;
+        receiver_config.stream.write = flowmq_snapshot_sink_write;
+        receiver_config.stream.commit = flowmq_snapshot_sink_commit;
+        receiver_config.stream.abort = flowmq_snapshot_sink_abort;
+        receiver_config.stream.context = &fixture;
+        check_equal(tr_raft_snapshot_receiver_create(
+                        &receiver_config, &fixture.receiver),
+                    SALTS_OK);
+
+        result = open_live_pair_with_handlers(
+            &pair, 1,
+            flowmq_snapshot_node1_payload, &fixture,
+            flowmq_snapshot_node2_payload, &fixture);
+        check_equal(result, SALTS_OK);
+
+        if (result == SALTS_OK) {
+            result = flowmq_snapshot_enqueue_next(
+                pair.node1, fixture.sender, &next_done);
+            check_equal(result, SALTS_OK);
+        }
+        if (result == SALTS_OK && !next_done) {
+            result = flowmq_snapshot_enqueue_siblings(
+                pair.node1, sibling_term);
+            sibling_term += 2U;
+            check_equal(result, SALTS_OK);
+        }
+
+        for (progress = 0U;
+             result == SALTS_OK && progress < TR_FLOWMQ_TEST_PROGRESS_LIMIT;
+             ++progress) {
+            memset(&node1_step, 0, sizeof(node1_step));
+            memset(&node2_step, 0, sizeof(node2_step));
+            result = step_live_pair(&pair, &node1_step, &node2_step);
+            if (result != SALTS_OK) {
+                break;
+            }
+
+            if (fixture.pending_ack_ready) {
+                tr_raft_transport_payload_t ack_payload;
+
+                memset(&ack_payload, 0, sizeof(ack_payload));
+                ack_payload.group_id = 100U;
+                ack_payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
+                ack_payload.data.snapshot_ack = fixture.pending_ack;
+                result = tr_raft_flowmq_peer_service_enqueue_payload(
+                    pair.node2, &ack_payload);
+                if (result != SALTS_OK) {
+                    break;
+                }
+                fixture.pending_ack_ready = 0;
+            }
+
+            if (fixture.received_ack_ready) {
+                result = tr_raft_snapshot_sender_acknowledge(
+                    fixture.sender, &fixture.received_ack);
+                if (result != SALTS_OK) {
+                    break;
+                }
+                fixture.received_ack_ready = 0;
+                result = tr_raft_snapshot_sender_get_status(
+                    fixture.sender, &sender_status);
+                if (result != SALTS_OK) {
+                    break;
+                }
+                if (!sender_status.complete) {
+                    result = flowmq_snapshot_enqueue_next(
+                        pair.node1, fixture.sender, &next_done);
+                    if (result != SALTS_OK) {
+                        break;
+                    }
+                    if (!next_done) {
+                        result = flowmq_snapshot_enqueue_siblings(
+                            pair.node1, sibling_term);
+                        sibling_term += 2U;
+                        if (result != SALTS_OK) {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (sender_status.complete && fixture.sink_committed &&
+                fixture.sibling_count == 6U) {
+                break;
+            }
+            salts_sleep_ms(1U);
+        }
+
+        check_equal(result, SALTS_OK);
+        check_equal(tr_raft_snapshot_sender_get_status(
+                        fixture.sender, &sender_status),
+                    SALTS_OK);
+        check(sender_status.complete);
+        check(fixture.sink_committed);
+        check_false(fixture.sink_aborted);
+        check_equal(fixture.snapshot_chunk_count, 4U);
+        check_equal(fixture.source_read_count, 4U);
+        check_equal(fixture.source_release_count, 1U);
+        check_equal(fixture.sink_write_count, 4U);
+        check_equal(fixture.sibling_count, 6U);
+        if (fixture.sibling_count == 6U) {
+            check_equal(fixture.sibling_groups[0], 101U);
+            check_equal(fixture.sibling_groups[1], 102U);
+            check_equal(fixture.sibling_groups[2], 101U);
+            check_equal(fixture.sibling_groups[3], 102U);
+            check_equal(fixture.sibling_groups[4], 101U);
+            check_equal(fixture.sibling_groups[5], 102U);
+        }
+
+        check_equal(close_live_pair(&pair), SALTS_OK);
+        tr_raft_snapshot_receiver_destroy(fixture.receiver);
+        tr_raft_snapshot_sender_destroy(fixture.sender);
+    }
+
     it("rejects a peer without a client certificate")
     {
         tr_flowmq_live_pair_t pair;
