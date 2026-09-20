@@ -4,9 +4,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define TR_CHAOS_PROTOCOL_VERSION 1U
-#define TR_CHAOS_COMMAND_HEADER_SIZE 16U
+#define TR_CHAOS_PROTOCOL_VERSION 2U
+#define TR_CHAOS_COMMAND_HEADER_SIZE 24U
 #define TR_CHAOS_RESPONSE_HEADER_SIZE 96U
+#define TR_CHAOS_GROUP_COUNT 3U
+#define TR_CHAOS_PRIMARY_GROUP_ID UINT64_C(100)
 #define TR_CHAOS_MAX_FRAME_BYTES (64U * 1024U)
 #define TR_CHAOS_MAX_RESPONSE_BYTES (512U * 1024U)
 #define TR_CHAOS_MAX_QUEUED_FRAMES 512U
@@ -27,6 +29,29 @@ typedef enum tr_chaos_backup_handoff_mode {
 
 static const uint8_t tr_chaos_command_magic[4] = {'T', 'R', 'C', 'Q'};
 static const uint8_t tr_chaos_response_magic[4] = {'T', 'R', 'C', 'R'};
+
+static const uint64_t tr_chaos_group_ids[TR_CHAOS_GROUP_COUNT] = {
+    UINT64_C(100), UINT64_C(101), UINT64_C(102)
+};
+
+static size_t tr_chaos_group_slot(uint64_t group_id)
+{
+    size_t index;
+
+    for (index = 0U; index < TR_CHAOS_GROUP_COUNT; ++index) {
+        if (tr_chaos_group_ids[index] == group_id) {
+            return index;
+        }
+    }
+    return SIZE_MAX;
+}
+
+static tr_raft_node_id_t tr_chaos_group_preferred_leader(uint64_t group_id)
+{
+    size_t slot = tr_chaos_group_slot(group_id);
+
+    return slot == SIZE_MAX ? 0U : (tr_raft_node_id_t)(slot + 1U);
+}
 
 static void tr_chaos_put_u16(uint8_t *output, uint16_t value)
 {
