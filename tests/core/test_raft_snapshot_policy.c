@@ -12,6 +12,12 @@ typedef struct snapshot_policy_capture {
     tr_raft_snapshot_point_t stored;
     size_t stored_size;
     int store_result;
+    size_t source_create_count;
+    size_t source_store_count;
+    size_t source_release_count;
+    size_t source_read_count;
+    size_t source_max_request;
+    uint64_t source_logical_size;
     size_t journal_compact_count;
     tr_raft_snapshot_point_t journal_compacted;
     int journal_compact_result;
@@ -107,6 +113,105 @@ static int snapshot_store(void *context, tr_raft_index_t snapshot_index,
     return capture->store_result;
 }
 
+static int snapshot_source_read(void *context,
+                                uint64_t offset,
+                                uint8_t *buffer,
+                                size_t capacity,
+                                size_t *out_size)
+{
+    snapshot_policy_capture_t *capture =
+        (snapshot_policy_capture_t *)context;
+    size_t index;
+
+    if (capture == NULL || out_size == NULL ||
+        offset > capture->source_logical_size ||
+        capacity > capture->source_logical_size - offset ||
+        (capacity != 0U && buffer == NULL)) {
+        return SALTS_EINVAL;
+    }
+    ++capture->source_read_count;
+    if (capacity > capture->source_max_request) {
+        capture->source_max_request = capacity;
+    }
+    for (index = 0U; index < capacity; ++index) {
+        buffer[index] = (uint8_t)((offset + index) & 0xffU);
+    }
+    *out_size = capacity;
+    return SALTS_OK;
+}
+
+static void snapshot_source_release(void *context)
+{
+    snapshot_policy_capture_t *capture =
+        (snapshot_policy_capture_t *)context;
+
+    if (capture != NULL) {
+        ++capture->source_release_count;
+    }
+}
+
+static int snapshot_source_create(
+    void *context,
+    tr_raft_index_t applied_index,
+    tr_raft_snapshot_source_t *out_source)
+{
+    snapshot_policy_capture_t *capture =
+        (snapshot_policy_capture_t *)context;
+
+    if (capture == NULL || out_source == NULL || applied_index != 2U) {
+        return SALTS_EINVAL;
+    }
+    memset(out_source, 0, sizeof(*out_source));
+    out_source->context = capture;
+    out_source->size = capture->source_logical_size;
+    memset(out_source->digest, 0x5a, sizeof(out_source->digest));
+    out_source->read_at = snapshot_source_read;
+    out_source->release = snapshot_source_release;
+    ++capture->source_create_count;
+    return SALTS_OK;
+}
+
+static int snapshot_source_store(
+    void *context,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source)
+{
+    snapshot_policy_capture_t *capture =
+        (snapshot_policy_capture_t *)context;
+    uint8_t buffer[4096];
+    uint64_t offset = 0U;
+
+    if (capture == NULL || source == NULL || source->read_at == NULL ||
+        snapshot_index != 2U || snapshot_term != 1U ||
+        configuration == NULL || configuration->member_count != 1U ||
+        source->size != capture->source_logical_size) {
+        return SALTS_EPROTO;
+    }
+
+    while (offset < source->size) {
+        uint64_t remaining = source->size - offset;
+        size_t request = remaining < sizeof(buffer)
+                             ? (size_t)remaining
+                             : sizeof(buffer);
+        size_t read_size = 0U;
+        int result = source->read_at(
+            source->context, offset, buffer, request, &read_size);
+
+        if (result != SALTS_OK || read_size != request) {
+            return result == SALTS_OK ? SALTS_EPROTO : result;
+        }
+        offset += read_size;
+    }
+    ++capture->source_store_count;
+    capture->stored.index = snapshot_index;
+    capture->stored.term = snapshot_term;
+    capture->stored.configuration = *configuration;
+    capture->stored_size = (size_t)source->size;
+    return capture->store_result;
+}
+
 static int snapshot_journal_compact(void *context,
                                     tr_raft_index_t snapshot_index,
                                     tr_raft_term_t snapshot_term)
@@ -160,6 +265,7 @@ static void snapshot_policy_config(tr_raft_service_config_t *config,
     config->state_machine.apply_batch = state_machine_apply;
     config->snapshot_policy.applied_entry_threshold = 2U;
     config->snapshot_policy.max_snapshot_bytes = 16U;
+    config->snapshot_policy.max_buffered_snapshot_bytes = 16U;
     config->snapshot_policy.create = snapshot_create;
     config->snapshot_policy.create_context = capture;
     config->snapshot_policy.store = snapshot_store;
@@ -297,4 +403,51 @@ spec("automatic snapshot policy")
         check_equal(status.cause, SALTS_EPROTO);
         tr_raft_service_destroy(service);
     }
+    it("streams local snapshot creation and storage without a service buffer")
+    {
+        snapshot_policy_capture_t capture;
+        tr_raft_service_config_t config;
+        tr_raft_service_status_t status;
+        tr_raft_service_t *service = NULL;
+        tr_raft_entry_t entries[2];
+
+        memset(&capture, 0, sizeof(capture));
+        snapshot_policy_config(&config, &capture, entries);
+        capture.source_logical_size =
+            3U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES + 17U;
+
+        config.snapshot_policy.max_snapshot_bytes =
+            UINT64_C(4) * 1024U * 1024U * 1024U;
+        config.snapshot_policy.max_buffered_snapshot_bytes = 0U;
+        config.snapshot_policy.create = NULL;
+        config.snapshot_policy.create_context = NULL;
+        config.snapshot_policy.store = NULL;
+        config.snapshot_policy.store_context = NULL;
+        config.snapshot_policy.source_create = snapshot_source_create;
+        config.snapshot_policy.source_create_context = &capture;
+        config.snapshot_policy.source_store = snapshot_source_store;
+        config.snapshot_policy.source_store_context = &capture;
+
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+        check_equal(tr_raft_service_poll(service), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+
+        check_equal(capture.applied_count, 2U);
+        check_equal(capture.create_count, 0U);
+        check_equal(capture.store_count, 0U);
+        check_equal(capture.source_create_count, 1U);
+        check_equal(capture.source_store_count, 1U);
+        check_equal(capture.source_release_count, 1U);
+        check(capture.source_read_count > 1U);
+        check(capture.source_max_request <= 4096U);
+        check_equal(capture.stored.index, 2U);
+        check_equal(capture.stored.term, 1U);
+        check_equal(capture.stored_size,
+                    (size_t)capture.source_logical_size);
+        check_equal(status.core.log_base_index, 2U);
+        check_false(status.faulted);
+
+        tr_raft_service_destroy(service);
+    }
+
 }
