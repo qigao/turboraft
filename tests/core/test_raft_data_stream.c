@@ -120,7 +120,7 @@ spec("raft data stream")
                      sizeof(descriptor.stream_digest));
     }
 
-    it("allows a descriptor proposal only after all replication targets are durable")
+    it("allows a descriptor proposal after the voting quorum is durable")
     {
         tr_raft_data_quorum_config_t config = {0};
         tr_raft_data_quorum_t *quorum = NULL;
@@ -158,12 +158,13 @@ spec("raft data stream")
         memcpy(ack.stream_digest, config.descriptor.stream_digest,
                sizeof(ack.stream_digest));
         check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), SALTS_OK);
-        check_false(tr_raft_data_quorum_ready(quorum));
-        ack.from = 3U;
-        check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), SALTS_OK);
         check_true(tr_raft_data_quorum_ready(quorum));
+        check_false(tr_raft_data_quorum_peer_durable(quorum, 3U));
         check_equal(tr_raft_data_quorum_make_proposal(
                          quorum, 91U, descriptor, &proposal), SALTS_OK);
+        ack.from = 3U;
+        check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), SALTS_OK);
+        check_true(tr_raft_data_quorum_peer_durable(quorum, 3U));
         check_equal(proposal.command_id, 91U);
         check_equal(proposal.data_length,
                       TR_RAFT_DATA_DESCRIPTOR_ENCODED_SIZE);
