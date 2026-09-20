@@ -392,10 +392,12 @@ static int tr_chaos_track_status(tr_chaos_safety_t *safety,
     return SALTS_OK;
 }
 
-static int tr_chaos_network_collect(tr_chaos_network_t *network,
-                                    tr_raft_wire_codec_t *codec,
-                                    const uint8_t *payload,
-                                    const tr_chaos_response_t *response)
+static int tr_chaos_network_collect_group(
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    const uint8_t *payload,
+    const tr_chaos_response_t *response,
+    tr_raft_group_id_t expected_group_id)
 {
     size_t offset = 0U;
     uint32_t index;
@@ -429,13 +431,16 @@ static int tr_chaos_network_collect(tr_chaos_network_t *network,
         }
         result = tr_raft_wire_decode(codec, payload + offset, frame_size,
                                      &metadata, &message);
-        if (result != SALTS_OK || message.from != response->node_id ||
+        if (result != SALTS_OK ||
+            metadata.group_id != expected_group_id ||
+            message.from != response->node_id ||
             message.to == 0U || message.to > 3U) {
             fprintf(stderr,
                     "chaos collect decode index=%u result=%d response-node=%llu "
-                    "from=%llu to=%llu frame=%u\n",
+                    "group=%llu from=%llu to=%llu frame=%u\n",
                     index, result,
                     (unsigned long long) response->node_id,
+                    (unsigned long long) metadata.group_id,
                     (unsigned long long) message.from,
                     (unsigned long long) message.to, frame_size);
             return SALTS_EPROTO;
@@ -443,6 +448,7 @@ static int tr_chaos_network_collect(tr_chaos_network_t *network,
         frame = &network->frames[network->count++];
         frame->from = message.from;
         frame->to = message.to;
+        frame->group_id = metadata.group_id;
         frame->size = frame_size;
         memcpy(frame->data, payload + offset, frame_size);
         offset += frame_size;
@@ -454,6 +460,16 @@ static int tr_chaos_network_collect(tr_chaos_network_t *network,
         return SALTS_EPROTO;
     }
     return SALTS_OK;
+}
+
+static int tr_chaos_network_collect(
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    const uint8_t *payload,
+    const tr_chaos_response_t *response)
+{
+    return tr_chaos_network_collect_group(
+        network, codec, payload, response, TR_CHAOS_PRIMARY_GROUP_ID);
 }
 
 static int tr_chaos_node_spawn(tr_chaos_process_node_t *node,
