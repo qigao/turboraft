@@ -1214,16 +1214,42 @@ jobs:
         run: |
           set -euo pipefail
 
-          mapfile -t SALTS_INC < <(
-            find ../salts -type d | sed 's#^#-I#'
-          )
-          mapfile -t UTILS_INC < <(
-            find ../salts-utils -type d | sed 's#^#-I#'
-          )
+          cat > /tmp/tstr_process_shim.c <<'EOF'
+          #include "tstr.h"
+          #include "sds.h"
+
+          tstr tstr_new(void)
+          {
+              return sdsempty();
+          }
+
+          size_t tstr_len(tstr s)
+          {
+              return s != NULL ? sdslen(s) : 0U;
+          }
+
+          tstr tstr_cat_len(tstr s, const char *text, size_t size)
+          {
+              if (s == NULL) {
+                  s = sdsempty();
+              }
+              if (s == NULL || text == NULL || size == 0U) {
+                  return s;
+              }
+              return sdscatlen(s, text, size);
+          }
+
+          void tstr_free(tstr s)
+          {
+              sdsfree(s);
+          }
+          EOF
 
           CFLAGS=(
             -std=c11
             -O1
+            -D_GNU_SOURCE
+            -D_POSIX_C_SOURCE=200809L
             -ffunction-sections
             -fdata-sections
             -Iinclude
@@ -1233,8 +1259,22 @@ jobs:
             -Isrc/wire/generated
             -Itests/chaos
             -I../xxhash
-            "${SALTS_INC[@]}"
-            "${UTILS_INC[@]}"
+            -I../salts/utils/include
+            -I../salts/platform/include
+            -I../salts/concurrency/include
+            -I../salts/cstl/include
+            -I../salts/cmeta/include
+            -I../salts/tinytest/include
+            -I../salts/vendor/sds
+            -I../salts-utils/tbe/data_bind
+            -I../salts-utils/tbe/schema/include
+            -I../salts-utils/tbe/schema/parser
+            -I../salts-utils/parser/csv_parser/include
+            -I../salts-utils/parser/cyaml/adapter
+            -I../salts-utils/parser/cyaml/src
+            -I../salts-utils/parser/json_parser/include
+            -I../salts-utils/parser/query_vm/include
+            -I../salts-utils/parser/xml_parser/include
           )
 
           CORE_SRCS=(
@@ -1255,8 +1295,6 @@ jobs:
           )
 
           SUPPORT_SRCS=(
-            ../salts/utils/src/salts_error.c
-            ../salts/utils/src/salts_thread.c
             ../salts/platform/src/thread_posix.c
             ../salts/platform/src/clock.c
           )
@@ -1266,7 +1304,7 @@ jobs:
             "${CORE_SRCS[@]}" \
             "${SUPPORT_SRCS[@]}" \
             ../salts/utils/src/salts_process.c \
-            ../salts/utils/src/tstr.c \
+            /tmp/tstr_process_shim.c \
             ../salts/vendor/sds/sds.c \
             ../salts/tinytest/src/tinytest.c \
             ../salts/tinytest/src/tinymock.c \
@@ -1280,7 +1318,6 @@ jobs:
             "${CORE_SRCS[@]}" \
             "${SUPPORT_SRCS[@]}" \
             ../salts/utils/src/salts_fs.c \
-            ../salts/utils/src/tlog.c \
             ../xxhash/xxhash.c \
             -Wl,--gc-sections \
             -pthread -lm -lcrypto \
