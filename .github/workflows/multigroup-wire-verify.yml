@@ -1286,6 +1286,7 @@ jobs:
             -I../salts-utils-legacy/parser/json_parser/include
             -I../salts-utils-legacy/parser/query_vm/include
             -I../salts-utils-legacy/parser/xml_parser/include
+            -I../salts-utils-legacy/vendor/monocypher
           )
 
           CORE_SRCS=(
