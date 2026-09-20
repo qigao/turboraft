@@ -376,6 +376,24 @@ static bool tr_service_read_queue_empty(
     return service->read_state_count == 0U;
 }
 
+static bool tr_service_completed_read_context_exists(
+    const tr_raft_service_t *service,
+    uint64_t context_id)
+{
+    size_t index;
+
+    for (index = 0U; index < service->read_state_count; ++index) {
+        size_t slot =
+            (service->read_state_head + index) %
+            service->max_completed_reads;
+
+        if (service->read_states[slot].context_id == context_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int tr_service_enqueue_read_states(
     tr_raft_service_t *service,
     const tr_raft_ready_t *ready)
@@ -781,6 +799,9 @@ int tr_raft_service_read_index(tr_raft_service_t *service,
     result = tr_service_mutation_guard(service);
     if (result != SALTS_OK) {
         return result;
+    }
+    if (tr_service_completed_read_context_exists(service, context_id)) {
+        return SALTS_EALREADY;
     }
     result = tr_raft_core_status(service->core, &status);
     if (result != SALTS_OK) {
