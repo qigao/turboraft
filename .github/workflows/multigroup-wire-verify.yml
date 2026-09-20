@@ -7,6 +7,7 @@ on:
       - feature/multi-group-multiplex
       - feature/streaming-snapshot
       - feature/multigroup-chaos
+      - feature/coalesced-read-index
   workflow_dispatch:
 
 concurrency:
@@ -232,6 +233,14 @@ jobs:
             "${INC[@]}" -Itests/chaos -fsyntax-only \
             tests/chaos/test_raft_multiprocess_chaos.c
           run_check "test_raft_snapshot_group_isolation.c" \
+          run_check "test_raft_read_index.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            tests/core/test_raft_read_index.c
             cc -std=c11 -Wall -Wextra \
             -Werror=implicit-function-declaration \
             -Werror=incompatible-pointer-types \
