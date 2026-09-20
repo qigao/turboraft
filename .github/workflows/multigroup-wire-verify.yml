@@ -43,6 +43,7 @@ jobs:
             -Isrc/core
             -Isrc/wire/generated
             -I../salts/utils/include
+            -I../salts/utils/parser
             -I../salts/platform/include
             -I../salts/concurrency/include
             -I../salts/cnet/include
@@ -1276,6 +1277,28 @@ jobs:
             -I../salts-utils/parser/query_vm/include
             -I../salts-utils/parser/xml_parser/include
           )
+
+          python3 - <<'PY'
+          import pathlib
+          import re
+
+          pattern = re.compile(
+              r'TBE_TYPED_DESCRIPTOR_INIT\(&([A-Za-z0-9_]+)_TYPED_TYPE\);'
+          )
+          for name in (
+              "src/wire/generated/turboraft_wire_tbe.c",
+              "src/wire/generated/turboraft_wire_v3_tbe.c",
+          ):
+              path = pathlib.Path(name)
+              text = path.read_text()
+              updated, count = pattern.subn(
+                  r'TBE_TYPED_DESCRIPTOR_INIT(&\1_TYPED_TYPE, &\1_CMETA_DATA);',
+                  text,
+              )
+              if count == 0:
+                  raise SystemExit(f"no stale descriptor init found in {name}")
+              path.write_text(updated)
+          PY
 
           CORE_SRCS=(
             src/core/raft_core.c
