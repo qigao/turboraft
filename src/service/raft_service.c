@@ -607,14 +607,16 @@ int tr_raft_service_step(
     return tr_service_process_ready(service, &ready);
 }
 
-int tr_raft_service_propose(
+int tr_raft_service_propose_batch(
     tr_raft_service_t *service,
-    const tr_raft_proposal_t *proposal)
+    const tr_raft_proposal_t *proposals,
+    size_t proposal_count)
 {
     tr_raft_ready_t ready;
     int result;
 
-    if (service == NULL || proposal == NULL) {
+    if (service == NULL || proposals == NULL || proposal_count == 0U ||
+        proposal_count > TR_RAFT_MAX_PROPOSAL_BATCH) {
         return SALTS_EINVAL;
     }
     result = tr_service_mutation_guard(service);
@@ -622,25 +624,47 @@ int tr_raft_service_propose(
         return result;
     }
     tr_service_prepare_ready(service, &ready);
-    result = tr_raft_core_propose(service->core, proposal, &ready);
+    result = tr_raft_core_propose_batch(
+        service->core, proposals, proposal_count, &ready);
     if (result != SALTS_OK) {
         return result;
     }
     return tr_service_process_ready(service, &ready);
 }
 
-int tr_raft_service_propose_with_receipt(
+int tr_raft_service_propose(
     tr_raft_service_t *service,
-    const tr_raft_proposal_t *proposal,
-    tr_raft_operation_status_t *out_receipt)
+    const tr_raft_proposal_t *proposal)
 {
-    tr_raft_status_t status;
-    int result;
-
-    if (service == NULL || proposal == NULL || out_receipt == NULL) {
+    if (proposal == NULL) {
         return SALTS_EINVAL;
     }
-    result = tr_raft_service_propose(service, proposal);
+    return tr_raft_service_propose_batch(service, proposal, 1U);
+}
+
+int tr_raft_service_propose_batch_with_receipts(
+    tr_raft_service_t *service,
+    const tr_raft_proposal_t *proposals,
+    size_t proposal_count,
+    tr_raft_operation_status_t *out_receipts,
+    size_t receipt_capacity)
+{
+    tr_raft_status_t status;
+    tr_raft_index_t first_index;
+    size_t index;
+    int result;
+
+    if (service == NULL || proposals == NULL || proposal_count == 0U ||
+        proposal_count > TR_RAFT_MAX_PROPOSAL_BATCH ||
+        out_receipts == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (receipt_capacity < proposal_count) {
+        return SALTS_ENOSPC;
+    }
+
+    result = tr_raft_service_propose_batch(
+        service, proposals, proposal_count);
     if (result != SALTS_OK) {
         return result;
     }
@@ -648,9 +672,31 @@ int tr_raft_service_propose_with_receipt(
     if (result != SALTS_OK) {
         return result;
     }
-    return tr_raft_core_operation_status(service->core, status.term,
-                                         status.last_log_index,
-                                         out_receipt);
+    if (status.last_log_index < proposal_count) {
+        return tr_service_fault(service, SALTS_EPROTO);
+    }
+    first_index = status.last_log_index - proposal_count + 1U;
+    for (index = 0U; index < proposal_count; ++index) {
+        result = tr_raft_core_operation_status(
+            service->core, status.term, first_index + index,
+            &out_receipts[index]);
+        if (result != SALTS_OK) {
+            return result;
+        }
+    }
+    return SALTS_OK;
+}
+
+int tr_raft_service_propose_with_receipt(
+    tr_raft_service_t *service,
+    const tr_raft_proposal_t *proposal,
+    tr_raft_operation_status_t *out_receipt)
+{
+    if (proposal == NULL || out_receipt == NULL) {
+        return SALTS_EINVAL;
+    }
+    return tr_raft_service_propose_batch_with_receipts(
+        service, proposal, 1U, out_receipt, 1U);
 }
 
 int tr_raft_service_transfer_leadership(
