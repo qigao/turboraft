@@ -450,4 +450,46 @@ spec("automatic snapshot policy")
         tr_raft_service_destroy(service);
     }
 
+    it("releases a streaming source when durable store fails")
+    {
+        snapshot_policy_capture_t capture;
+        tr_raft_service_config_t config;
+        tr_raft_service_status_t status;
+        tr_raft_service_t *service = NULL;
+        tr_raft_entry_t entries[2];
+
+        memset(&capture, 0, sizeof(capture));
+        snapshot_policy_config(&config, &capture, entries);
+        capture.source_logical_size =
+            2U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES + 1U;
+        capture.store_result = SALTS_EIO;
+
+        config.snapshot_policy.max_snapshot_bytes =
+            UINT64_C(4) * 1024U * 1024U * 1024U;
+        config.snapshot_policy.max_buffered_snapshot_bytes = 0U;
+        config.snapshot_policy.create = NULL;
+        config.snapshot_policy.create_context = NULL;
+        config.snapshot_policy.store = NULL;
+        config.snapshot_policy.store_context = NULL;
+        config.snapshot_policy.source_create = snapshot_source_create;
+        config.snapshot_policy.source_create_context = &capture;
+        config.snapshot_policy.source_store = snapshot_source_store;
+        config.snapshot_policy.source_store_context = &capture;
+
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+        check_equal(tr_raft_service_poll(service), SALTS_EIO);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+
+        check_equal(capture.source_create_count, 1U);
+        check_equal(capture.source_store_count, 1U);
+        check_equal(capture.source_release_count, 1U);
+        check(status.faulted);
+        check_equal(status.cause, SALTS_EIO);
+        check_equal(status.core.log_base_index, 0U);
+        check_equal(status.core.log_entry_count, 2U);
+
+        tr_raft_service_destroy(service);
+        check_equal(capture.source_release_count, 1U);
+    }
+
 }
