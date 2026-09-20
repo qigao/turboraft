@@ -119,7 +119,9 @@ typedef struct tr_chaos_process_node {
     salts_process_t *process;
     uint32_t next_request_id;
     int alive;
+    /* G100 compatibility alias for the original single-group chaos script. */
     tr_chaos_response_t status;
+    tr_chaos_response_t group_status[TR_CHAOS_GROUP_COUNT];
 } tr_chaos_process_node_t;
 
 typedef struct tr_chaos_frame {
@@ -138,13 +140,38 @@ typedef struct tr_chaos_network {
 } tr_chaos_network_t;
 
 typedef struct tr_chaos_safety {
-    tr_raft_term_t last_term[3];
-    tr_raft_index_t last_commit[3];
-    tr_raft_node_id_t leader_by_term[TR_CHAOS_MAX_TRACKED_TERM];
-    uint64_t hash_by_index[TR_CHAOS_MAX_TRACKED_INDEX];
-    uint8_t hash_known[TR_CHAOS_MAX_TRACKED_INDEX];
+    tr_raft_term_t last_term[TR_CHAOS_GROUP_COUNT][3];
+    tr_raft_index_t last_commit[TR_CHAOS_GROUP_COUNT][3];
+    tr_raft_node_id_t
+        leader_by_term[TR_CHAOS_GROUP_COUNT][TR_CHAOS_MAX_TRACKED_TERM];
+    uint64_t
+        hash_by_index[TR_CHAOS_GROUP_COUNT][TR_CHAOS_MAX_TRACKED_INDEX];
+    uint8_t
+        hash_known[TR_CHAOS_GROUP_COUNT][TR_CHAOS_MAX_TRACKED_INDEX];
+    uint32_t max_user_apply_count_by_group[TR_CHAOS_GROUP_COUNT];
+    /* G100 compatibility alias for the original liveness assertion. */
     uint32_t max_user_apply_count;
 } tr_chaos_safety_t;
+
+static int tr_chaos_group_index(tr_raft_group_id_t group_id,
+                                size_t *out_index)
+{
+    size_t index;
+    static const tr_raft_group_id_t groups[TR_CHAOS_GROUP_COUNT] = {
+        TR_CHAOS_GROUP_1, TR_CHAOS_GROUP_2, TR_CHAOS_GROUP_3
+    };
+
+    if (out_index == NULL) {
+        return SALTS_EINVAL;
+    }
+    for (index = 0U; index < TR_CHAOS_GROUP_COUNT; ++index) {
+        if (groups[index] == group_id) {
+            *out_index = index;
+            return SALTS_OK;
+        }
+    }
+    return SALTS_ENOENT;
+}
 
 static uint32_t tr_chaos_random(uint32_t *state)
 {
@@ -310,8 +337,15 @@ static int tr_chaos_node_group_command(tr_chaos_process_node_t *node,
                     response->message_count, response->payload_size, result);
         }
     }
-    if (result == SALTS_OK) {
-        node->status = *response;
+    if (result == SALTS_OK && group_id != 0U) {
+        size_t group_index;
+
+        if (tr_chaos_group_index(group_id, &group_index) == SALTS_OK) {
+            node->group_status[group_index] = *response;
+            if (group_id == TR_CHAOS_DEFAULT_GROUP_ID) {
+                node->status = *response;
+            }
+        }
     }
     return result;
 }
@@ -335,69 +369,85 @@ static int tr_chaos_node_command(
 static int tr_chaos_track_status(tr_chaos_safety_t *safety,
                                  const tr_chaos_response_t *status)
 {
+    size_t group_index;
     size_t node_index;
 
-    if (status->node_id == 0U || status->node_id > 3U || status->faulted ||
+    if (safety == NULL || status == NULL ||
+        tr_chaos_group_index(status->group_id, &group_index) != SALTS_OK ||
+        status->node_id == 0U || status->node_id > 3U || status->faulted ||
         status->applied_index > status->commit_index ||
         status->commit_index > status->last_log_index ||
         status->term >= TR_CHAOS_MAX_TRACKED_TERM ||
         status->applied_index >= TR_CHAOS_MAX_TRACKED_INDEX) {
-        fprintf(stderr,
-                "chaos safety bounds node=%llu faulted=%d cause=%d term=%llu "
-                "last=%llu commit=%llu applied=%llu\n",
-                (unsigned long long) status->node_id, status->faulted,
-                status->cause, (unsigned long long) status->term,
-                (unsigned long long) status->last_log_index,
-                (unsigned long long) status->commit_index,
-                (unsigned long long) status->applied_index);
         return SALTS_EPROTO;
     }
-    node_index = (size_t) status->node_id - 1U;
-    if (status->term < safety->last_term[node_index] ||
-        status->commit_index < safety->last_commit[node_index]) {
+
+    node_index = (size_t)status->node_id - 1U;
+    if (status->term < safety->last_term[group_index][node_index] ||
+        status->commit_index <
+            safety->last_commit[group_index][node_index]) {
         fprintf(stderr,
-                "chaos safety regression node=%llu term=%llu previous-term=%llu "
-                "commit=%llu previous-commit=%llu\n",
-                (unsigned long long) status->node_id,
-                (unsigned long long) status->term,
-                (unsigned long long) safety->last_term[node_index],
-                (unsigned long long) status->commit_index,
-                (unsigned long long) safety->last_commit[node_index]);
+                "chaos safety regression group=%llu node=%llu term=%llu "
+                "previous-term=%llu commit=%llu previous-commit=%llu\n",
+                (unsigned long long)status->group_id,
+                (unsigned long long)status->node_id,
+                (unsigned long long)status->term,
+                (unsigned long long)
+                    safety->last_term[group_index][node_index],
+                (unsigned long long)status->commit_index,
+                (unsigned long long)
+                    safety->last_commit[group_index][node_index]);
         return SALTS_EPROTO;
     }
-    safety->last_term[node_index] = status->term;
-    safety->last_commit[node_index] = status->commit_index;
+    safety->last_term[group_index][node_index] = status->term;
+    safety->last_commit[group_index][node_index] = status->commit_index;
+
     if (status->role == TR_RAFT_LEADER) {
-        tr_raft_node_id_t known = safety->leader_by_term[status->term];
+        tr_raft_node_id_t known =
+            safety->leader_by_term[group_index][status->term];
 
         if (known != 0U && known != status->node_id) {
             fprintf(stderr,
-                    "chaos safety dual-leader term=%llu first=%llu second=%llu\n",
-                    (unsigned long long) status->term,
-                    (unsigned long long) known,
-                    (unsigned long long) status->node_id);
+                    "chaos safety dual-leader group=%llu term=%llu "
+                    "first=%llu second=%llu\n",
+                    (unsigned long long)status->group_id,
+                    (unsigned long long)status->term,
+                    (unsigned long long)known,
+                    (unsigned long long)status->node_id);
             return SALTS_EPROTO;
         }
-        safety->leader_by_term[status->term] = status->node_id;
+        safety->leader_by_term[group_index][status->term] =
+            status->node_id;
     }
-    if (status->applied_index != 0U) {
-        size_t applied = (size_t) status->applied_index;
 
-        if (safety->hash_known[applied] &&
-            safety->hash_by_index[applied] != status->applied_hash) {
+    if (status->applied_index != 0U) {
+        size_t applied = (size_t)status->applied_index;
+
+        if (safety->hash_known[group_index][applied] &&
+            safety->hash_by_index[group_index][applied] !=
+                status->applied_hash) {
             fprintf(stderr,
-                    "chaos safety hash index=%zu expected=%llu actual=%llu "
-                    "node=%llu\n",
-                    applied,
-                    (unsigned long long) safety->hash_by_index[applied],
-                    (unsigned long long) status->applied_hash,
-                    (unsigned long long) status->node_id);
+                    "chaos safety hash group=%llu index=%zu expected=%llu "
+                    "actual=%llu node=%llu\n",
+                    (unsigned long long)status->group_id, applied,
+                    (unsigned long long)
+                        safety->hash_by_index[group_index][applied],
+                    (unsigned long long)status->applied_hash,
+                    (unsigned long long)status->node_id);
             return SALTS_EPROTO;
         }
-        safety->hash_known[applied] = 1U;
-        safety->hash_by_index[applied] = status->applied_hash;
+        safety->hash_known[group_index][applied] = 1U;
+        safety->hash_by_index[group_index][applied] =
+            status->applied_hash;
     }
-    if (status->user_apply_count > safety->max_user_apply_count) {
+
+    if (status->user_apply_count >
+        safety->max_user_apply_count_by_group[group_index]) {
+        safety->max_user_apply_count_by_group[group_index] =
+            status->user_apply_count;
+    }
+    if (group_index == 0U &&
+        status->user_apply_count > safety->max_user_apply_count) {
         safety->max_user_apply_count = status->user_apply_count;
     }
     return SALTS_OK;
@@ -555,8 +605,9 @@ static int tr_chaos_node_stop(tr_chaos_process_node_t *node,
     return result;
 }
 
-static int tr_chaos_collect_command(
+static int tr_chaos_collect_group_command(
     tr_chaos_process_node_t *node,
+    tr_raft_group_id_t group_id,
     tr_chaos_command_kind_t kind,
     const uint8_t *command_payload,
     size_t command_size,
@@ -574,11 +625,42 @@ static int tr_chaos_node_backup_handoff(
     uint8_t *response_payload)
 {
     int operation_result = SALTS_OK;
-    int result = tr_chaos_collect_command(
-        node, TR_CHAOS_COMMAND_BACKUP_HANDOFF, NULL, 0U, network, codec,
+    int result = tr_chaos_collect_group_command(
+        node, TR_CHAOS_DEFAULT_GROUP_ID,
+        TR_CHAOS_COMMAND_BACKUP_HANDOFF, NULL, 0U, network, codec,
         safety, response_payload, &operation_result);
 
     return result != SALTS_OK ? result : operation_result;
+}
+
+static int tr_chaos_collect_group_command(
+    tr_chaos_process_node_t *node,
+    tr_raft_group_id_t group_id,
+    tr_chaos_command_kind_t kind,
+    const uint8_t *command_payload,
+    size_t command_size,
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload,
+    int *out_operation_result)
+{
+    tr_chaos_response_t response;
+    int result = tr_chaos_node_group_command(
+        node, group_id, kind, command_payload, command_size,
+        response_payload, &response);
+
+    if (result == SALTS_OK) {
+        result = tr_chaos_track_status(safety, &response);
+    }
+    if (result == SALTS_OK) {
+        result = tr_chaos_network_collect(network, codec, response_payload,
+                                          &response);
+    }
+    if (out_operation_result != NULL) {
+        *out_operation_result = response.operation_result;
+    }
+    return result;
 }
 
 static int tr_chaos_collect_command(
@@ -592,22 +674,10 @@ static int tr_chaos_collect_command(
     uint8_t *response_payload,
     int *out_operation_result)
 {
-    tr_chaos_response_t response;
-    int result = tr_chaos_node_command(
-        node, kind, command_payload, command_size, response_payload,
-        &response);
-
-    if (result == SALTS_OK) {
-        result = tr_chaos_track_status(safety, &response);
-    }
-    if (result == SALTS_OK) {
-        result = tr_chaos_network_collect(network, codec, response_payload,
-                                          &response);
-    }
-    if (out_operation_result != NULL) {
-        *out_operation_result = response.operation_result;
-    }
-    return result;
+    return tr_chaos_collect_group_command(
+        node, TR_CHAOS_DEFAULT_GROUP_ID, kind,
+        command_payload, command_size, network, codec, safety,
+        response_payload, out_operation_result);
 }
 
 static int tr_chaos_deliver_one(
@@ -652,9 +722,10 @@ static int tr_chaos_deliver_one(
     }
     for (index = 0; index < deliveries; ++index) {
         int operation_result = SALTS_OK;
-        int result = tr_chaos_collect_command(
-            target, TR_CHAOS_COMMAND_STEP, frame.data, frame.size, network,
-            codec, safety, response_payload, &operation_result);
+        int result = tr_chaos_collect_group_command(
+            target, frame.group_id, TR_CHAOS_COMMAND_STEP,
+            frame.data, frame.size, network, codec, safety,
+            response_payload, &operation_result);
 
         if (result != SALTS_OK || operation_result != SALTS_OK) {
             fprintf(stderr,
