@@ -47,6 +47,11 @@ int tr_raft_data_quorum_acknowledge(
     tr_raft_data_quorum_t *quorum,
     const tr_raft_data_ack_t *ack);
 bool tr_raft_data_quorum_ready(const tr_raft_data_quorum_t *quorum);
+
+/** Returns whether this specific configured peer has the staged bytes durable. */
+bool tr_raft_data_quorum_peer_durable(
+    const tr_raft_data_quorum_t *quorum,
+    tr_raft_node_id_t node_id);
 /** Builds a proposal whose data view borrows descriptor_storage. */
 int tr_raft_data_quorum_make_proposal(
     const tr_raft_data_quorum_t *quorum,
