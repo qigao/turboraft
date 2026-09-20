@@ -46,11 +46,11 @@ static size_t tr_chaos_group_slot(uint64_t group_id)
     return SIZE_MAX;
 }
 
-static tr_raft_node_id_t tr_chaos_group_preferred_leader(uint64_t group_id)
+static uint64_t tr_chaos_group_preferred_leader(uint64_t group_id)
 {
     size_t slot = tr_chaos_group_slot(group_id);
 
-    return slot == SIZE_MAX ? 0U : (tr_raft_node_id_t)(slot + 1U);
+    return slot == SIZE_MAX ? 0U : (uint64_t)(slot + 1U);
 }
 
 static void tr_chaos_put_u16(uint8_t *output, uint16_t value)
