@@ -213,13 +213,15 @@ spec("raft data stream")
         check_false(tr_raft_data_quorum_ready(quorum));
         ack.from = 4U;
         check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), SALTS_OK);
-        check_false(tr_raft_data_quorum_ready(quorum));
+        check_true(tr_raft_data_quorum_ready(quorum));
+        check_false(tr_raft_data_quorum_peer_durable(quorum, 1U));
+        check_false(tr_raft_data_quorum_peer_durable(quorum, 5U));
         ack.from = 1U;
         check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), SALTS_OK);
-        check_false(tr_raft_data_quorum_ready(quorum));
+        check_true(tr_raft_data_quorum_ready(quorum));
         ack.from = 5U;
         check_equal(tr_raft_data_quorum_acknowledge(quorum, &ack), SALTS_OK);
-        check_true(tr_raft_data_quorum_ready(quorum));
+        check_true(tr_raft_data_quorum_peer_durable(quorum, 5U));
         tr_raft_data_quorum_destroy(quorum);
     }
 
