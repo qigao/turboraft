@@ -94,6 +94,8 @@ typedef struct tr_raft_service_status {
     int cause;
     bool backup_prepared;
     bool read_state_available;
+    size_t completed_read_count;
+    size_t max_completed_reads;
     bool journal_compaction_pending;
     tr_raft_runtime_result_t runtime;
     tr_raft_status_t core;
