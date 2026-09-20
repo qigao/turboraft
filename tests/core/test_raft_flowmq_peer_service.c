@@ -54,6 +54,25 @@ typedef struct tr_flowmq_tls_probe {
     const char *failure_stage;
 } tr_flowmq_tls_probe_t;
 
+typedef struct tr_flowmq_snapshot_fixture {
+    tr_raft_snapshot_sender_t *sender;
+    tr_raft_snapshot_receiver_t *receiver;
+    tr_raft_snapshot_ack_t pending_ack;
+    tr_raft_snapshot_ack_t received_ack;
+    tr_raft_group_id_t sibling_groups[8];
+    size_t sibling_count;
+    size_t snapshot_chunk_count;
+    size_t source_read_count;
+    size_t source_release_count;
+    size_t sink_write_count;
+    uint8_t sink_data[193];
+    int pending_ack_ready;
+    int received_ack_ready;
+    int sink_begun;
+    int sink_committed;
+    int sink_aborted;
+} tr_flowmq_snapshot_fixture_t;
+
 typedef struct tr_flowmq_live_service_config {
     tr_raft_node_id_t local_node_id;
     const char *local_identity;
@@ -175,6 +194,220 @@ static int capture_payload(void *context,
     capture->group_ids[capture->count] = payload->group_id;
     capture->count++;
     return SALTS_OK;
+}
+
+static int flowmq_snapshot_source_read(
+    void *context,
+    uint64_t offset,
+    uint8_t *buffer,
+    size_t capacity,
+    size_t *out_size)
+{
+    tr_flowmq_snapshot_fixture_t *fixture =
+        (tr_flowmq_snapshot_fixture_t *)context;
+    size_t index;
+
+    if (fixture == NULL || out_size == NULL ||
+        offset > sizeof(fixture->sink_data) ||
+        capacity > sizeof(fixture->sink_data) - (size_t)offset ||
+        (capacity != 0U && buffer == NULL)) {
+        return SALTS_EINVAL;
+    }
+    for (index = 0U; index < capacity; ++index) {
+        buffer[index] = (uint8_t)((offset + index) & 0xffU);
+    }
+    ++fixture->source_read_count;
+    *out_size = capacity;
+    return SALTS_OK;
+}
+
+static void flowmq_snapshot_source_release(void *context)
+{
+    tr_flowmq_snapshot_fixture_t *fixture =
+        (tr_flowmq_snapshot_fixture_t *)context;
+
+    if (fixture != NULL) {
+        ++fixture->source_release_count;
+    }
+}
+
+static int flowmq_snapshot_sink_begin(
+    void *context,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    uint64_t snapshot_size)
+{
+    tr_flowmq_snapshot_fixture_t *fixture =
+        (tr_flowmq_snapshot_fixture_t *)context;
+
+    if (fixture == NULL || leader_term != 3U ||
+        snapshot_index != 10U || snapshot_term != 2U ||
+        configuration == NULL || configuration->member_count != 1U ||
+        snapshot_size != sizeof(fixture->sink_data)) {
+        return SALTS_EPROTO;
+    }
+    fixture->sink_begun = 1;
+    return SALTS_OK;
+}
+
+static int flowmq_snapshot_sink_write(
+    void *context,
+    uint64_t offset,
+    const uint8_t *data,
+    size_t size)
+{
+    tr_flowmq_snapshot_fixture_t *fixture =
+        (tr_flowmq_snapshot_fixture_t *)context;
+
+    if (fixture == NULL || offset > sizeof(fixture->sink_data) ||
+        size > sizeof(fixture->sink_data) - (size_t)offset ||
+        (size != 0U && data == NULL)) {
+        return SALTS_EINVAL;
+    }
+    if (size != 0U) {
+        memcpy(fixture->sink_data + (size_t)offset, data, size);
+    }
+    ++fixture->sink_write_count;
+    return SALTS_OK;
+}
+
+static int flowmq_snapshot_sink_commit(void *context)
+{
+    tr_flowmq_snapshot_fixture_t *fixture =
+        (tr_flowmq_snapshot_fixture_t *)context;
+    size_t index;
+
+    if (fixture == NULL || !fixture->sink_begun) {
+        return SALTS_EPROTO;
+    }
+    for (index = 0U; index < sizeof(fixture->sink_data); ++index) {
+        if (fixture->sink_data[index] != (uint8_t)(index & 0xffU)) {
+            return SALTS_EPROTO;
+        }
+    }
+    fixture->sink_committed = 1;
+    return SALTS_OK;
+}
+
+static void flowmq_snapshot_sink_abort(void *context)
+{
+    tr_flowmq_snapshot_fixture_t *fixture =
+        (tr_flowmq_snapshot_fixture_t *)context;
+
+    if (fixture != NULL) {
+        fixture->sink_aborted = 1;
+    }
+}
+
+static int flowmq_snapshot_node1_payload(
+    void *context,
+    const tr_raft_transport_payload_t *payload)
+{
+    tr_flowmq_snapshot_fixture_t *fixture =
+        (tr_flowmq_snapshot_fixture_t *)context;
+
+    if (fixture == NULL || payload == NULL ||
+        payload->group_id != 100U ||
+        payload->kind != TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK) {
+        return SALTS_EPROTO;
+    }
+    fixture->received_ack = payload->data.snapshot_ack;
+    fixture->received_ack_ready = 1;
+    return SALTS_OK;
+}
+
+static int flowmq_snapshot_node2_payload(
+    void *context,
+    const tr_raft_transport_payload_t *payload)
+{
+    tr_flowmq_snapshot_fixture_t *fixture =
+        (tr_flowmq_snapshot_fixture_t *)context;
+
+    if (fixture == NULL || payload == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (payload->group_id == 100U &&
+        payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+        tr_raft_snapshot_receive_result_t receive_result;
+        int result;
+
+        memset(&receive_result, 0, sizeof(receive_result));
+        result = tr_raft_snapshot_receiver_handle(
+            fixture->receiver, &payload->data.snapshot_chunk,
+            &receive_result);
+        if (result != SALTS_OK) {
+            return result;
+        }
+        fixture->pending_ack = receive_result.ack;
+        fixture->pending_ack_ready = 1;
+        ++fixture->snapshot_chunk_count;
+        return SALTS_OK;
+    }
+    if ((payload->group_id == 101U || payload->group_id == 102U) &&
+        payload->kind == TR_RAFT_WIRE_PAYLOAD_RAFT) {
+        if (fixture->sibling_count >=
+            sizeof(fixture->sibling_groups) /
+                sizeof(fixture->sibling_groups[0])) {
+            return SALTS_ENOSPC;
+        }
+        fixture->sibling_groups[fixture->sibling_count++] =
+            payload->group_id;
+        return SALTS_OK;
+    }
+    return SALTS_EPROTO;
+}
+
+static int flowmq_snapshot_enqueue_next(
+    tr_raft_flowmq_peer_service_t *service,
+    tr_raft_snapshot_sender_t *sender,
+    int *out_done)
+{
+    tr_raft_snapshot_chunk_t chunk;
+    tr_raft_transport_payload_t payload;
+    int result;
+
+    if (service == NULL || sender == NULL || out_done == NULL) {
+        return SALTS_EINVAL;
+    }
+    memset(&chunk, 0, sizeof(chunk));
+    result = tr_raft_snapshot_sender_next_chunk(sender, &chunk);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    memset(&payload, 0, sizeof(payload));
+    payload.group_id = 100U;
+    payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
+    payload.data.snapshot_chunk = chunk;
+    result = tr_raft_flowmq_peer_service_enqueue_payload(service, &payload);
+    if (result != SALTS_OK) {
+        (void)tr_raft_snapshot_sender_cancel_chunk(
+            sender, chunk.snapshot_offset);
+        return result;
+    }
+    *out_done = chunk.done ? 1 : 0;
+    return SALTS_OK;
+}
+
+static int flowmq_snapshot_enqueue_siblings(
+    tr_raft_flowmq_peer_service_t *service,
+    uint64_t term)
+{
+    tr_raft_message_t message;
+
+    memset(&message, 0, sizeof(message));
+    message.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+    message.from = 1U;
+    message.to = 2U;
+    message.term = term;
+    if (tr_raft_flowmq_peer_service_enqueue_group(
+            service, 101U, &message) != SALTS_OK) {
+        return SALTS_ENOSPC;
+    }
+    ++message.term;
+    return tr_raft_flowmq_peer_service_enqueue_group(
+        service, 102U, &message);
 }
 
 static tr_raft_handshake_result_t handshake_result(
