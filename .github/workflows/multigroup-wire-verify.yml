@@ -6,6 +6,7 @@ on:
       - feature/multi-group-wire
       - feature/multi-group-multiplex
       - feature/streaming-snapshot
+      - test/multi-group-r0-acceptance
   workflow_dispatch:
 
 concurrency:
