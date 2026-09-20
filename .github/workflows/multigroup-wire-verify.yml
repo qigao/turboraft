@@ -1181,6 +1181,34 @@ jobs:
             -o /tmp/streaming_receiver_behavior
           /tmp/streaming_receiver_behavior
 
+      - name: Run Service streaming snapshot policy behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -Isrc \
+            -Isrc/core \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/cstl/include \
+            -I../salts/cmeta/include \
+            -I../salts/tinytest/include \
+            tests/core/test_raft_snapshot_policy.c \
+            src/service/raft_service.c \
+            src/runtime/raft_runtime.c \
+            src/core/raft_core.c \
+            src/core/raft_configuration.c \
+            src/core/raft_membership.c \
+            src/core/raft_membership_transition.c \
+            src/core/raft_peer_set.c \
+            src/core/raft_log.c \
+            ../salts/cstl/src/vec.c \
+            ../salts/tinytest/src/tinytest.c \
+            ../salts/tinytest/src/tinymock.c \
+            -o /tmp/turboraft_snapshot_policy_tests
+          /tmp/turboraft_snapshot_policy_tests
+
       - name: Verify current public group API
         shell: bash
         run: |
