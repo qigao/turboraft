@@ -1326,7 +1326,14 @@ static void tr_step_read_index_response(tr_raft_core_t *core,
     }
     core->pending_read_acks |= bit;
     if (tr_core_has_quorum(core, core->pending_read_acks)) {
+        size_t required = tr_core_voter_count(core) - 1U;
+
         tr_read_emit_active(core, ready);
+        if (core->waiting_read_count != 0U &&
+            required <= ready->message_capacity - ready->message_count) {
+            tr_read_move_waiting_to_active(core);
+            tr_read_start_active_barrier(core, ready);
+        }
     }
 }
 
