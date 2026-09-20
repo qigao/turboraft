@@ -61,6 +61,8 @@ typedef struct tr_flowmq_live_service_config {
     const char *peer_identity;
     const char *peer_endpoint;
     tr_raft_flowmq_tls_config_t peer_tls;
+    tr_raft_transport_payload_handler_fn on_payload;
+    void *payload_context;
     tr_flowmq_message_capture_t *capture;
 } tr_flowmq_live_service_config_t;
 
@@ -423,8 +425,10 @@ static int create_live_service(
     config.receive_hwm_bytes = TR_FLOWMQ_TEST_HWM_BYTES;
     config.reconnect_initial_ms = 1U;
     config.reconnect_max_ms = 16U;
-    config.on_payload = capture_payload;
-    config.payload_context = live->capture;
+    config.on_payload =
+        live->on_payload != NULL ? live->on_payload : capture_payload;
+    config.payload_context =
+        live->on_payload != NULL ? live->payload_context : live->capture;
     return tr_raft_flowmq_peer_service_create(&config, out_service);
 }
 
