@@ -7,6 +7,49 @@
 
 enum { TEST_STREAM_BYTES = 256U * 1024U };
 
+typedef struct generated_stream_source {
+    uint64_t size;
+    size_t read_calls;
+    size_t max_requested;
+    size_t release_count;
+} generated_stream_source_t;
+
+static int generated_stream_read(
+    void *context,
+    uint64_t offset,
+    uint8_t *buffer,
+    size_t capacity,
+    size_t *out_size)
+{
+    generated_stream_source_t *source =
+        (generated_stream_source_t *)context;
+
+    if (source == NULL || out_size == NULL ||
+        offset > source->size ||
+        capacity > source->size - offset ||
+        (capacity != 0U && buffer == NULL)) {
+        return SALTS_EINVAL;
+    }
+    if (capacity != 0U) {
+        memset(buffer, (int)(offset & 0xffU), capacity);
+    }
+    ++source->read_calls;
+    if (capacity > source->max_requested) {
+        source->max_requested = capacity;
+    }
+    *out_size = capacity;
+    return SALTS_OK;
+}
+
+static void generated_stream_release(void *context)
+{
+    generated_stream_source_t *source =
+        (generated_stream_source_t *)context;
+    if (source != NULL) {
+        ++source->release_count;
+    }
+}
+
 typedef struct test_stream_sink {
     uint8_t data[TEST_STREAM_BYTES];
     size_t used;
@@ -293,4 +336,63 @@ spec("raft data stream")
         check_equal(status.acknowledged_offset, sizeof(source));
         tr_raft_data_stream_sender_destroy(sender);
     }
+    it("reads a multi-gigabyte logical stream through bounded chunk slots")
+    {
+        const uint64_t logical_size =
+            UINT64_C(5) * 1024U * 1024U * 1024U + 17U;
+        tr_raft_data_stream_sender_config_t config = {0};
+        tr_raft_data_stream_sender_t *sender = NULL;
+        tr_raft_data_stream_source_t source;
+        tr_raft_data_stream_sender_status_t status;
+        tr_raft_data_chunk_t chunks[4];
+        generated_stream_source_t generated;
+        size_t index;
+
+        memset(&source, 0, sizeof(source));
+        memset(&generated, 0, sizeof(generated));
+        generated.size = logical_size;
+        source.context = &generated;
+        source.size = logical_size;
+        memset(source.digest, 0x6d, sizeof(source.digest));
+        source.read_at = generated_stream_read;
+        source.release = generated_stream_release;
+
+        config.self_id = 1U;
+        config.peer_id = 2U;
+        config.max_stream_bytes = logical_size;
+        config.chunk_size = TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES;
+        config.max_inflight_chunks = 4U;
+
+        check_equal(tr_raft_data_stream_sender_create(&config, &sender),
+                    SALTS_OK);
+        check_equal(tr_raft_data_stream_sender_begin_source(
+                        sender, 9U, 700U, &source),
+                    SALTS_OK);
+
+        for (index = 0U; index < 4U; ++index) {
+            check_equal(tr_raft_data_stream_sender_next(
+                            sender, &chunks[index]),
+                        SALTS_OK);
+            check_equal(chunks[index].stream_size, logical_size);
+            check_equal(chunks[index].data_length,
+                        TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES);
+            check_equal(chunks[index].stream_offset,
+                        index * TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES);
+        }
+        check_equal(tr_raft_data_stream_sender_next(sender, &chunks[0]),
+                    SALTS_EBUSY);
+        check_equal(generated.read_calls, 4U);
+        check_equal(generated.max_requested,
+                    TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES);
+        check_equal(tr_raft_data_stream_sender_get_status(sender, &status),
+                    SALTS_OK);
+        check_equal(status.stream_size, logical_size);
+        check_equal(status.inflight_chunks, 4U);
+
+        tr_raft_data_stream_sender_reset(sender);
+        check_equal(generated.release_count, 1U);
+        tr_raft_data_stream_sender_destroy(sender);
+        check_equal(generated.release_count, 1U);
+    }
+
 }
