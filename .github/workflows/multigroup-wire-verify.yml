@@ -1209,6 +1209,86 @@ jobs:
             -o /tmp/turboraft_snapshot_policy_tests
           /tmp/turboraft_snapshot_policy_tests
 
+      - name: Run real multiprocess multi-group chaos executable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t SALTS_INC < <(
+            find ../salts -type d | sed 's#^#-I#'
+          )
+          mapfile -t UTILS_INC < <(
+            find ../salts-utils -type d | sed 's#^#-I#'
+          )
+
+          CFLAGS=(
+            -std=c11
+            -O1
+            -ffunction-sections
+            -fdata-sections
+            -Iinclude
+            -Isrc
+            -Isrc/core
+            -Isrc/service
+            -Isrc/wire/generated
+            -Itests/chaos
+            -I../xxhash
+            "${SALTS_INC[@]}"
+            "${UTILS_INC[@]}"
+          )
+
+          CORE_SRCS=(
+            src/core/raft_core.c
+            src/core/raft_configuration.c
+            src/core/raft_membership.c
+            src/core/raft_membership_transition.c
+            src/core/raft_peer_set.c
+            src/core/raft_log.c
+            src/runtime/raft_runtime.c
+            src/wire/raft_wire_codec.c
+            src/wire/generated/turboraft_wire_tbe.c
+            src/wire/generated/turboraft_wire_v3_tbe.c
+            ../salts-utils/tbe/data_bind/data_bind.c
+            ../salts-utils/tbe/data_bind/tbe_typed.c
+            ../salts/cstl/src/vec.c
+            ../salts/utils/src/salts_cmeta_data.c
+          )
+
+          SUPPORT_SRCS=(
+            ../salts/utils/src/salts_error.c
+            ../salts/utils/src/salts_thread.c
+            ../salts/platform/src/thread_posix.c
+            ../salts/platform/src/clock.c
+          )
+
+          cc "${CFLAGS[@]}" \
+            tests/chaos/test_raft_multiprocess_chaos.c \
+            "${CORE_SRCS[@]}" \
+            "${SUPPORT_SRCS[@]}" \
+            ../salts/utils/src/salts_process.c \
+            ../salts/utils/src/tstr.c \
+            ../salts/vendor/sds/sds.c \
+            ../salts/tinytest/src/tinytest.c \
+            ../salts/tinytest/src/tinymock.c \
+            -Wl,--gc-sections \
+            -pthread -lm -o /tmp/turboraft_multiprocess_chaos_tests
+
+          cc "${CFLAGS[@]}" \
+            tests/chaos/raft_multiprocess_node.c \
+            src/service/raft_service.c \
+            src/storage/raft_wal_storage.c \
+            "${CORE_SRCS[@]}" \
+            "${SUPPORT_SRCS[@]}" \
+            ../salts/utils/src/salts_fs.c \
+            ../salts/utils/src/tlog.c \
+            ../xxhash/xxhash.c \
+            -Wl,--gc-sections \
+            -pthread -lm -lcrypto \
+            -o /tmp/turboraft_multiprocess_node
+
+          TURBORAFT_CHAOS_NODE=/tmp/turboraft_multiprocess_node \
+            /tmp/turboraft_multiprocess_chaos_tests
+
       - name: Verify current public group API
         shell: bash
         run: |
