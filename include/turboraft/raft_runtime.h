@@ -78,6 +78,10 @@ typedef struct tr_raft_runtime {
     tr_raft_storage_t storage;
     tr_raft_transport_t transport;
     tr_raft_state_machine_t state_machine;
+    const tr_raft_entry_t *blocked_entries;
+    size_t blocked_entry_count;
+    size_t blocked_apply_begin;
+    bool apply_blocked;
     bool faulted;
 } tr_raft_runtime_t;
 
@@ -90,13 +94,27 @@ int tr_raft_runtime_init(tr_raft_runtime_t *runtime,
  * Storage callbacks implement one atomic transaction. Failed commit means no
  * writes became durable. enqueue() means accepted by a reliable local queue.
  * apply_batch() atomically persists application state and its applied index.
- * Any callback failure faults the runtime and leaves Core unadvanced.
+ *
+ * SALTS_EBUSY from apply_batch is a retryable local-availability gate: storage
+ * and transport are not replayed, Core remains unadvanced, and the exact
+ * remaining committed suffix is retained until tr_raft_runtime_retry_apply().
+ * Every other callback failure faults the runtime.
  */
 int tr_raft_runtime_process(tr_raft_runtime_t *runtime,
                             const tr_raft_ready_t *ready,
                             tr_raft_runtime_result_t *result);
 
 bool tr_raft_runtime_is_faulted(const tr_raft_runtime_t *runtime);
+
+/** True while a committed suffix is waiting on local FSM availability. */
+bool tr_raft_runtime_apply_blocked(const tr_raft_runtime_t *runtime);
+
+/**
+ * Retries only the blocked state-machine suffix, then advances Core.
+ * Durability and transport effects from the original Ready are never replayed.
+ */
+int tr_raft_runtime_retry_apply(tr_raft_runtime_t *runtime,
+                                tr_raft_runtime_result_t *result);
 
 #ifdef __cplusplus
 }
