@@ -750,7 +750,9 @@ static bool tr_read_context_exists(const tr_raft_core_t *core,
 
 static void tr_read_clear_active(tr_raft_core_t *core)
 {
-    tr_read_reset_all(core);
+    core->pending_read_context_id = 0U;
+    core->pending_read_index = 0U;
+    core->pending_read_acks = 0U;
     core->pending_read_count = 0U;
     memset(core->pending_read_contexts, 0,
            sizeof(core->pending_read_contexts));
