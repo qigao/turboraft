@@ -297,6 +297,7 @@ jobs:
             -I../salts/tinytest/include \
             tests/core/test_raft_runtime.c \
             src/runtime/raft_runtime.c \
+            src/stream/raft_data_stream.c \
             src/core/raft_core.c \
             src/core/raft_configuration.c \
             src/core/raft_membership.c \
@@ -306,6 +307,7 @@ jobs:
             ../salts/cstl/src/vec.c \
             ../salts/tinytest/src/tinytest.c \
             ../salts/tinytest/src/tinymock.c \
+            -lcrypto \
             -o /tmp/turboraft_runtime_tests
           /tmp/turboraft_runtime_tests
 
