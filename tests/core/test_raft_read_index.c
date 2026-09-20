@@ -202,6 +202,7 @@ spec("raft read index")
         response.to = 1U;
         response.term = term;
         response.granted = true;
+        response.previous_log_index = 1U;
         response.match_index = 2U;
         ready = read_ready(messages);
         check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
