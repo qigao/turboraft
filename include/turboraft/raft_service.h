@@ -3,6 +3,7 @@
 
 #include <turboraft/raft_runtime.h>
 #include <turboraft/raft_snapshot_stream.h>
+#include <turboraft/raft_snapshot_stream.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,6 +25,18 @@ typedef int (*tr_raft_snapshot_store_fn)(
     const tr_raft_conf_t *configuration,
     const uint8_t *data,
     size_t size);
+
+typedef int (*tr_raft_snapshot_source_create_fn)(
+    void *context,
+    tr_raft_index_t applied_index,
+    tr_raft_snapshot_source_t *out_source);
+
+typedef int (*tr_raft_snapshot_source_store_fn)(
+    void *context,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source);
 
 typedef int (*tr_raft_snapshot_source_create_fn)(
     void *context,
