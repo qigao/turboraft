@@ -1,5 +1,47 @@
 # Multi-process chaos testing
 
+## R0 Multi-Group acceptance
+
+The multiprocess harness uses three physical child processes. Each child now
+hosts three independent Raft groups (100, 200, and 300), each with its own
+Service instance, WAL prefix, applied hash, and recovery state. The process
+still owns one codec/stdin/stdout IPC link, so all group frames share the same
+simulated physical node-to-node network owned by the parent.
+
+The IPC protocol is version 2. Every group-scoped command and response carries
+an explicit non-zero group ID; STOP is process-scoped and uses group ID zero.
+The parent preserves group identity on queued wire frames and tracks term,
+commit, leader, and application-hash safety independently for every
+(group,node) pair.
+
+The dedicated R0 acceptance scenario requires:
+
+- group 100 to elect node 1, group 200 node 2, and group 300 node 3 under
+  deterministic group-specific initial election timeouts;
+- an unknown group request to return a routing rejection while the same child
+  process continues serving a valid group;
+- group-100 frames to remain intentionally queued while groups 200 and 300
+  continue ticking, replicating, committing, and applying independent
+  proposals over the same simulated physical link;
+- one physical child restart to reopen all three independent WAL prefixes and
+  recover the committed state of the active groups.
+
+Each child derives WAL prefixes from its physical-node base path, for example:
+
+```text
+multigroup-node-1.db.g100
+multigroup-node-1.db.g200
+multigroup-node-1.db.g300
+```
+
+The R0 acceptance source is intentionally part of the existing chaos target so
+the final project-level gate exercises both the original deterministic
+single-group fault campaign (group 100 compatibility path) and the new
+Multi-Group scenario. A syntax-only verifier is useful during development but
+does not substitute for the real multiprocess CTest run.
+
+## Existing deterministic fault campaign
+
 `turboraft.multiprocess_chaos` runs three independent TurboRaft child
 processes. Each child owns a Service instance and a distinct segmented WAL.
 The parent process owns the only simulated network queue and routes actual
