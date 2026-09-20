@@ -86,14 +86,25 @@ head c53bd888d088145f1585c4b2aa2fe509733fef9d
 result SUCCESS
 ~~~
 
+A separate combined snapshot/scheduler executable also streams G100 through
+the same bounded per-peer group scheduler while G101/G102 protocol traffic is
+scheduled between every snapshot chunk. The receiver completes digest
+verification and commits the snapshot:
+
+~~~text
+run 35501381815
+head b0882af6839145223965d16d318283d03fa2522f
+result SUCCESS
+~~~
+
 ## Remaining combined R0 evidence
 
 The following still require the complete project/private dependency
 environment before R0 is closed:
 
 - run `turboraft.multiprocess_chaos` with the production wire codec;
-- exercise snapshot catch-up for one group while sibling groups continue
-  making progress on the shared physical transport;
+- run the authoritative production FlowMQ/mTLS snapshot-catch-up case while
+  sibling groups continue committing on the shared physical transport;
 - run the full Release CTest suite with zero failures.
 
 Unknown/stopped-group routing isolation is independently covered by the
