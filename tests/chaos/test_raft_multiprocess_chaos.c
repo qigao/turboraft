@@ -96,6 +96,7 @@ static const char *tr_chaos_configured_first_text;
 static const char *tr_chaos_configured_count_text;
 
 typedef struct tr_chaos_response {
+    tr_raft_group_id_t group_id;
     int operation_result;
     uint32_t message_count;
     uint32_t payload_size;
@@ -122,6 +123,7 @@ typedef struct tr_chaos_process_node {
 } tr_chaos_process_node_t;
 
 typedef struct tr_chaos_frame {
+    tr_raft_group_id_t group_id;
     tr_raft_node_id_t from;
     tr_raft_node_id_t to;
     uint32_t size;
@@ -207,8 +209,9 @@ static int tr_chaos_process_write_exact(salts_process_t *process,
     return SALTS_OK;
 }
 
-static int tr_chaos_node_command(tr_chaos_process_node_t *node,
-                                 tr_chaos_command_kind_t kind,
+static int tr_chaos_node_group_command(tr_chaos_process_node_t *node,
+                                       tr_raft_group_id_t group_id,
+                                       tr_chaos_command_kind_t kind,
                                  const uint8_t *payload,
                                  size_t payload_size,
                                  uint8_t *response_payload,
@@ -231,6 +234,7 @@ static int tr_chaos_node_command(tr_chaos_process_node_t *node,
     tr_chaos_put_u16(command + 6U, (uint16_t) kind);
     tr_chaos_put_u32(command + 8U, request_id);
     tr_chaos_put_u32(command + 12U, (uint32_t) payload_size);
+    tr_chaos_put_u64(command + TR_CHAOS_COMMAND_GROUP_OFFSET, group_id);
     result = tr_chaos_process_write_exact(node->process, command,
                                           sizeof(command));
     if (result == SALTS_OK && payload_size != 0U) {
@@ -267,6 +271,8 @@ static int tr_chaos_node_command(tr_chaos_process_node_t *node,
         return SALTS_EPROTO;
     }
     memset(response, 0, sizeof(*response));
+    response->group_id =
+        tr_chaos_get_u64(header + TR_CHAOS_RESPONSE_GROUP_OFFSET);
     response->operation_result = (int) tr_chaos_get_u32(header + 12U);
     response->message_count = tr_chaos_get_u32(header + 16U);
     response->payload_size = tr_chaos_get_u32(header + 20U);
@@ -282,6 +288,7 @@ static int tr_chaos_node_command(tr_chaos_process_node_t *node,
     response->applied_index = tr_chaos_get_u64(header + 80U);
     response->applied_hash = tr_chaos_get_u64(header + 88U);
     if (response->node_id != node->id ||
+        response->group_id != group_id ||
         response->payload_size > TR_CHAOS_MAX_RESPONSE_BYTES ||
         (response->payload_size != 0U && response_payload == NULL)) {
         fprintf(stderr,
@@ -307,6 +314,22 @@ static int tr_chaos_node_command(tr_chaos_process_node_t *node,
         node->status = *response;
     }
     return result;
+}
+
+static int tr_chaos_node_command(
+    tr_chaos_process_node_t *node,
+    tr_chaos_command_kind_t kind,
+    const uint8_t *payload,
+    size_t payload_size,
+    uint8_t *response_payload,
+    tr_chaos_response_t *response)
+{
+    tr_raft_group_id_t group_id =
+        kind == TR_CHAOS_COMMAND_STOP ? 0U : TR_CHAOS_DEFAULT_GROUP_ID;
+
+    return tr_chaos_node_group_command(
+        node, group_id, kind, payload, payload_size,
+        response_payload, response);
 }
 
 static int tr_chaos_track_status(tr_chaos_safety_t *safety,
@@ -428,7 +451,11 @@ static int tr_chaos_network_collect(tr_chaos_network_t *network,
                     (unsigned long long) message.to, frame_size);
             return SALTS_EPROTO;
         }
+        if (metadata.group_id == 0U) {
+            return SALTS_EPROTO;
+        }
         frame = &network->frames[network->count++];
+        frame->group_id = metadata.group_id;
         frame->from = message.from;
         frame->to = message.to;
         frame->size = frame_size;
