@@ -1215,6 +1215,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          rm -rf ../salts-utils-legacy
+          git clone --no-checkout https://github.com/qigao/salts-utils.git \
+            ../salts-utils-legacy
+          git -C ../salts-utils-legacy fetch --depth 1 origin \
+            be66b6271d8ab0a1d70b0f43ab651e079d8bb086
+          git -C ../salts-utils-legacy checkout --detach \
+            be66b6271d8ab0a1d70b0f43ab651e079d8bb086
+
           cat > /tmp/tstr_process_shim.c <<'EOF'
           #include "tstr.h"
           #include "sds.h"
@@ -1267,38 +1275,16 @@ jobs:
             -I../salts/cmeta/include
             -I../salts/tinytest/include
             -I../salts/vendor/sds
-            -I../salts-utils/tbe/data_bind
-            -I../salts-utils/tbe/schema/include
-            -I../salts-utils/tbe/schema/parser
-            -I../salts-utils/parser/csv_parser/include
-            -I../salts-utils/parser/cyaml/adapter
-            -I../salts-utils/parser/cyaml/src
-            -I../salts-utils/parser/json_parser/include
-            -I../salts-utils/parser/query_vm/include
-            -I../salts-utils/parser/xml_parser/include
+            -I../salts-utils-legacy/tbe/data_bind
+            -I../salts-utils-legacy/tbe/schema/include
+            -I../salts-utils-legacy/tbe/schema/parser
+            -I../salts-utils-legacy/parser/csv_parser/include
+            -I../salts-utils-legacy/parser/cyaml/adapter
+            -I../salts-utils-legacy/parser/cyaml/src
+            -I../salts-utils-legacy/parser/json_parser/include
+            -I../salts-utils-legacy/parser/query_vm/include
+            -I../salts-utils-legacy/parser/xml_parser/include
           )
-
-          python3 - <<'PY'
-          import pathlib
-          import re
-
-          pattern = re.compile(
-              r'TBE_TYPED_DESCRIPTOR_INIT\(&([A-Za-z0-9_]+)_TYPED_TYPE\);'
-          )
-          for name in (
-              "src/wire/generated/turboraft_wire_tbe.c",
-              "src/wire/generated/turboraft_wire_v3_tbe.c",
-          ):
-              path = pathlib.Path(name)
-              text = path.read_text()
-              updated, count = pattern.subn(
-                  r'TBE_TYPED_DESCRIPTOR_INIT(&\1_TYPED_TYPE, &\1_CMETA_DATA);',
-                  text,
-              )
-              if count == 0:
-                  raise SystemExit(f"no stale descriptor init found in {name}")
-              path.write_text(updated)
-          PY
 
           CORE_SRCS=(
             src/core/raft_core.c
@@ -1311,8 +1297,8 @@ jobs:
             src/wire/raft_wire_codec.c
             src/wire/generated/turboraft_wire_tbe.c
             src/wire/generated/turboraft_wire_v3_tbe.c
-            ../salts-utils/tbe/data_bind/data_bind.c
-            ../salts-utils/tbe/data_bind/tbe_typed.c
+            ../salts-utils-legacy/tbe/data_bind/data_bind.c
+            ../salts-utils-legacy/tbe/data_bind/tbe_typed.c
             ../salts/cstl/src/vec.c
             ../salts/utils/src/salts_cmeta_data.c
           )
