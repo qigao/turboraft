@@ -165,6 +165,13 @@ target_link_libraries(turboraft_snapshot_group_isolation_tests
 add_test(NAME turboraft.snapshot_group_isolation
          COMMAND turboraft_snapshot_group_isolation_tests)
 
+add_executable(turboraft_proposal_batch_tests
+               test_raft_proposal_batch.c)
+target_link_libraries(turboraft_proposal_batch_tests
+                      PRIVATE TurboRaft::Service Salts::TinyTest)
+add_test(NAME turboraft.proposal_batch
+         COMMAND turboraft_proposal_batch_tests)
+
 add_executable(turboraft_snapshot_policy_tests
                test_raft_snapshot_policy.c)
 target_link_libraries(turboraft_snapshot_policy_tests
