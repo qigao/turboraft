@@ -214,6 +214,72 @@ int tr_raft_log_append_local(tr_raft_log_t *log,
     return SALTS_OK;
 }
 
+int tr_raft_log_append_local_batch(
+    tr_raft_log_t *log,
+    tr_raft_log_term_t term,
+    const tr_raft_proposal_t *proposals,
+    size_t proposal_count,
+    const tr_raft_log_entry_t **out_entries)
+{
+    size_t old_count;
+    tr_raft_log_index_t first_index;
+    tr_raft_log_entry_t *entries;
+    size_t index;
+    int result;
+
+    if (out_entries != NULL) {
+        *out_entries = NULL;
+    }
+    if (log == NULL || term == 0U || proposals == NULL ||
+        proposal_count == 0U ||
+        proposal_count > TR_RAFT_MAX_PROPOSAL_BATCH) {
+        return SALTS_EINVAL;
+    }
+    old_count = tr_raft_log_count(log);
+    if (old_count > log->max_entries ||
+        proposal_count > log->max_entries - old_count) {
+        return SALTS_ENOSPC;
+    }
+    for (index = 0U; index < proposal_count; ++index) {
+        if (proposals[index].command_id == 0U ||
+            proposals[index].data_length > TR_RAFT_LOG_MAX_ENTRY_BYTES ||
+            (proposals[index].data_length != 0U &&
+             proposals[index].data == NULL)) {
+            return SALTS_EINVAL;
+        }
+    }
+
+    first_index = tr_raft_log_last_index(log) + 1U;
+    result = tr_raft_stl_status_to_error(
+        vec_resize(&log->entries, old_count + proposal_count));
+    if (result != SALTS_OK) {
+        return result;
+    }
+    entries = (tr_raft_log_entry_t *)vec_at(&log->entries, old_count);
+    if (entries == NULL) {
+        (void)vec_resize(&log->entries, old_count);
+        return SALTS_EPROTO;
+    }
+
+    for (index = 0U; index < proposal_count; ++index) {
+        tr_raft_log_entry_t *entry = &entries[index];
+
+        memset(entry, 0, sizeof(*entry));
+        entry->index = first_index + index;
+        entry->term = term;
+        entry->command_id = proposals[index].command_id;
+        entry->data_length = proposals[index].data_length;
+        if (entry->data_length != 0U) {
+            memcpy(entry->data, proposals[index].data,
+                   entry->data_length);
+        }
+    }
+    if (out_entries != NULL) {
+        *out_entries = entries;
+    }
+    return SALTS_OK;
+}
+
 int tr_raft_log_append_configuration(
     tr_raft_log_t *log,
     tr_raft_log_term_t term,
