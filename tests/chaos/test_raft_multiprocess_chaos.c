@@ -746,6 +746,418 @@ static int tr_chaos_deliver_one(
     return SALTS_OK;
 }
 
+static tr_raft_group_id_t tr_chaos_group_id_at(size_t index)
+{
+    static const tr_raft_group_id_t groups[TR_CHAOS_GROUP_COUNT] = {
+        TR_CHAOS_GROUP_1, TR_CHAOS_GROUP_2, TR_CHAOS_GROUP_3
+    };
+
+    return index < TR_CHAOS_GROUP_COUNT ? groups[index] : 0U;
+}
+
+static int tr_chaos_deliver_one_except_group(
+    tr_chaos_process_node_t nodes[3],
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload,
+    tr_raft_group_id_t blocked_group)
+{
+    size_t selected = SIZE_MAX;
+    size_t index;
+    tr_chaos_frame_t frame;
+    tr_chaos_process_node_t *target;
+    int operation_result = SALTS_OK;
+    int result;
+
+    if (nodes == NULL || network == NULL || codec == NULL ||
+        safety == NULL || response_payload == NULL) {
+        return SALTS_EINVAL;
+    }
+    for (index = 0U; index < network->count; ++index) {
+        if (network->frames[index].group_id != blocked_group) {
+            selected = index;
+            break;
+        }
+    }
+    if (selected == SIZE_MAX) {
+        return SALTS_EBUSY;
+    }
+
+    frame = network->frames[selected];
+    network->frames[selected] = network->frames[network->count - 1U];
+    --network->count;
+    target = &nodes[frame.to - 1U];
+    if (!target->alive) {
+        return SALTS_EPROTO;
+    }
+
+    result = tr_chaos_collect_group_command(
+        target, frame.group_id, TR_CHAOS_COMMAND_STEP,
+        frame.data, frame.size, network, codec, safety,
+        response_payload, &operation_result);
+    return result != SALTS_OK ? result : operation_result;
+}
+
+static int tr_chaos_refresh_group_status(
+    tr_chaos_process_node_t nodes[3],
+    tr_raft_group_id_t group_id,
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload,
+    tr_raft_node_id_t *out_leader)
+{
+    size_t index;
+    tr_raft_node_id_t leader = 0U;
+
+    for (index = 0U; index < 3U; ++index) {
+        int operation_result = SALTS_OK;
+        int result = tr_chaos_collect_group_command(
+            &nodes[index], group_id, TR_CHAOS_COMMAND_STATUS,
+            NULL, 0U, network, codec, safety, response_payload,
+            &operation_result);
+
+        if (result != SALTS_OK || operation_result != SALTS_OK) {
+            return result != SALTS_OK ? result : operation_result;
+        }
+        {
+            size_t group_index;
+
+            if (tr_chaos_group_index(group_id, &group_index) != SALTS_OK) {
+                return SALTS_EPROTO;
+            }
+            if (nodes[index].group_status[group_index].role ==
+                TR_RAFT_LEADER) {
+                if (leader != 0U && leader != nodes[index].id) {
+                    return SALTS_EPROTO;
+                }
+                leader = nodes[index].id;
+            }
+        }
+    }
+    if (out_leader != NULL) {
+        *out_leader = leader;
+    }
+    return SALTS_OK;
+}
+
+static int tr_chaos_tick_group(
+    tr_chaos_process_node_t nodes[3],
+    tr_raft_group_id_t group_id,
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload)
+{
+    size_t index;
+
+    for (index = 0U; index < 3U; ++index) {
+        tr_raft_node_id_t preferred =
+            group_id == TR_CHAOS_GROUP_1 ? 1U
+            : group_id == TR_CHAOS_GROUP_2 ? 2U
+                                           : 3U;
+        uint8_t tick[8];
+        uint32_t next_timeout =
+            nodes[index].id == preferred ? 3U : (uint32_t)(7U + index);
+        int operation_result = SALTS_OK;
+        int result;
+
+        tr_chaos_put_u32(tick, 1U);
+        tr_chaos_put_u32(tick + 4U, next_timeout);
+        result = tr_chaos_collect_group_command(
+            &nodes[index], group_id, TR_CHAOS_COMMAND_TICK,
+            tick, sizeof(tick), network, codec, safety,
+            response_payload, &operation_result);
+        if (result != SALTS_OK || operation_result != SALTS_OK) {
+            return result != SALTS_OK ? result : operation_result;
+        }
+    }
+    return SALTS_OK;
+}
+
+static int tr_chaos_drain_network(
+    tr_chaos_process_node_t nodes[3],
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload,
+    uint32_t *random_state,
+    size_t limit)
+{
+    size_t delivery;
+
+    for (delivery = 0U;
+         delivery < limit && network->count != 0U;
+         ++delivery) {
+        int result = tr_chaos_deliver_one(
+            nodes, network, codec, safety, response_payload,
+            random_state, 0, 0U);
+
+        if (result != SALTS_OK) {
+            return result;
+        }
+    }
+    return network->count == 0U ? SALTS_OK : SALTS_EBUSY;
+}
+
+static int tr_chaos_run_multigroup_acceptance(
+    const char *program,
+    const char *directory)
+{
+    tr_chaos_process_node_t nodes[3];
+    tr_chaos_network_t network;
+    tr_chaos_safety_t safety;
+    tr_raft_wire_codec_t *codec = NULL;
+    uint8_t *response_payload = NULL;
+    tr_raft_node_id_t leaders[TR_CHAOS_GROUP_COUNT] = {0U, 0U, 0U};
+    tr_raft_index_t targets[TR_CHAOS_GROUP_COUNT] = {0U, 0U, 0U};
+    uint32_t random_state = UINT32_C(0x13579bdf);
+    size_t group_index;
+    size_t node_index;
+    uint32_t round;
+    int result = SALTS_OK;
+
+    memset(nodes, 0, sizeof(nodes));
+    memset(&network, 0, sizeof(network));
+    memset(&safety, 0, sizeof(safety));
+    network.frames = (tr_chaos_frame_t *)calloc(
+        TR_CHAOS_MAX_QUEUED_FRAMES, sizeof(*network.frames));
+    response_payload = (uint8_t *)malloc(TR_CHAOS_MAX_RESPONSE_BYTES);
+    if (network.frames == NULL || response_payload == NULL) {
+        result = SALTS_ENOMEM;
+        goto cleanup;
+    }
+    result = tr_raft_wire_codec_create(&codec);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+
+    for (node_index = 0U; node_index < 3U; ++node_index) {
+        nodes[node_index].id = node_index + 1U;
+        snprintf(nodes[node_index].database_path,
+                 sizeof(nodes[node_index].database_path),
+                 "%s/multigroup-node-%zu.db", directory, node_index + 1U);
+        result = tr_chaos_node_spawn(
+            &nodes[node_index], program, &safety, response_payload);
+        if (result != SALTS_OK) {
+            goto cleanup;
+        }
+    }
+
+    for (round = 0U; round < 32U; ++round) {
+        int all_ready = 1;
+
+        for (group_index = 0U;
+             group_index < TR_CHAOS_GROUP_COUNT;
+             ++group_index) {
+            result = tr_chaos_tick_group(
+                nodes, tr_chaos_group_id_at(group_index),
+                &network, codec, &safety, response_payload);
+            if (result != SALTS_OK) {
+                goto cleanup;
+            }
+        }
+        result = tr_chaos_drain_network(
+            nodes, &network, codec, &safety, response_payload,
+            &random_state, 256U);
+        if (result != SALTS_OK && result != SALTS_EBUSY) {
+            goto cleanup;
+        }
+
+        for (group_index = 0U;
+             group_index < TR_CHAOS_GROUP_COUNT;
+             ++group_index) {
+            result = tr_chaos_refresh_group_status(
+                nodes, tr_chaos_group_id_at(group_index),
+                &network, codec, &safety, response_payload,
+                &leaders[group_index]);
+            if (result != SALTS_OK) {
+                goto cleanup;
+            }
+            if (leaders[group_index] != group_index + 1U) {
+                all_ready = 0;
+            }
+        }
+        if (all_ready) {
+            break;
+        }
+    }
+
+    if (leaders[0] != 1U || leaders[1] != 2U || leaders[2] != 3U) {
+        result = SALTS_EPROTO;
+        goto cleanup;
+    }
+
+    /* Unknown group rejection must not terminate the physical process. */
+    {
+        tr_chaos_response_t response;
+
+        result = tr_chaos_node_group_command(
+            &nodes[0], UINT64_C(999), TR_CHAOS_COMMAND_STATUS,
+            NULL, 0U, response_payload, &response);
+        if (result != SALTS_OK || response.operation_result != SALTS_ENOENT) {
+            result = result != SALTS_OK ? result : SALTS_EPROTO;
+            goto cleanup;
+        }
+        result = tr_chaos_node_group_command(
+            &nodes[0], TR_CHAOS_GROUP_2, TR_CHAOS_COMMAND_STATUS,
+            NULL, 0U, response_payload, &response);
+        if (result != SALTS_OK || response.operation_result != SALTS_OK) {
+            result = result != SALTS_OK ? result : SALTS_EPROTO;
+            goto cleanup;
+        }
+    }
+
+    /*
+     * Create G100 traffic and intentionally leave it queued. G200/G300 must
+     * continue to commit while the shared simulated physical link retains the
+     * blocked G100 frames.
+     */
+    result = tr_chaos_tick_group(
+        nodes, TR_CHAOS_GROUP_1, &network, codec, &safety,
+        response_payload);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+
+    for (group_index = 1U;
+         group_index < TR_CHAOS_GROUP_COUNT;
+         ++group_index) {
+        tr_raft_node_id_t leader = leaders[group_index];
+        uint8_t proposal[20];
+        int operation_result = SALTS_OK;
+
+        tr_chaos_put_u64(
+            proposal, UINT64_C(9000) + group_index);
+        tr_chaos_put_u32(proposal + 8U, 8U);
+        tr_chaos_put_u32(proposal + 12U, (uint32_t)group_index);
+        tr_chaos_put_u32(proposal + 16U, UINT32_C(0xfeed0000) +
+                                             (uint32_t)group_index);
+        result = tr_chaos_collect_group_command(
+            &nodes[leader - 1U], tr_chaos_group_id_at(group_index),
+            TR_CHAOS_COMMAND_PROPOSE, proposal, sizeof(proposal),
+            &network, codec, &safety, response_payload,
+            &operation_result);
+        if (result != SALTS_OK || operation_result != SALTS_OK) {
+            result = result != SALTS_OK ? result : operation_result;
+            goto cleanup;
+        }
+        targets[group_index] =
+            nodes[leader - 1U].group_status[group_index].last_log_index;
+    }
+
+    for (round = 0U; round < 40U; ++round) {
+        int converged = 1;
+
+        for (group_index = 1U;
+             group_index < TR_CHAOS_GROUP_COUNT;
+             ++group_index) {
+            result = tr_chaos_tick_group(
+                nodes, tr_chaos_group_id_at(group_index),
+                &network, codec, &safety, response_payload);
+            if (result != SALTS_OK) {
+                goto cleanup;
+            }
+        }
+
+        for (;;) {
+            result = tr_chaos_deliver_one_except_group(
+                nodes, &network, codec, &safety, response_payload,
+                TR_CHAOS_GROUP_1);
+            if (result == SALTS_EBUSY) {
+                result = SALTS_OK;
+                break;
+            }
+            if (result != SALTS_OK) {
+                goto cleanup;
+            }
+        }
+
+        for (group_index = 1U;
+             group_index < TR_CHAOS_GROUP_COUNT;
+             ++group_index) {
+            result = tr_chaos_refresh_group_status(
+                nodes, tr_chaos_group_id_at(group_index),
+                &network, codec, &safety, response_payload, NULL);
+            if (result != SALTS_OK) {
+                goto cleanup;
+            }
+            for (node_index = 0U; node_index < 3U; ++node_index) {
+                if (nodes[node_index]
+                        .group_status[group_index]
+                        .applied_index < targets[group_index]) {
+                    converged = 0;
+                }
+            }
+        }
+        if (converged) {
+            break;
+        }
+    }
+
+    if (network.count == 0U) {
+        result = SALTS_EPROTO;
+        goto cleanup;
+    }
+    for (group_index = 1U;
+         group_index < TR_CHAOS_GROUP_COUNT;
+         ++group_index) {
+        for (node_index = 0U; node_index < 3U; ++node_index) {
+            if (nodes[node_index]
+                    .group_status[group_index]
+                    .applied_index < targets[group_index]) {
+                result = SALTS_EPROTO;
+                goto cleanup;
+            }
+        }
+    }
+
+    /* Restart one physical process; all three independent WALs must reopen. */
+    result = tr_chaos_node_terminate(&nodes[2]);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+    result = tr_chaos_node_spawn(
+        &nodes[2], program, &safety, response_payload);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+    for (group_index = 0U;
+         group_index < TR_CHAOS_GROUP_COUNT;
+         ++group_index) {
+        tr_chaos_response_t response;
+
+        result = tr_chaos_node_group_command(
+            &nodes[2], tr_chaos_group_id_at(group_index),
+            TR_CHAOS_COMMAND_STATUS, NULL, 0U,
+            response_payload, &response);
+        if (result != SALTS_OK || response.operation_result != SALTS_OK ||
+            response.group_id != tr_chaos_group_id_at(group_index)) {
+            result = result != SALTS_OK ? result : SALTS_EPROTO;
+            goto cleanup;
+        }
+        if (group_index > 0U &&
+            response.applied_index < targets[group_index]) {
+            result = SALTS_EPROTO;
+            goto cleanup;
+        }
+    }
+
+cleanup:
+    for (node_index = 0U; node_index < 3U; ++node_index) {
+        int close_result =
+            tr_chaos_node_stop(&nodes[node_index], response_payload);
+        if (result == SALTS_OK && close_result != SALTS_OK) {
+            result = close_result;
+        }
+    }
+    tr_raft_wire_codec_destroy(codec);
+    free(response_payload);
+    free(network.frames);
+    return result;
+}
+
 static int tr_chaos_recover_after_handoff(
     tr_chaos_process_node_t nodes[3],
     tr_chaos_network_t *network,
@@ -1213,6 +1625,27 @@ spec("raft multi-process deterministic chaos")
             check_equal(tt_remove_tree(directory), 0);
         }
         free(response_payload);
+        free(directory);
+    }
+
+    it("hosts three independent groups on each physical process")
+    {
+        const char *program = getenv("TURBORAFT_CHAOS_NODE");
+        char *directory = NULL;
+
+        if (tr_chaos_configuration_status == SALTS_OK) {
+            check_not_null(program);
+        }
+        if (program != NULL && tr_chaos_configuration_status == SALTS_OK) {
+            directory = tt_make_temp_dir("turboraft-multigroup-r0");
+            check_not_null(directory);
+        }
+        if (directory != NULL) {
+            check_equal(
+                tr_chaos_run_multigroup_acceptance(program, directory),
+                SALTS_OK);
+            check_equal(tt_remove_tree(directory), 0);
+        }
         free(directory);
     }
 
