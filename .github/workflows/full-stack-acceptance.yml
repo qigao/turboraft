@@ -1,6 +1,9 @@
 name: Full TurboRaft stack acceptance
 
 on:
+  push:
+    branches:
+      - feature/proposal-batching-benchmark
   workflow_dispatch:
 
 permissions:
