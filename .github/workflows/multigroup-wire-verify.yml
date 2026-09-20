@@ -1276,6 +1276,7 @@ jobs:
             -I../salts/tinytest/include
             -I../salts/vendor/sds
             -I../salts-utils-legacy/tbe/data_bind
+            -I../salts-utils-legacy/tbe/data_bind/parser_compat/include
             -I../salts-utils-legacy/tbe/schema/include
             -I../salts-utils-legacy/tbe/schema/parser
             -I../salts-utils-legacy/parser/csv_parser/include
