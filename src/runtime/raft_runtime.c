@@ -41,6 +41,80 @@ static int tr_runtime_rollback(tr_raft_runtime_t *runtime,
     return tr_runtime_fail(runtime, result, stage, cause);
 }
 
+static void tr_runtime_clear_apply_block(tr_raft_runtime_t *runtime)
+{
+    runtime->blocked_entries = NULL;
+    runtime->blocked_entry_count = 0U;
+    runtime->blocked_apply_begin = 0U;
+    runtime->apply_blocked = false;
+}
+
+static int tr_runtime_apply_from(
+    tr_raft_runtime_t *runtime,
+    const tr_raft_entry_t *entries,
+    size_t entry_count,
+    size_t begin,
+    tr_raft_runtime_result_t *result)
+{
+    int callback_result;
+
+    result->stage = TR_RAFT_RUNTIME_STATE_MACHINE_APPLY;
+    while (begin < entry_count) {
+        size_t end = begin;
+
+        if (tr_raft_conf_entry_is_configuration(&entries[begin])) {
+            ++begin;
+            continue;
+        }
+        while (end < entry_count &&
+               !tr_raft_conf_entry_is_configuration(&entries[end])) {
+            ++end;
+        }
+        if (runtime->state_machine.apply_batch == NULL) {
+            return tr_runtime_fail(runtime, result, result->stage,
+                                   SALTS_EINVAL);
+        }
+        callback_result = runtime->state_machine.apply_batch(
+            runtime->state_machine.context, entries + begin, end - begin);
+        if (callback_result == SALTS_EBUSY) {
+            runtime->blocked_entries = entries;
+            runtime->blocked_entry_count = entry_count;
+            runtime->blocked_apply_begin = begin;
+            runtime->apply_blocked = true;
+            result->cause = SALTS_EBUSY;
+            return SALTS_EBUSY;
+        }
+        if (callback_result != SALTS_OK) {
+            tr_runtime_clear_apply_block(runtime);
+            return tr_runtime_fail(runtime, result, result->stage,
+                                   callback_result);
+        }
+        begin = end;
+    }
+
+    if (entry_count != 0U) {
+        result->applied_through = entries[entry_count - 1U].index;
+    }
+    tr_runtime_clear_apply_block(runtime);
+    return SALTS_OK;
+}
+
+static int tr_runtime_advance_after_apply(
+    tr_raft_runtime_t *runtime,
+    tr_raft_runtime_result_t *result)
+{
+    int callback_result;
+
+    result->stage = TR_RAFT_RUNTIME_CORE_ADVANCE;
+    callback_result = tr_raft_core_advance(runtime->core);
+    if (callback_result != SALTS_OK) {
+        return tr_runtime_fail(runtime, result, result->stage,
+                               callback_result);
+    }
+    result->stage = TR_RAFT_RUNTIME_COMPLETE;
+    return SALTS_OK;
+}
+
 static int tr_runtime_persist(tr_raft_runtime_t *runtime,
                               const tr_raft_ready_t *ready,
                               tr_raft_runtime_result_t *result)
@@ -129,6 +203,11 @@ int tr_raft_runtime_process(tr_raft_runtime_t *runtime,
         return tr_runtime_fail(runtime, result, TR_RAFT_RUNTIME_IDLE,
                                SALTS_EPROTO);
     }
+    if (runtime->apply_blocked) {
+        result->stage = TR_RAFT_RUNTIME_STATE_MACHINE_APPLY;
+        result->cause = SALTS_EBUSY;
+        return SALTS_EBUSY;
+    }
     if ((ready->message_count != 0U && ready->messages == NULL) ||
         (ready->log_entry_count != 0U && ready->log_entries == NULL) ||
         (ready->committed_entry_count != 0U &&
@@ -179,49 +258,50 @@ int tr_raft_runtime_process(tr_raft_runtime_t *runtime,
         ++result->snapshots_requested;
     }
     if (ready->committed_entry_count != 0U) {
-        size_t begin = 0U;
-
-        result->stage = TR_RAFT_RUNTIME_STATE_MACHINE_APPLY;
-        while (begin < ready->committed_entry_count) {
-            size_t end = begin;
-
-            if (tr_raft_conf_entry_is_configuration(
-                    &ready->committed_entries[begin])) {
-                ++begin;
-                continue;
-            }
-            while (end < ready->committed_entry_count &&
-                   !tr_raft_conf_entry_is_configuration(
-                       &ready->committed_entries[end])) {
-                ++end;
-            }
-            if (runtime->state_machine.apply_batch == NULL) {
-                return tr_runtime_fail(runtime, result, result->stage,
-                                       SALTS_EINVAL);
-            }
-            callback_result = runtime->state_machine.apply_batch(
-                runtime->state_machine.context,
-                ready->committed_entries + begin, end - begin);
-            if (callback_result != SALTS_OK) {
-                return tr_runtime_fail(runtime, result, result->stage,
-                                       callback_result);
-            }
-            begin = end;
+        callback_result = tr_runtime_apply_from(
+            runtime, ready->committed_entries,
+            ready->committed_entry_count, 0U, result);
+        if (callback_result != SALTS_OK) {
+            return callback_result;
         }
-        result->applied_through =
-            ready->committed_entries[ready->committed_entry_count - 1U].index;
     }
-    result->stage = TR_RAFT_RUNTIME_CORE_ADVANCE;
-    callback_result = tr_raft_core_advance(runtime->core);
-    if (callback_result != SALTS_OK) {
-        return tr_runtime_fail(runtime, result, result->stage,
-                               callback_result);
-    }
-    result->stage = TR_RAFT_RUNTIME_COMPLETE;
-    return SALTS_OK;
+    return tr_runtime_advance_after_apply(runtime, result);
 }
 
 bool tr_raft_runtime_is_faulted(const tr_raft_runtime_t *runtime)
 {
     return runtime == NULL || runtime->faulted;
+}
+
+bool tr_raft_runtime_apply_blocked(const tr_raft_runtime_t *runtime)
+{
+    return runtime != NULL && runtime->apply_blocked;
+}
+
+int tr_raft_runtime_retry_apply(tr_raft_runtime_t *runtime,
+                                tr_raft_runtime_result_t *result)
+{
+    int apply_result;
+
+    if (runtime == NULL || result == NULL || runtime->core == NULL) {
+        return SALTS_EINVAL;
+    }
+    memset(result, 0, sizeof(*result));
+    if (runtime->faulted) {
+        return tr_runtime_fail(runtime, result, TR_RAFT_RUNTIME_IDLE,
+                               SALTS_EPROTO);
+    }
+    if (!runtime->apply_blocked || runtime->blocked_entries == NULL ||
+        runtime->blocked_entry_count == 0U ||
+        runtime->blocked_apply_begin >= runtime->blocked_entry_count) {
+        return SALTS_ENOENT;
+    }
+
+    apply_result = tr_runtime_apply_from(
+        runtime, runtime->blocked_entries, runtime->blocked_entry_count,
+        runtime->blocked_apply_begin, result);
+    if (apply_result != SALTS_OK) {
+        return apply_result;
+    }
+    return tr_runtime_advance_after_apply(runtime, result);
 }
