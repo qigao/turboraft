@@ -216,6 +216,13 @@ jobs:
             "${INC[@]}" -fsyntax-only \
             tests/core/test_raft_snapshot_policy.c
           run_check "raft_multiprocess_node.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -Itests/chaos -fsyntax-only \
+            tests/chaos/raft_multiprocess_node.c
           run_check "test_raft_multiprocess_chaos.c" \
             cc -std=c11 -Wall -Wextra \
             -Werror=implicit-function-declaration \
@@ -224,13 +231,14 @@ jobs:
             -Werror=return-type \
             "${INC[@]}" -Itests/chaos -fsyntax-only \
             tests/chaos/test_raft_multiprocess_chaos.c
+          run_check "test_raft_snapshot_group_isolation.c" \
             cc -std=c11 -Wall -Wextra \
             -Werror=implicit-function-declaration \
             -Werror=incompatible-pointer-types \
             -Werror=int-conversion \
             -Werror=return-type \
-            "${INC[@]}" -Itests/chaos -fsyntax-only \
-            tests/chaos/raft_multiprocess_node.c
+            "${INC[@]}" -Isrc/transport -fsyntax-only \
+            tests/core/test_raft_snapshot_group_isolation.c
 
       - name: Run bounded fair group queue behavior
         shell: bash
@@ -1840,6 +1848,26 @@ jobs:
           PY
 
           python3 /tmp/multigroup_acceptance.py
+
+      - name: Run snapshot catch-up group isolation behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude -Isrc -Isrc/core -Isrc/transport \
+            -I../salts/utils/include -I../salts/platform/include \
+            -I../salts/concurrency/include -I../salts/cstl/include \
+            -I../salts/cmeta/include -I../salts/tinytest/include \
+            tests/core/test_raft_snapshot_group_isolation.c \
+            src/snapshot/raft_snapshot_sender.c \
+            src/snapshot/raft_snapshot_receiver.c \
+            src/transport/raft_group_queue.c \
+            src/core/raft_configuration.c \
+            ../salts/tinytest/src/tinytest.c \
+            ../salts/tinytest/src/tinymock.c \
+            -lcrypto \
+            -o /tmp/turboraft_snapshot_group_isolation
+          /tmp/turboraft_snapshot_group_isolation
 
       - name: Verify current public group API
         shell: bash
