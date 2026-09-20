@@ -23,6 +23,19 @@
 #define TR_CHAOS_RECOVERY_ROUND_COUNT 48U
 #define TR_CHAOS_RECOVERY_DELIVERY_LIMIT 64U
 
+#if TR_CHAOS_PROTOCOL_VERSION != 2U
+#error "multi-group chaos protocol must be v2"
+#endif
+
+_Static_assert(TR_CHAOS_COMMAND_HEADER_SIZE == 24U,
+               "v2 command header must include group_id");
+_Static_assert(TR_CHAOS_RESPONSE_HEADER_SIZE == 104U,
+               "v2 response header must echo group_id");
+_Static_assert(TR_CHAOS_COMMAND_GROUP_OFFSET == 16U,
+               "group_id must follow payload_size");
+_Static_assert(TR_CHAOS_RESPONSE_GROUP_OFFSET == 96U,
+               "response group_id must follow legacy status fields");
+
 typedef struct tr_chaos_seed_range {
     uint32_t first;
     uint32_t count;
