@@ -189,6 +189,8 @@ spec("raft service")
             tr_raft_read_state_t read_state;
 
             check_equal(tr_raft_service_read_index(service, 21U), SALTS_OK);
+            check_equal(tr_raft_service_read_index(service, 21U),
+                        SALTS_EALREADY);
             check_equal(tr_raft_service_read_index(service, 22U), SALTS_OK);
             check_equal(tr_raft_service_read_index(service, 23U), SALTS_OK);
             check_equal(tr_raft_service_read_index(service, 24U),
