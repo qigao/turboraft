@@ -15,6 +15,8 @@ extern "C" {
 #define TR_RAFT_MAX_APPEND_ENTRIES 8U
 #define TR_RAFT_DEFAULT_MAX_INFLIGHT_APPEND_REQUESTS 1U
 #define TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS 64U
+#define TR_RAFT_DEFAULT_MAX_PENDING_READS 1U
+#define TR_RAFT_MAX_PENDING_READS 64U
 #define TR_RAFT_DEFAULT_MAX_LOG_ENTRIES 1024U
 #define TR_RAFT_CONF_CODEC_VERSION 1U
 #define TR_RAFT_CONF_HEADER_SIZE 16U
@@ -151,6 +153,12 @@ typedef struct tr_raft_core_config {
      * in-flight request behavior.
      */
     size_t max_inflight_append_requests;
+    /**
+     * Maximum outstanding linearizable read contexts across the active
+     * barrier and the next waiting batch. Zero preserves one-at-a-time
+     * historical behavior.
+     */
+    size_t max_pending_reads;
 } tr_raft_core_config_t;
 
 typedef struct tr_raft_proposal {
@@ -189,8 +197,14 @@ typedef struct tr_raft_ready {
     tr_raft_index_t commit_index;
     const tr_raft_entry_t *committed_entries;
     size_t committed_entry_count;
+    /**
+     * Compatibility alias for read_states[0] when read_state_count != 0.
+     * Concurrent users should consume the complete bounded read_states array.
+     */
     bool read_state_ready;
     tr_raft_read_state_t read_state;
+    tr_raft_read_state_t read_states[TR_RAFT_MAX_PENDING_READS];
+    size_t read_state_count;
     tr_raft_snapshot_request_t snapshot_requests[TR_RAFT_MAX_MEMBERS];
     size_t snapshot_request_count;
 } tr_raft_ready_t;
@@ -214,7 +228,11 @@ typedef struct tr_raft_status {
     bool ready_outstanding;
     tr_raft_node_id_t leadership_transfer_target;
     uint32_t leadership_transfer_elapsed_ticks;
+    /** Wire context of the currently active quorum barrier, or zero. */
     uint64_t pending_read_context_id;
+    /** Active-batch plus next-waiting-batch user contexts. */
+    size_t pending_read_count;
+    size_t max_pending_reads;
     size_t inflight_append_count;
     bool self_is_voter;
     size_t voter_count;
@@ -317,9 +335,16 @@ int tr_raft_core_transfer_leadership(tr_raft_core_t *core,
                                      tr_raft_ready_t *ready);
 
 /**
- * Starts one linearizable read barrier identified by a non-zero context.
- * The leader must already have committed an entry in its current term. Only one
- * read may be pending; its Ready result captures commit_index at request time.
+ * Admits one linearizable read context.
+ *
+ * At most one quorum barrier is active on the wire. Contexts admitted while
+ * that barrier is active are bounded and queued for the next barrier; all
+ * contexts already waiting when that next barrier starts are safely coalesced
+ * behind that one quorum confirmation. Later contexts never attach to an
+ * already-sent barrier.
+ *
+ * The leader must already have committed an entry in its current term.
+ * Capacity exhaustion returns SALTS_ENOSPC without consuming the context.
  */
 int tr_raft_core_read_index(tr_raft_core_t *core,
                             uint64_t context_id,
