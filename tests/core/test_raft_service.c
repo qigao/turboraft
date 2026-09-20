@@ -170,6 +170,7 @@ spec("raft service")
 
         memset(&state, 0, sizeof(state));
         service_configure(&config, &state, voters, 1U);
+        config.core.max_pending_reads = 3U;
         check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
         check_equal(tr_raft_service_tick(service, &tick), SALTS_OK);
         check_equal(tr_raft_service_status(service, &status), SALTS_OK);
@@ -187,14 +188,14 @@ spec("raft service")
         {
             tr_raft_read_state_t read_state;
 
-            config.core.max_pending_reads = 3U;
             check_equal(tr_raft_service_read_index(service, 21U), SALTS_OK);
             check_equal(tr_raft_service_read_index(service, 22U), SALTS_OK);
             check_equal(tr_raft_service_read_index(service, 23U), SALTS_OK);
+            check_equal(tr_raft_service_read_index(service, 24U),
+                        SALTS_ENOSPC);
             check_equal(tr_raft_service_status(service, &status), SALTS_OK);
             check_equal(status.completed_read_count, 3U);
-            check_equal(status.max_completed_reads,
-                        TR_RAFT_DEFAULT_MAX_PENDING_READS);
+            check_equal(status.max_completed_reads, 3U);
             check_equal(tr_raft_service_prepare_backup(service), SALTS_EBUSY);
 
             check_equal(tr_raft_service_take_read_state(service, &read_state),
