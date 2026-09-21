@@ -416,7 +416,11 @@ if(TARGET turboraft_flowmq)
   add_executable(turboraft_flowmq_peer_service_tests
                  test_raft_flowmq_peer_service.c)
   target_link_libraries(turboraft_flowmq_peer_service_tests
-                        PRIVATE TurboRaft::FlowMQ Salts::CNet Salts::TinyTest)
+                        PRIVATE TurboRaft::FlowMQ
+                                TurboRaft::SnapshotSender
+                                TurboRaft::SnapshotReceiver
+                                Salts::CNet
+                                Salts::TinyTest)
   target_compile_definitions(
     turboraft_flowmq_peer_service_tests
     PRIVATE TURBORAFT_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
