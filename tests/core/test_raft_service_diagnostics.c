@@ -120,6 +120,7 @@ static void diagnostic_configure(tr_raft_service_config_t *config,
     config->snapshot_policy.applied_entry_threshold = 16U;
     config->snapshot_policy.max_snapshot_bytes = 64U;
     config->snapshot_policy.max_buffered_snapshot_bytes = 64U;
+    config->snapshot_policy.max_buffered_snapshot_bytes = 64U;
     config->snapshot_policy.create = diagnostic_snapshot_create;
     config->snapshot_policy.create_context = state;
     config->snapshot_policy.store = diagnostic_snapshot_store;
