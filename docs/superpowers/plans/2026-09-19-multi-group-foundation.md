@@ -382,7 +382,7 @@ git commit -m "feat(snapshot): stream database-scale raft snapshots"
 - Consumes: Tasks 1-3.
 - Produces: reproducible acceptance evidence for R0 issues #26, #27, #28.
 
-- [ ] **Step 1: Extend the child-node harness to host three independent groups**
+- [x] **Step 1: Extend the child-node harness to host three independent groups**
 
 Each child process owns three independent:
 - `tr_raft_service_t`,
@@ -391,7 +391,7 @@ Each child process owns three independent:
 
 The parent network routes frames by `group_id`.
 
-- [ ] **Step 2: Add deterministic leader-diversity setup**
+- [x] **Step 2: Add deterministic leader-diversity setup**
 
 Drive elections so the stable state demonstrates:
 
@@ -405,20 +405,34 @@ Assert each group commits and applies independently.
 
 - [ ] **Step 3: Add group-isolation fault scripts**
 
-Cover:
-- saturate/drop/delay group 100 traffic while group 101/102 continue,
-- kill/restart one group's local service/WAL owner while sibling groups remain alive,
-- unknown group frame followed by valid known-group frame on the same peer link,
-- group 101 snapshot catch-up while groups 100/102 continue commits.
+Focused evidence completed:
+- [x] block group 100 traffic while group 101/102 continue and converge;
+- [x] perform one group's WAL backup handoff while sibling groups stay healthy;
+- [x] kill/restart a physical host and recover all independent group WALs;
+- [x] unknown/stopped-group rejection followed by valid traffic is covered by #27 transport isolation;
+- [x] stream a G100 snapshot through the shared per-peer scheduler while G101/G102 protocol traffic is scheduled between snapshot chunks and the receiver commits the verified snapshot;
+- [ ] run the authoritative production FlowMQ/mTLS snapshot-catch-up case while sibling groups continue commits.
 
 - [ ] **Step 4: Run the targeted acceptance test**
+
+Focused three-process acceptance is green:
+
+~~~text
+run 35501109360
+head c53bd888d088145f1585c4b2aa2fe509733fef9d
+result SUCCESS
+~~~
+
+It runs real Core/Service/WAL in three OS processes with three groups per
+process; the focused executable substitutes only a test wire shim. The
+authoritative project gate remains:
 
 ~~~powershell
 cmake --build --preset win-release-user
 ctest --preset win-release-user -R "turboraft\.multiprocess_chaos" --output-on-failure
 ~~~
 
-Expected: PASS for the configured bounded seed campaign.
+Expected: PASS using the production wire codec and complete dependency set.
 
 - [ ] **Step 5: Run full Release suite**
 

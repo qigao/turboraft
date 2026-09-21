@@ -153,6 +153,18 @@ target_link_libraries(turboraft_service_diagnostics_tests
 add_test(NAME turboraft.service_diagnostics
          COMMAND turboraft_service_diagnostics_tests)
 
+add_executable(turboraft_snapshot_group_isolation_tests
+               test_raft_snapshot_group_isolation.c)
+target_include_directories(turboraft_snapshot_group_isolation_tests
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src/transport)
+target_link_libraries(turboraft_snapshot_group_isolation_tests
+                      PRIVATE TurboRaft::CNet
+                              TurboRaft::SnapshotSender
+                              TurboRaft::SnapshotReceiver
+                              Salts::TinyTest)
+add_test(NAME turboraft.snapshot_group_isolation
+         COMMAND turboraft_snapshot_group_isolation_tests)
+
 add_executable(turboraft_snapshot_policy_tests
                test_raft_snapshot_policy.c)
 target_link_libraries(turboraft_snapshot_policy_tests
