@@ -74,6 +74,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             autoconf automake build-essential libtool nasm ninja-build pkg-config re2c
 
+      - name: Install pinned re2c 4.6 and Unicode data
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .ci/src/salts-utils/cmake/ci/install-re2c.sh
+
       - name: Restore vcpkg binary cache
         uses: actions/cache@v4
         with:
