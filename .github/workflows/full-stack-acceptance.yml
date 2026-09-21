@@ -6,61 +6,217 @@ on:
       - feature/proposal-batching-benchmark
   workflow_dispatch:
 
+concurrency:
+  group: full-turboraft-stack-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
+env:
+  VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+  SALTS_REF: ce9b57bc166bf86bd311fe6f86b7619dd64673e1
+  SALTS_UTILS_REF: 2ceba0f6c46914600960bc410f5b5453911322ec
+  FLOWMQ_REF: ca07e0b576a3d35f5cd8050bbcf71d116318c100
+  VCPKG_ROOT: ${{ github.workspace }}/.ci/vcpkg
+  VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
+  SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
+  SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
+  FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs/flowmq
+  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.ci/vcpkg-bincache,readwrite
+  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs/flowmq/lib:${{ github.workspace }}/.ci/pkgs/salts-utils/lib:${{ github.workspace }}/.ci/pkgs/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed/x64-linux/lib
+
 jobs:
   full-release:
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
-      - name: Checkout exact stack
+      - name: Validate private dependency credential
+        shell: bash
+        env:
+          FLOWMQ_REPO_TOKEN: ${{ secrets.FLOWMQ_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${FLOWMQ_REPO_TOKEN}" ]]; then
+            echo "::error::FLOWMQ_REPO_TOKEN is required to read qigao/flowmq for the full-stack gate"
+            exit 2
+          fi
+
+      - name: Checkout exact TurboRaft stack
         uses: actions/checkout@v4
+
+      - name: Checkout pinned Salts
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.SALTS_REF }}
+          path: .ci/src/salts
+          persist-credentials: false
+
+      - name: Checkout pinned SaltsUtils
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.SALTS_UTILS_REF }}
+          path: .ci/src/salts-utils
+          persist-credentials: false
+
+      - name: Checkout pinned private FlowMQ
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/flowmq
+          ref: ${{ env.FLOWMQ_REF }}
+          path: .ci/src/flowmq
+          token: ${{ secrets.FLOWMQ_REPO_TOKEN }}
+          persist-credentials: false
+
+      - name: Checkout pinned vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.VCPKG_BASELINE }}
+          path: .ci/vcpkg
+          persist-credentials: false
+
+      - name: Install host build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential libtool ninja-build pkg-config re2c
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: .ci/vcpkg-bincache
+          key: vcpkg-linux-${{ env.VCPKG_BASELINE }}-turboraft-full-v1
+
+      - name: Bootstrap vcpkg and install the dependency union
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/vcpkg-bincache .ci/vcpkg_installed .ci/super-manifest
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          cat > .ci/super-manifest/vcpkg.json <<'JSON'
+          {
+            "name": "turboraft-full-stack-ci",
+            "version-semver": "0.1.0",
+            "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
+            "dependencies": [
+              { "name": "pkgconf", "host": true },
+              "simde",
+              "zstd",
+              "aklomp-base64",
+              "c-ares",
+              "libuv",
+              "kcp",
+              "boringssl",
+              "miniaudio",
+              "lua",
+              { "name": "zeromq", "default-features": false },
+              { "name": "xxhash", "version>=": "0.8.3" }
+            ],
+            "overrides": [
+              { "name": "c-ares", "version": "1.34.5", "port-version": 1 }
+            ]
+          }
+          JSON
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$GITHUB_WORKSPACE/.ci/super-manifest" \
+            --x-install-root="$VCPKG_INSTALLED_DIR" \
+            --triplet=x64-linux
+
+      - name: Build and install pinned Salts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src/salts -B .ci/build/salts -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
+          cmake --build .ci/build/salts --target install --parallel 2
+
+      - name: Build and install pinned SaltsUtils
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src/salts-utils -B .ci/build/salts-utils -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
+            -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
+          cmake --build .ci/build/salts-utils --target install --parallel 2
+          test -x "$SALTS_UTILS_ROOT/bin/tbe_compiler"
+
+      - name: Build and install pinned FlowMQ
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src/flowmq -B .ci/build/flowmq -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$FLOWMQ_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build .ci/build/flowmq --target install --parallel 2
 
       - name: Validate installed dependency roots
         shell: bash
         run: |
           set -euo pipefail
-          for name in SALTS_ROOT SALTS_UTILS_ROOT FLOWMQ_ROOT; do
-            value="${!name:-}"
-            if [[ -z "$value" ]]; then
-              echo "::error::${name} is not defined"
-              exit 2
-            fi
-            if [[ ! -d "$value" ]]; then
-              echo "::error::${name} is not a directory: $value"
-              exit 2
-            fi
-          done
+          test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -x "$SALTS_UTILS_ROOT/bin/tbe_compiler"
+          test -f "$FLOWMQ_ROOT/lib/cmake/FlowMQ/FlowMQConfig.cmake"
 
-          test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake" ||
-            find "$SALTS_ROOT" -name SaltsConfig.cmake -print -quit |
-              grep -q .
-          test -f "$SALTS_UTILS_ROOT/bin/tbe_compiler" ||
-            test -f "$SALTS_UTILS_ROOT/bin/tbe_compiler.exe"
-          test -f "$FLOWMQ_ROOT/lib/cmake/FlowMQ/FlowMQConfig.cmake" ||
-            find "$FLOWMQ_ROOT" -name FlowMQConfig.cmake -print -quit |
-              grep -q .
-
-      - name: Configure Release
+      - name: Configure TurboRaft Release with tests
         shell: bash
         run: |
           set -euo pipefail
-          cmake --preset release-linux-ninja
+          cmake -S . -B .ci/build/turboraft -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF
 
-      - name: Build Release
+      - name: Build TurboRaft Release
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build --preset build-default-linux
+          cmake --build .ci/build/turboraft --parallel 2
 
       - name: Targeted production integration gates
         shell: bash
         run: |
           set -euo pipefail
-          ctest --preset test-release-linux             -R "turboraft\.(flowmq_peer_service|multiprocess_chaos)$"             --output-on-failure
+          ctest --test-dir .ci/build/turboraft \
+            -R 'turboraft\.(flowmq_peer_service|multiprocess_chaos)$' \
+            --output-on-failure
 
       - name: Full Release CTest
         shell: bash
         run: |
           set -euo pipefail
-          ctest --preset test-release-linux --output-on-failure
+          ctest --test-dir .ci/build/turboraft --output-on-failure
+
+      - name: Upload CTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-stack-ctest-diagnostics
+          path: .ci/build/turboraft/Testing/Temporary
+          if-no-files-found: ignore
