@@ -44,11 +44,11 @@ typedef struct tr_raft_flowmq_peer_service_config {
     tr_raft_flowmq_tls_config_t tls;
     const tr_raft_flowmq_peer_config_t *peers;
     size_t peer_count;
-    /** All capacity, batch, HWM, and reconnect fields are required. */
-    size_t outbound_queue_capacity;
+    /** Applied independently to every physical peer link. */
+    tr_raft_transport_queue_limits_t outbound_limits;
+    /** All batch, HWM, and reconnect fields are required. */
     size_t max_send_batch_items;
     size_t max_receive_batch_items;
-    size_t max_inflight_data_bytes;
     size_t send_hwm_messages;
     size_t receive_hwm_messages;
     size_t send_hwm_bytes;
@@ -71,12 +71,14 @@ typedef struct tr_raft_flowmq_peer_service_step_result {
 
 typedef struct tr_raft_flowmq_peer_service_status {
     size_t peer_count;
+    tr_raft_transport_queue_limits_t outbound_limits;
+    /** Sum of active (peer, group) queues; not distinct group IDs globally. */
+    size_t active_group_count;
     size_t queued_payload_count;
     size_t queued_data_bytes;
-    size_t outbound_queue_capacity;
-    size_t max_inflight_data_bytes;
     uint64_t frames_sent;
     uint64_t frames_received;
+    uint64_t group_routing_rejections;
     int started;
     int stopping;
     int step_active;
@@ -106,7 +108,7 @@ int tr_raft_flowmq_peer_service_stop(tr_raft_flowmq_peer_service_t *service);
 /** Requires stop after start; releases queued payloads and service storage. */
 int tr_raft_flowmq_peer_service_destroy(tr_raft_flowmq_peer_service_t *service);
 
-/** Copies one Raft message with explicit group identity into the peer FIFO. */
+/** Copies one Raft message into the destination peer's group scheduler. */
 int tr_raft_flowmq_peer_service_enqueue_group(
     tr_raft_flowmq_peer_service_t *service,
     tr_raft_group_id_t group_id,
@@ -118,6 +120,15 @@ int tr_raft_flowmq_peer_service_enqueue_payload(
 int tr_raft_flowmq_peer_service_get_status(
     const tr_raft_flowmq_peer_service_t *service,
     tr_raft_flowmq_peer_service_status_t *out_status);
+int tr_raft_flowmq_peer_service_get_group_status(
+    const tr_raft_flowmq_peer_service_t *service,
+    tr_raft_node_id_t peer_node_id,
+    tr_raft_group_id_t group_id,
+    tr_raft_transport_group_queue_status_t *out_status);
+int tr_raft_flowmq_peer_service_get_peer_transport_status(
+    const tr_raft_flowmq_peer_service_t *service,
+    tr_raft_node_id_t peer_node_id,
+    tr_raft_transport_status_t *out_status);
 
 #ifdef __cplusplus
 }
