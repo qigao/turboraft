@@ -1859,21 +1859,33 @@ int tr_raft_core_step(tr_raft_core_t *core,
     return tr_finish(core, ready, &before);
 }
 
-int tr_raft_core_propose(tr_raft_core_t *core,
-                         const tr_raft_proposal_t *proposal,
-                         tr_raft_ready_t *ready)
+int tr_raft_core_propose_batch(
+    tr_raft_core_t *core,
+    const tr_raft_proposal_t *proposals,
+    size_t proposal_count,
+    tr_raft_ready_t *ready)
 {
     tr_raft_before_t before;
-    const tr_raft_log_entry_t *entry = NULL;
+    const tr_raft_log_entry_t *entries = NULL;
+    const tr_raft_log_entry_t *last_entry;
     size_t peer_count;
+    size_t index;
     int self_index;
     int result;
 
-    if (core == NULL || proposal == NULL || proposal->command_id == 0U ||
-        proposal->data_length > TR_RAFT_MAX_ENTRY_BYTES ||
-        (proposal->data_length != 0U && proposal->data == NULL)) {
+    if (core == NULL || proposals == NULL || proposal_count == 0U ||
+        proposal_count > TR_RAFT_MAX_PROPOSAL_BATCH) {
         return SALTS_EINVAL;
     }
+    for (index = 0U; index < proposal_count; ++index) {
+        if (proposals[index].command_id == 0U ||
+            proposals[index].data_length > TR_RAFT_MAX_ENTRY_BYTES ||
+            (proposals[index].data_length != 0U &&
+             proposals[index].data == NULL)) {
+            return SALTS_EINVAL;
+        }
+    }
+
     result = tr_begin(core, ready, &before);
     if (result != SALTS_OK) {
         return result;
@@ -1886,29 +1898,28 @@ int tr_raft_core_propose(tr_raft_core_t *core,
         core->in_call = false;
         return SALTS_EBUSY;
     }
+
     peer_count = tr_peer_count(core) - 1U;
     result = tr_require_capacity(core, ready, peer_count);
     if (result != SALTS_OK) {
         return result;
     }
-    result = tr_raft_log_append_local(&core->log,
-                                      core->term,
-                                      proposal->command_id,
-                                      proposal->data,
-                                      proposal->data_length,
-                                      &entry);
+    result = tr_raft_log_append_local_batch(
+        &core->log, core->term, proposals, proposal_count, &entries);
     if (result != SALTS_OK) {
         core->in_call = false;
         tr_reset_ready(ready);
         return result;
     }
 
+    last_entry = &entries[proposal_count - 1U];
     self_index = tr_voter_index(core, core->self_id);
-    core->match_index[self_index] = entry->index;
-    core->next_index[self_index] = entry->index + 1U;
+    core->match_index[self_index] = last_entry->index;
+    core->next_index[self_index] = last_entry->index + 1U;
     ready->log_changed = true;
-    ready->log_entries = (const tr_raft_entry_t *) entry;
-    ready->log_entry_count = 1U;
+    ready->log_entries = entries;
+    ready->log_entry_count = proposal_count;
+
     result = tr_update_commit(core, ready);
     if (result != SALTS_OK) {
         core->in_call = false;
@@ -1917,6 +1928,16 @@ int tr_raft_core_propose(tr_raft_core_t *core,
     }
     tr_broadcast_replication(core, ready);
     return tr_finish(core, ready, &before);
+}
+
+int tr_raft_core_propose(tr_raft_core_t *core,
+                         const tr_raft_proposal_t *proposal,
+                         tr_raft_ready_t *ready)
+{
+    if (proposal == NULL) {
+        return SALTS_EINVAL;
+    }
+    return tr_raft_core_propose_batch(core, proposal, 1U, ready);
 }
 
 int tr_raft_core_change_membership(

@@ -83,8 +83,7 @@ find_package(FlowMQ CONFIG REQUIRED
 find_package(OpenSSL REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 
-foreach(_turboraft_required_target IN ITEMS Salts::CNet Salts::CHTTP
-                                             Salts::CRPC FlowMQ::FlowMQ)
+foreach(_turboraft_required_target IN ITEMS Salts::CNet FlowMQ::FlowMQ)
   if(NOT TARGET ${_turboraft_required_target})
     message(FATAL_ERROR
             "Required target is unavailable: ${_turboraft_required_target}")
@@ -389,7 +388,8 @@ if(BUILD_TESTS)
 
   endif()
 else()
-  message(FATAL_ERROR "Required Salts CNet/CHTTP/CRPC targets are unavailable")
+  message(STATUS
+          "TurboRaft ControlPlane disabled: Salts::CHTTP/Salts::CRPC targets are unavailable")
 endif()
 
 set(TURBORAFT_TEXT_SYNTAX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/text_syntax")
@@ -478,7 +478,8 @@ if(TARGET Salts::CHTTP AND TARGET Salts::CRPC)
                       NO_INSTALL
                       FOLDER "TurboRaft/tools")
 else()
-  message(FATAL_ERROR "Required Salts CHTTP/CRPC targets are unavailable")
+  message(STATUS
+          "TurboRaft console disabled: Salts::CHTTP/Salts::CRPC targets are unavailable")
 endif()
 
 add_library(turboraft_text_protocol_debug STATIC

@@ -86,6 +86,8 @@ static int tr_text_protocol_executor_make_raft_frame(
   int result;
 
   memset(&metadata, 0, sizeof(metadata));
+  metadata.group_id = 1u;
+  metadata.group_id = 1u;
   metadata.message_id = 11u;
   memset(&message, 0, sizeof(message));
   message.type = TR_RAFT_MSG_TIMEOUT_NOW;
@@ -120,6 +122,8 @@ static int tr_text_protocol_executor_make_snapshot_frames(
   int result;
 
   memset(&metadata, 0, sizeof(metadata));
+  metadata.group_id = 1u;
+  metadata.group_id = 1u;
   metadata.message_id = 12u;
   memset(&chunk, 0, sizeof(chunk));
   chunk.from = 1u;
@@ -202,9 +206,9 @@ spec("TurboRaft text protocol executor") {
                  SALTS_OK);
     input_length = snprintf(
         input, sizeof(input),
-        "frame version 3 kind raft { from = 1; to = 2; term = 9; "
+        "frame version %u kind raft { from = 1; to = 2; term = 9; "
         "message = timeout_now; payload = %s; }",
-        payload);
+        (unsigned)TR_RAFT_WIRE_VERSION, payload);
     check(input_length > 0);
     check((size_t)input_length < sizeof(input));
     check_equal(tr_text_protocol_debug_parse(
@@ -243,11 +247,11 @@ spec("TurboRaft text protocol executor") {
                      ack_frame, ack_length, ack_payload, sizeof(ack_payload)),
                  SALTS_OK);
     tr_text_protocol_executor_set_frame(
-        &plan.frames[0], TR_RAFT_WIRE_SNAPSHOT_VERSION,
+        &plan.frames[0], TR_RAFT_WIRE_VERSION,
         "snapshot_chunk", "snapshot_chunk",
         chunk_payload);
     tr_text_protocol_executor_set_frame(
-        &plan.frames[1], TR_RAFT_WIRE_SNAPSHOT_VERSION,
+        &plan.frames[1], TR_RAFT_WIRE_VERSION,
         "snapshot_ack", "snapshot_ack", ack_payload);
     plan.frames[0].term = 7u;
     plan.frames[1].from = 2u;
@@ -271,7 +275,7 @@ spec("TurboRaft text protocol executor") {
     tr_text_protocol_executor_test_state_t state = {0};
 
     tr_text_protocol_executor_set_frame(
-        &plan.frames[0], 3u, "raft", "timeout_now", "");
+        &plan.frames[0], TR_RAFT_WIRE_VERSION, "raft", "timeout_now", "");
     plan.frame_count = 1u;
 
     check_equal(tr_text_protocol_debug_execute(
@@ -298,7 +302,7 @@ spec("TurboRaft text protocol executor") {
     }
     payload[sizeof(payload) - 1u] = '\0';
     tr_text_protocol_executor_set_frame(
-        &plan.frames[0], 3u, "raft", "timeout_now", payload);
+        &plan.frames[0], TR_RAFT_WIRE_VERSION, "raft", "timeout_now", payload);
     plan.frame_count = 1u;
 
     check_equal(tr_text_protocol_debug_execute(
@@ -321,7 +325,7 @@ spec("TurboRaft text protocol executor") {
                      wire_frame, frame_length, payload, sizeof(payload)),
                  SALTS_OK);
     tr_text_protocol_executor_set_frame(
-        &plan.frames[0], 3u, "raft", "append_request", payload);
+        &plan.frames[0], TR_RAFT_WIRE_VERSION, "raft", "append_request", payload);
     plan.frame_count = 1u;
 
     check_equal(tr_text_protocol_debug_execute(
@@ -345,7 +349,7 @@ spec("TurboRaft text protocol executor") {
                      wire_frame, frame_length, payload, sizeof(payload)),
                  SALTS_OK);
     tr_text_protocol_executor_set_frame(
-        &plan.frames[0], 3u, "raft", "timeout_now", payload);
+        &plan.frames[0], TR_RAFT_WIRE_VERSION, "raft", "timeout_now", payload);
     plan.frame_count = 1u;
 
     check_equal(tr_text_protocol_debug_execute(

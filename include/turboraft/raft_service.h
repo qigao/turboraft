@@ -148,6 +148,22 @@ int tr_raft_service_propose_with_receipt(
     const tr_raft_proposal_t *proposal,
     tr_raft_operation_status_t *out_receipt);
 
+/**
+ * Admits an ordered bounded batch through one Core Ready and one storage
+ * transaction/fsync. proposal_count is bounded by TR_RAFT_MAX_PROPOSAL_BATCH.
+ */
+int tr_raft_service_propose_batch(
+    tr_raft_service_t *service,
+    const tr_raft_proposal_t *proposals,
+    size_t proposal_count);
+
+int tr_raft_service_propose_batch_with_receipts(
+    tr_raft_service_t *service,
+    const tr_raft_proposal_t *proposals,
+    size_t proposal_count,
+    tr_raft_operation_status_t *out_receipts,
+    size_t receipt_capacity);
+
 /* Starts leader transfer through the same durability/transport owner path. */
 int tr_raft_service_transfer_leadership(
     tr_raft_service_t *service,

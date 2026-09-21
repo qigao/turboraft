@@ -13,6 +13,7 @@ extern "C" {
 #define TR_RAFT_MAX_MEMBERS TR_RAFT_MAX_VOTERS
 #define TR_RAFT_MAX_ENTRY_BYTES 512U
 #define TR_RAFT_MAX_APPEND_ENTRIES 8U
+#define TR_RAFT_MAX_PROPOSAL_BATCH 16U
 #define TR_RAFT_DEFAULT_MAX_INFLIGHT_APPEND_REQUESTS 1U
 #define TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS 64U
 #define TR_RAFT_DEFAULT_MAX_LOG_ENTRIES 1024U
@@ -315,6 +316,16 @@ int tr_raft_core_step(tr_raft_core_t *core,
 int tr_raft_core_propose(tr_raft_core_t *core,
                          const tr_raft_proposal_t *proposal,
                          tr_raft_ready_t *ready);
+
+/**
+ * Appends an ordered bounded proposal batch and produces one Ready.
+ * The entire batch is admitted atomically or not at all.
+ */
+int tr_raft_core_propose_batch(
+    tr_raft_core_t *core,
+    const tr_raft_proposal_t *proposals,
+    size_t proposal_count,
+    tr_raft_ready_t *ready);
 
 /** Starts one leader-only Joint Consensus membership transition. */
 int tr_raft_core_change_membership(

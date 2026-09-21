@@ -138,6 +138,7 @@ add_test(NAME turboraft.recovery COMMAND turboraft_recovery_tests)
 
 add_executable(turboraft_runtime_tests test_raft_runtime.c)
 target_link_libraries(turboraft_runtime_tests PRIVATE TurboRaft::Core
+                                                      TurboRaft::DataStream
                                                       Salts::TinyTest)
 add_test(NAME turboraft.runtime COMMAND turboraft_runtime_tests)
 
@@ -164,6 +165,13 @@ target_link_libraries(turboraft_snapshot_group_isolation_tests
                               Salts::TinyTest)
 add_test(NAME turboraft.snapshot_group_isolation
          COMMAND turboraft_snapshot_group_isolation_tests)
+
+add_executable(turboraft_proposal_batch_tests
+               test_raft_proposal_batch.c)
+target_link_libraries(turboraft_proposal_batch_tests
+                      PRIVATE TurboRaft::Service Salts::TinyTest)
+add_test(NAME turboraft.proposal_batch
+         COMMAND turboraft_proposal_batch_tests)
 
 add_executable(turboraft_snapshot_policy_tests
                test_raft_snapshot_policy.c)
@@ -408,7 +416,11 @@ if(TARGET turboraft_flowmq)
   add_executable(turboraft_flowmq_peer_service_tests
                  test_raft_flowmq_peer_service.c)
   target_link_libraries(turboraft_flowmq_peer_service_tests
-                        PRIVATE TurboRaft::FlowMQ Salts::CNet Salts::TinyTest)
+                        PRIVATE TurboRaft::FlowMQ
+                                TurboRaft::SnapshotSender
+                                TurboRaft::SnapshotReceiver
+                                Salts::CNet
+                                Salts::TinyTest)
   target_compile_definitions(
     turboraft_flowmq_peer_service_tests
     PRIVATE TURBORAFT_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")

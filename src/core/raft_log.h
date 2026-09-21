@@ -64,6 +64,13 @@ int tr_raft_log_append_local(tr_raft_log_t *log,
                              size_t data_length,
                              const tr_raft_log_entry_t **out_entry);
 
+int tr_raft_log_append_local_batch(
+    tr_raft_log_t *log,
+    tr_raft_log_term_t term,
+    const tr_raft_proposal_t *proposals,
+    size_t proposal_count,
+    const tr_raft_log_entry_t **out_entries);
+
 int tr_raft_log_append_configuration(
     tr_raft_log_t *log,
     tr_raft_log_term_t term,

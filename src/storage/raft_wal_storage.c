@@ -7,6 +7,7 @@
 
 #include <limits.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,6 +44,7 @@ struct tr_raft_wal_storage {
     size_t current_segment;
     uint64_t current_offset;
     uint64_t last_transaction_id;
+    int process_lock_registered;
     tr_raft_term_t term;
     tr_raft_node_id_t voted_for;
     tr_raft_index_t commit_index;
@@ -56,6 +58,83 @@ struct tr_raft_wal_storage {
     int transaction_active;
     int faulted;
 };
+
+typedef struct tr_wal_process_lock_entry {
+    char path_prefix[SALTS_FS_MAX_PATH];
+    struct tr_wal_process_lock_entry *next;
+} tr_wal_process_lock_entry_t;
+
+static atomic_flag tr_wal_process_lock_guard = ATOMIC_FLAG_INIT;
+static tr_wal_process_lock_entry_t *tr_wal_process_locks = NULL;
+
+static void tr_wal_process_lock_guard_acquire(void)
+{
+    while (atomic_flag_test_and_set_explicit(
+        &tr_wal_process_lock_guard, memory_order_acquire)) {
+    }
+}
+
+static void tr_wal_process_lock_guard_release(void)
+{
+    atomic_flag_clear_explicit(&tr_wal_process_lock_guard,
+                               memory_order_release);
+}
+
+static int tr_wal_process_lock_acquire(const char *path_prefix)
+{
+    tr_wal_process_lock_entry_t *entry;
+    tr_wal_process_lock_entry_t *current;
+    size_t length;
+
+    if (path_prefix == NULL) {
+        return SALTS_EINVAL;
+    }
+    length = strlen(path_prefix);
+    if (length >= SALTS_FS_MAX_PATH) {
+        return SALTS_ENAMETOOLONG;
+    }
+    entry = (tr_wal_process_lock_entry_t *)malloc(sizeof(*entry));
+    if (entry == NULL) {
+        return SALTS_ENOMEM;
+    }
+    memcpy(entry->path_prefix, path_prefix, length + 1U);
+    entry->next = NULL;
+
+    tr_wal_process_lock_guard_acquire();
+    for (current = tr_wal_process_locks; current != NULL;
+         current = current->next) {
+        if (strcmp(current->path_prefix, path_prefix) == 0) {
+            tr_wal_process_lock_guard_release();
+            free(entry);
+            return SALTS_EBUSY;
+        }
+    }
+    entry->next = tr_wal_process_locks;
+    tr_wal_process_locks = entry;
+    tr_wal_process_lock_guard_release();
+    return SALTS_OK;
+}
+
+static void tr_wal_process_lock_release(const char *path_prefix)
+{
+    tr_wal_process_lock_entry_t **link;
+    tr_wal_process_lock_entry_t *entry = NULL;
+
+    if (path_prefix == NULL) {
+        return;
+    }
+    tr_wal_process_lock_guard_acquire();
+    for (link = &tr_wal_process_locks; *link != NULL;
+         link = &(*link)->next) {
+        if (strcmp((*link)->path_prefix, path_prefix) == 0) {
+            entry = *link;
+            *link = entry->next;
+            break;
+        }
+    }
+    tr_wal_process_lock_guard_release();
+    free(entry);
+}
 
 static void tr_wal_put_u32(uint8_t *output, uint32_t value)
 {
@@ -1131,6 +1210,13 @@ int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
         free(storage);
         return SALTS_ENOMEM;
     }
+    result = tr_wal_process_lock_acquire(storage->path_prefix);
+    if (result != SALTS_OK) {
+        free(storage->transaction);
+        free(storage);
+        return result;
+    }
+    storage->process_lock_registered = 1;
     snprintf(lock_path, sizeof(lock_path), "%s.lock", storage->path_prefix);
     storage->lock_file = salts_fs_open(lock_path,
                                        SALTS_FS_O_RDWR | SALTS_FS_O_CREAT,
@@ -1202,6 +1288,10 @@ int tr_raft_wal_storage_close(tr_raft_wal_storage_t *storage)
         int close_result = salts_fs_close(storage->lock_file);
         if (result == SALTS_OK) result = unlock_result;
         if (result == SALTS_OK) result = close_result;
+    }
+    if (storage->process_lock_registered) {
+        tr_wal_process_lock_release(storage->path_prefix);
+        storage->process_lock_registered = 0;
     }
     free(storage->transaction);
     free(storage);

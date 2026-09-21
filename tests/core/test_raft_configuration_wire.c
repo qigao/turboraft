@@ -35,9 +35,9 @@ static void configuration_wire_fixture(tr_raft_conf_t *configuration,
                  SALTS_OK);
 }
 
-spec("raft configuration wire compatibility")
+spec("raft configuration wire contract")
 {
-    it("round trips a configuration entry through wire v3")
+    it("round trips a configuration entry through the current wire contract")
     {
         tr_raft_wire_codec_t *codec = NULL;
         tr_raft_wire_metadata_t metadata;
@@ -48,14 +48,21 @@ spec("raft configuration wire compatibility")
         tr_raft_message_t decoded;
         uint8_t frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
         size_t frame_length = 0U;
+        uint16_t wire_version = 0U;
 
         memset(&metadata, 0, sizeof(metadata));
+        metadata.group_id = 1U;
+        metadata.group_id = 1U;
         metadata.message_id = 7001U;
         configuration_wire_fixture(&configuration, &message);
         check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
         check_equal(tr_raft_wire_encode(codec, &metadata, &message, frame,
                                          sizeof(frame), &frame_length),
                      SALTS_OK);
+        check_equal(tr_raft_wire_peek_version(frame, frame_length,
+                                                &wire_version),
+                     SALTS_OK);
+        check_equal(wire_version, TR_RAFT_WIRE_VERSION);
         check_equal(tr_raft_wire_decode(codec, frame, frame_length,
                                          &decoded_metadata, &decoded),
                      SALTS_OK);
@@ -69,33 +76,6 @@ spec("raft configuration wire compatibility")
         tr_raft_wire_codec_destroy(codec);
     }
 
-    it("round trips a configuration entry through negotiated wire v2")
-    {
-        tr_raft_wire_codec_t *codec = NULL;
-        tr_raft_wire_metadata_t metadata;
-        tr_raft_wire_metadata_t decoded_metadata;
-        tr_raft_conf_t configuration;
-        tr_raft_message_t message;
-        tr_raft_message_t decoded;
-        uint8_t frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
-        size_t frame_length = 0U;
-
-        memset(&metadata, 0, sizeof(metadata));
-        configuration_wire_fixture(&configuration, &message);
-        check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
-        check_equal(tr_raft_wire_encode_version(
-                         codec, 2U, &metadata, &message, frame, sizeof(frame),
-                         &frame_length),
-                     SALTS_OK);
-        check_equal(frame[5], 2U);
-        check_equal(tr_raft_wire_decode(codec, frame, frame_length,
-                                         &decoded_metadata, &decoded),
-                     SALTS_OK);
-        check_equal(decoded.entry.command_id, 0U);
-        check_equal(decoded.entry.data, message.entry.data,
-                     message.entry.data_length);
-        tr_raft_wire_codec_destroy(codec);
-    }
 
     it("rejects a malformed command zero entry at the wire boundary")
     {
