@@ -300,7 +300,7 @@ int tr_raft_flowmq_peer_service_create(
 
     if (config == NULL || out_service == NULL ||
         config->bind_endpoint == NULL || config->local_identity == NULL ||
-        config->on_message == NULL || config->peer_count == 0U ||
+        config->on_payload == NULL || config->peer_count == 0U ||
         config->peer_count > TR_RAFT_MAX_VOTERS - 1U ||
         config->peers == NULL || config->protocol.local_node_id == 0U) {
         return SALTS_EINVAL;
@@ -309,8 +309,7 @@ int tr_raft_flowmq_peer_service_create(
     if (result != SALTS_OK) {
         return result;
     }
-    if ((config->protocol.feature_bits & TR_RAFT_HANDSHAKE_FEATURE_CURRENT) !=
-            TR_RAFT_HANDSHAKE_FEATURE_CURRENT ||
+    if (config->protocol.feature_bits != 0U ||
         config->protocol.wire_major_min != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
         config->protocol.wire_major_max != TR_RAFT_HANDSHAKE_WIRE_MAJOR ||
         config->protocol.wire_minor_min != TR_RAFT_HANDSHAKE_WIRE_MINOR ||
@@ -447,8 +446,6 @@ int tr_raft_flowmq_peer_service_create(
         session_config.peer_node_id = peer->node_id;
         session_config.first_outbound_message_id = 1U;
         session_config.handshake = config->peers[index].handshake;
-        session_config.on_message = config->on_message;
-        session_config.message_context = config->message_context;
         session_config.on_payload = config->on_payload;
         session_config.payload_context = config->payload_context;
         result = tr_raft_transport_session_create(&session_config,
@@ -741,19 +738,21 @@ int tr_raft_flowmq_peer_service_destroy(tr_raft_flowmq_peer_service_t *service)
     return SALTS_OK;
 }
 
-int tr_raft_flowmq_peer_service_enqueue(void *context,
-                                        const tr_raft_message_t *message)
+int tr_raft_flowmq_peer_service_enqueue_group(
+    tr_raft_flowmq_peer_service_t *service,
+    tr_raft_group_id_t group_id,
+    const tr_raft_message_t *message)
 {
     tr_raft_transport_payload_t payload;
 
-    if (message == NULL) {
+    if (service == NULL || message == NULL || group_id == 0U) {
         return SALTS_EINVAL;
     }
     memset(&payload, 0, sizeof(payload));
+    payload.group_id = group_id;
     payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
     payload.data.raft = *message;
-    return tr_raft_flowmq_peer_service_enqueue_payload(
-        (tr_raft_flowmq_peer_service_t *)context, &payload);
+    return tr_raft_flowmq_peer_service_enqueue_payload(service, &payload);
 }
 
 int tr_raft_flowmq_peer_service_enqueue_payload(

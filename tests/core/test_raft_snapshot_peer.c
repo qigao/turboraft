@@ -85,8 +85,9 @@ spec("raft snapshot peer")
 
         peer_config.self_id = 1U;
         peer_config.peer_id = 2U;
+        peer_config.group_id = 77U;
         peer_config.max_snapshot_bytes = 1024U;
-        peer_config.chunk_size = TR_RAFT_WIRE_LEGACY_SNAPSHOT_CHUNK_BYTES;
+        peer_config.chunk_size = 512U;
         peer_config.max_inflight_chunks = 1U;
         peer_config.enqueue = snapshot_payload_enqueue;
         peer_config.enqueue_context = &payloads;
@@ -104,6 +105,7 @@ spec("raft snapshot peer")
                          snapshot, sizeof(snapshot)),
                      SALTS_OK);
         check_equal(payloads.count, 1U);
+        check_equal(payloads.payloads[0].group_id, 77U);
         check_equal(payloads.payloads[0].kind,
                      TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK);
         check_equal(payloads.payloads[0].data.snapshot_chunk.snapshot_offset,
@@ -114,11 +116,16 @@ spec("raft snapshot peer")
                          &payloads.payloads[0].data.snapshot_chunk,
                          &receive_result), SALTS_OK);
         memset(&ack_payload, 0, sizeof(ack_payload));
+        ack_payload.group_id = 78U;
         ack_payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
         ack_payload.data.snapshot_ack = receive_result.ack;
         check_equal(tr_raft_snapshot_peer_handle_payload(peer, &ack_payload),
+                     SALTS_EPROTO);
+        ack_payload.group_id = 77U;
+        check_equal(tr_raft_snapshot_peer_handle_payload(peer, &ack_payload),
                      SALTS_OK);
         check_equal(payloads.count, 2U);
+        check_equal(payloads.payloads[1].group_id, 77U);
         check_equal(payloads.payloads[1].data.snapshot_chunk.snapshot_offset,
                       512U);
 

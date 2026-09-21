@@ -5,10 +5,11 @@
 
 #include <string.h>
 
-static int discard_message(void *context, const tr_raft_message_t *message)
+static int discard_payload(void *context,
+                           const tr_raft_transport_payload_t *payload)
 {
     (void)context;
-    (void)message;
+    (void)payload;
     return SALTS_OK;
 }
 
@@ -25,7 +26,7 @@ static tr_raft_handshake_result_t current_contract(void)
     result.local_node_id = 1U;
     result.peer_node_id = 2U;
     result.peer_process_incarnation.bytes[0] = 1U;
-    result.feature_bits = TR_RAFT_HANDSHAKE_FEATURE_CURRENT;
+    result.feature_bits = 0U;
     result.wire_major = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
     result.wire_minor = TR_RAFT_HANDSHAKE_WIRE_MINOR;
     result.max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
@@ -47,7 +48,7 @@ static int create_session(const tr_raft_handshake_result_t *handshake,
     config.peer_node_id = current.peer_node_id;
     config.first_outbound_message_id = 1U;
     config.handshake = handshake;
-    config.on_message = discard_message;
+    config.on_payload = discard_payload;
     return tr_raft_transport_session_create(&config, out_session);
 }
 
@@ -72,22 +73,19 @@ static tr_raft_message_t append_request(void)
 
 spec("Raft transport contract")
 {
-    it("rejects missing and downgraded contracts")
+    it("rejects missing and non-baseline contracts")
     {
-        tr_raft_handshake_result_t legacy = current_contract();
+        tr_raft_handshake_result_t invalid = current_contract();
         tr_raft_transport_session_t *session = NULL;
 
         check_equal(create_session(NULL, &session), SALTS_EINVAL);
-        legacy.feature_bits = TR_RAFT_HANDSHAKE_FEATURE_SNAPSHOT_CONF_STATE;
-        legacy.max_frame_size = TR_RAFT_HANDSHAKE_MIN_FRAME_SIZE;
-        legacy.max_snapshot_chunk_size =
-            TR_RAFT_HANDSHAKE_MIN_SNAPSHOT_CHUNK_SIZE;
-        check_equal(create_session(&legacy, &session),
+        invalid.feature_bits = UINT64_C(1);
+        check_equal(create_session(&invalid, &session),
                     SALTS_EPROTONOSUPPORT);
         check_null(session);
     }
 
-    it("uses only the current negotiated wire contract")
+    it("uses only the current mandatory group-aware wire")
     {
         tr_raft_handshake_result_t contract = current_contract();
         tr_raft_transport_session_t *session = NULL;
@@ -96,11 +94,14 @@ spec("Raft transport contract")
         size_t packet_size = 0U;
 
         check_equal(create_session(&contract, &session), SALTS_OK);
-        check_equal(tr_raft_transport_encode(session, &message, packet,
+        check_equal(tr_raft_transport_encode(session, 42U, &message, packet,
                                              sizeof(packet), &packet_size),
                     SALTS_OK);
         check(packet_size > TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE);
-        check_equal(packet[9], TR_RAFT_WIRE_VERSION);
+        check_equal(packet[TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE + 5U],
+                    TR_RAFT_WIRE_VERSION);
+        check_equal(packet[TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE + 7U],
+                    TR_RAFT_WIRE_HEADER_SIZE);
         check_equal(tr_raft_transport_session_destroy(session), SALTS_OK);
     }
 }

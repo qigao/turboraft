@@ -1,0 +1,216 @@
+name: Multi-group wire verification
+
+on:
+  push:
+    branches:
+      - feature/multi-group-wire
+  workflow_dispatch:
+
+concurrency:
+  group: multigroup-wire-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout TurboRaft
+        uses: actions/checkout@v4
+
+      - name: Checkout public header dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          git clone --depth 1 https://github.com/qigao/salts.git ../salts             > diagnostics/salts-clone.log 2>&1
+          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils             > diagnostics/salts-utils-clone.log 2>&1
+
+      - name: Compile changed production sources and contract test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          INC=(
+            -Iinclude
+            -Isrc
+            -Isrc/core
+            -Isrc/wire/generated
+            -I../salts/utils/include
+            -I../salts/platform/include
+            -I../salts/concurrency/include
+            -I../salts/cstl/include
+            -I../salts/cmeta/include
+            -I../salts/tinytest/include
+            -I../salts-utils/tbe/data_bind
+            -I../salts-utils/tbe/schema/include
+          )
+
+          run_check() {
+            local label="$1"
+            shift
+            set +e
+            local logfile="diagnostics/${label}.log"
+            "$@" > "$logfile" 2>&1
+            local rc=$?
+            set -e
+            {
+              echo "### ${label}"
+              echo '~~~text'
+              tail -n 120 "$logfile"
+              echo '~~~'
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat "$logfile"
+            return "$rc"
+          }
+
+          run_check "raft_wire_codec.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/wire/raft_wire_codec.c
+          run_check "raft_peer_handshake.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/transport/raft_peer_handshake.c
+          run_check "raft_transport.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only src/transport/raft_transport.c
+          run_check "raft_snapshot_sender.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            src/snapshot/raft_snapshot_sender.c
+          run_check "test_raft_multigroup_wire.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -fsyntax-only tests/core/test_raft_multigroup_wire.c
+          run_check "test_raft_snapshot_sender.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            tests/core/test_raft_snapshot_sender.c
+          run_check "test_raft_snapshot_coordinator.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -Isrc/service -fsyntax-only \
+            tests/core/test_raft_snapshot_coordinator.c
+          run_check "test_raft_snapshot_manager_runtime.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            tests/core/test_raft_snapshot_manager_runtime.c
+          run_check "test_raft_snapshot_peer.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -Isrc/service -fsyntax-only tests/core/test_raft_snapshot_peer.c
+          run_check "test_raft_snapshot_manager.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -Isrc/service -fsyntax-only tests/core/test_raft_snapshot_manager.c
+
+      - name: Verify current public group API
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/multigroup_api_smoke.c <<'EOF'
+          #include <turboraft/raft_transport.h>
+
+          #if defined(TR_RAFT_WIRE_MIN_VERSION) ||               defined(TR_RAFT_WIRE_SNAPSHOT_LEGACY_VERSION) ||               defined(TR_RAFT_WIRE_SNAPSHOT_VERSION) ||               defined(TR_RAFT_WIRE_GROUP_VERSION) ||               defined(TR_RAFT_WIRE_LEGACY_HEADER_SIZE) ||               defined(TR_RAFT_HANDSHAKE_FEATURE_GROUP_MULTIPLEX_V1)
+          #error "legacy or optional group wire surface remains"
+          #endif
+
+          _Static_assert(TR_RAFT_WIRE_VERSION == 6U,
+                         "current wire must be version 6");
+          _Static_assert(TR_RAFT_WIRE_HEADER_SIZE == 48U,
+                         "current header must include group identity");
+
+          int main(void)
+          {
+              tr_raft_wire_metadata_t metadata = {0};
+              tr_raft_transport_payload_t payload = {0};
+
+              metadata.group_id = (tr_raft_group_id_t)100U;
+              payload.group_id = metadata.group_id;
+              return payload.group_id == 100U ? 0 : 1;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra -Werror             -Iinclude             /tmp/multigroup_api_smoke.c             -o /tmp/multigroup_api_smoke
+          /tmp/multigroup_api_smoke
+
+      - name: Run baseline handshake behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/handshake_behavior.c <<'EOF'
+          #include <turboraft/raft_peer_handshake.h>
+          #include <salts_error.h>
+          #include <stdint.h>
+          #include <string.h>
+
+          static tr_raft_handshake_config_t make_config(
+              uint8_t seed,
+              tr_raft_node_id_t node_id)
+          {
+              tr_raft_handshake_config_t config;
+              size_t i;
+
+              memset(&config, 0, sizeof(config));
+              for (i = 0U; i < sizeof(config.cluster_id.bytes); ++i) {
+                  config.cluster_id.bytes[i] = (uint8_t)(10U + i);
+                  config.process_incarnation.bytes[i] =
+                      (uint8_t)(seed + i);
+              }
+              config.local_node_id = node_id;
+              config.config_epoch = 1U;
+              config.feature_bits = 0U;
+              config.wire_major_min = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
+              config.wire_major_max = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
+              config.wire_minor_min = TR_RAFT_HANDSHAKE_WIRE_MINOR;
+              config.wire_minor_max = TR_RAFT_HANDSHAKE_WIRE_MINOR;
+              config.max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
+              config.max_snapshot_chunk_size =
+                  TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+              return config;
+          }
+
+          int main(void)
+          {
+              tr_raft_handshake_config_t first = make_config(20U, 1U);
+              tr_raft_handshake_config_t second = make_config(40U, 2U);
+              tr_raft_handshake_message_t first_hello;
+              tr_raft_handshake_message_t second_hello;
+              tr_raft_handshake_message_t first_ack;
+              tr_raft_handshake_message_t second_ack;
+              tr_raft_handshake_result_t first_result;
+              tr_raft_handshake_result_t second_result;
+
+              if (tr_raft_handshake_make_hello(&first, &first_hello) !=
+                      SALTS_OK ||
+                  tr_raft_handshake_make_hello(&second, &second_hello) !=
+                      SALTS_OK ||
+                  tr_raft_handshake_negotiate(
+                      &first, 2U, &second_hello, &first_ack,
+                      &first_result) != SALTS_OK ||
+                  tr_raft_handshake_negotiate(
+                      &second, 1U, &first_hello, &second_ack,
+                      &second_result) != SALTS_OK ||
+                  tr_raft_handshake_validate_ack(
+                      &first_result, &second_ack) != SALTS_OK ||
+                  tr_raft_handshake_validate_ack(
+                      &second_result, &first_ack) != SALTS_OK ||
+                  first_result.feature_bits != 0U ||
+                  second_result.feature_bits != 0U) {
+                  return 1;
+              }
+              return 0;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra             -Iinclude             -I../salts/utils/include             -I../salts/platform/include             -I../salts/concurrency/include             -I../salts/cmeta/include             -I../salts/cstl/include             /tmp/handshake_behavior.c             src/transport/raft_peer_handshake.c             -o /tmp/handshake_behavior
+          /tmp/handshake_behavior
+
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: multigroup-wire-diagnostics
+          path: diagnostics
+          if-no-files-found: warn

@@ -43,8 +43,10 @@ cnet_observer tr_raft_cnet_peer_observer(tr_raft_cnet_peer_t *peer);
 int tr_raft_cnet_peer_enqueue_payload(
     tr_raft_cnet_peer_t *peer,
     const tr_raft_transport_payload_t *payload);
-int tr_raft_cnet_peer_enqueue(void *context,
-                              const tr_raft_message_t *message);
+int tr_raft_cnet_peer_enqueue_group(
+    tr_raft_cnet_peer_t *peer,
+    tr_raft_group_id_t group_id,
+    const tr_raft_message_t *message);
 
 /** Admits at most one copied CNet write; progress remains caller-driven. */
 int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer);

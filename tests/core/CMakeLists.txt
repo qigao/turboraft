@@ -330,6 +330,13 @@ add_test(NAME turboraft.snapshot_coordinator
          COMMAND turboraft_snapshot_coordinator_tests)
 
 if(TARGET turboraft_cnet)
+  add_executable(turboraft_multigroup_wire_tests
+                 test_raft_multigroup_wire.c)
+  target_link_libraries(turboraft_multigroup_wire_tests
+                        PRIVATE TurboRaft::CNet Salts::TinyTest)
+  add_test(NAME turboraft.multigroup_wire
+           COMMAND turboraft_multigroup_wire_tests)
+
   add_executable(turboraft_snapshot_peer_tests test_raft_snapshot_peer.c)
   target_include_directories(turboraft_snapshot_peer_tests
                              PRIVATE ${PROJECT_SOURCE_DIR}/src/service)

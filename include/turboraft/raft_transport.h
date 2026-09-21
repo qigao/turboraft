@@ -13,7 +13,7 @@ extern "C" {
 #endif
 
 #define TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE 4U
-#define TR_RAFT_TRANSPORT_MAX_PACKET_SIZE                                      \
+#define TR_RAFT_TRANSPORT_MAX_PACKET_SIZE \
     (TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE + TR_RAFT_WIRE_MAX_FRAME_SIZE)
 
 typedef enum tr_raft_transport_state {
@@ -22,6 +22,7 @@ typedef enum tr_raft_transport_state {
 } tr_raft_transport_state_t;
 
 typedef struct tr_raft_transport_payload {
+    tr_raft_group_id_t group_id;
     tr_raft_wire_payload_kind_t kind;
     union {
         tr_raft_message_t raft;
@@ -32,8 +33,6 @@ typedef struct tr_raft_transport_payload {
     } data;
 } tr_raft_transport_payload_t;
 
-typedef int (*tr_raft_transport_message_handler_fn)(
-    void *context, const tr_raft_message_t *message);
 typedef int (*tr_raft_transport_payload_handler_fn)(
     void *context, const tr_raft_transport_payload_t *payload);
 
@@ -44,8 +43,7 @@ typedef struct tr_raft_transport_session_config {
     uint64_t first_outbound_message_id;
     /** Required completed peer negotiation; there is no implicit contract. */
     const tr_raft_handshake_result_t *handshake;
-    tr_raft_transport_message_handler_fn on_message;
-    void *message_context;
+    /** Required unified inbound callback for Raft/snapshot/data payloads. */
     tr_raft_transport_payload_handler_fn on_payload;
     void *payload_context;
 } tr_raft_transport_session_config_t;
@@ -67,12 +65,16 @@ int tr_raft_transport_session_create(
     tr_raft_transport_session_t **out_session);
 int tr_raft_transport_session_destroy(tr_raft_transport_session_t *session);
 
+/** Convenience encoder for one Raft message in a non-zero group. */
 int tr_raft_transport_encode(
     tr_raft_transport_session_t *session,
+    tr_raft_group_id_t group_id,
     const tr_raft_message_t *message,
     uint8_t *output,
     size_t output_capacity,
     size_t *output_size);
+
+/** Encodes any current group-aware payload. payload->group_id must be non-zero. */
 int tr_raft_transport_encode_payload(
     tr_raft_transport_session_t *session,
     const tr_raft_transport_payload_t *payload,
