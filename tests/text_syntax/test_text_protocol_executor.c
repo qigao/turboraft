@@ -86,6 +86,7 @@ static int tr_text_protocol_executor_make_raft_frame(
   int result;
 
   memset(&metadata, 0, sizeof(metadata));
+  metadata.group_id = 1u;
   metadata.message_id = 11u;
   memset(&message, 0, sizeof(message));
   message.type = TR_RAFT_MSG_TIMEOUT_NOW;
@@ -120,6 +121,7 @@ static int tr_text_protocol_executor_make_snapshot_frames(
   int result;
 
   memset(&metadata, 0, sizeof(metadata));
+  metadata.group_id = 1u;
   metadata.message_id = 12u;
   memset(&chunk, 0, sizeof(chunk));
   chunk.from = 1u;
