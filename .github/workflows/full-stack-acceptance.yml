@@ -17,7 +17,7 @@ env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
   SALTS_REF: ce9b57bc166bf86bd311fe6f86b7619dd64673e1
   SALTS_UTILS_REF: 2ceba0f6c46914600960bc410f5b5453911322ec
-  FLOWMQ_REF: ca07e0b576a3d35f5cd8050bbcf71d116318c100
+  FLOWMQ_REF: 03a52de3b9000f71f0b8a938df76b21a31582928
   VCPKG_ROOT: ${{ github.workspace }}/.ci/vcpkg
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
   SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
@@ -50,7 +50,7 @@ jobs:
           path: .ci/src/salts-utils
           persist-credentials: false
 
-      - name: Checkout pinned private FlowMQ
+      - name: Checkout pinned FlowMQ
         uses: actions/checkout@v4
         with:
           repository: qigao/flowmq
@@ -81,7 +81,8 @@ jobs:
           bash .ci/src/salts-utils/cmake/ci/install-re2c.sh
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: .ci/vcpkg-bincache
           key: vcpkg-linux-${{ env.VCPKG_BASELINE }}-turboraft-full-v1
@@ -120,6 +121,13 @@ jobs:
             --x-manifest-root="$GITHUB_WORKSPACE/.ci/super-manifest" \
             --x-install-root="$VCPKG_INSTALLED_DIR" \
             --triplet=x64-linux
+
+      - name: Save vcpkg binary cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .ci/vcpkg-bincache
+          key: vcpkg-linux-${{ env.VCPKG_BASELINE }}-turboraft-full-v1
 
       - name: Build and install pinned Salts
         shell: bash
