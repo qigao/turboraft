@@ -47,6 +47,11 @@ int tr_raft_data_quorum_acknowledge(
     tr_raft_data_quorum_t *quorum,
     const tr_raft_data_ack_t *ack);
 bool tr_raft_data_quorum_ready(const tr_raft_data_quorum_t *quorum);
+
+/** Returns whether this specific configured peer has the staged bytes durable. */
+bool tr_raft_data_quorum_peer_durable(
+    const tr_raft_data_quorum_t *quorum,
+    tr_raft_node_id_t node_id);
 /** Builds a proposal whose data view borrows descriptor_storage. */
 int tr_raft_data_quorum_make_proposal(
     const tr_raft_data_quorum_t *quorum,
@@ -57,10 +62,26 @@ int tr_raft_data_quorum_make_proposal(
 typedef struct tr_raft_data_stream_sender tr_raft_data_stream_sender_t;
 typedef struct tr_raft_data_stream_receiver tr_raft_data_stream_receiver_t;
 
+typedef int (*tr_raft_data_stream_source_read_at_fn)(
+    void *context,
+    uint64_t offset,
+    uint8_t *buffer,
+    size_t capacity,
+    size_t *out_size);
+typedef void (*tr_raft_data_stream_source_release_fn)(void *context);
+
+typedef struct tr_raft_data_stream_source {
+    void *context;
+    uint64_t size;
+    uint8_t digest[TR_RAFT_WIRE_DATA_DIGEST_SIZE];
+    tr_raft_data_stream_source_read_at_fn read_at;
+    tr_raft_data_stream_source_release_fn release;
+} tr_raft_data_stream_source_t;
+
 typedef struct tr_raft_data_stream_sender_config {
     tr_raft_node_id_t self_id;
     tr_raft_node_id_t peer_id;
-    size_t max_stream_bytes;
+    uint64_t max_stream_bytes;
     size_t chunk_size;
     size_t max_inflight_chunks;
 } tr_raft_data_stream_sender_config_t;
@@ -81,16 +102,22 @@ int tr_raft_data_stream_sender_create(
 void tr_raft_data_stream_sender_destroy(tr_raft_data_stream_sender_t *sender);
 void tr_raft_data_stream_sender_reset(tr_raft_data_stream_sender_t *sender);
 
-/**
- * Starts a zero-copy transfer. data remains caller-owned and immutable until
- * reset, destroy, or a complete acknowledgement.
- */
+/** Small-object compatibility helper; copies the complete payload. */
 int tr_raft_data_stream_sender_begin(
     tr_raft_data_stream_sender_t *sender,
     tr_raft_term_t term,
     uint64_t stream_id,
     const uint8_t *data,
     size_t size);
+/**
+ * Starts a database-scale transfer and takes ownership of source on success.
+ * read_at is called only with bounded chunk-sized buffers.
+ */
+int tr_raft_data_stream_sender_begin_source(
+    tr_raft_data_stream_sender_t *sender,
+    tr_raft_term_t term,
+    uint64_t stream_id,
+    const tr_raft_data_stream_source_t *source);
 int tr_raft_data_stream_sender_next(
     tr_raft_data_stream_sender_t *sender,
     tr_raft_data_chunk_t *out_chunk);
@@ -127,7 +154,7 @@ typedef struct tr_raft_data_stream_sink {
 
 typedef struct tr_raft_data_stream_receiver_config {
     tr_raft_node_id_t self_id;
-    size_t max_stream_bytes;
+    uint64_t max_stream_bytes;
     tr_raft_data_stream_sink_t sink;
 } tr_raft_data_stream_receiver_config_t;
 

@@ -86,12 +86,19 @@ int tr_raft_data_descriptor_decode(
 typedef struct tr_data_claim {
     uint64_t offset;
     size_t length;
+    size_t slot;
 } tr_data_claim_t;
+
+typedef struct tr_data_memory_source {
+    uint8_t *data;
+    size_t size;
+} tr_data_memory_source_t;
 
 struct tr_raft_data_stream_sender {
     tr_raft_data_stream_sender_config_t config;
-    const uint8_t *data;
-    size_t size;
+    tr_raft_data_stream_source_t source;
+    uint8_t *chunk_storage;
+    uint64_t size;
     size_t chunk_size;
     size_t max_inflight_chunks;
     tr_raft_term_t term;
@@ -101,6 +108,7 @@ struct tr_raft_data_stream_sender {
     uint8_t digest[TR_RAFT_WIRE_DATA_DIGEST_SIZE];
     tr_data_claim_t claims[TR_RAFT_DATA_STREAM_MAX_INFLIGHT_CHUNKS];
     size_t claim_count;
+    bool source_owned;
     bool active;
     bool complete;
 };
@@ -221,17 +229,22 @@ bool tr_raft_data_quorum_ready(const tr_raft_data_quorum_t *quorum)
             new_durable += quorum->durable[index] ? 1U : 0U;
         }
     }
-    if (old_voters == 0U || new_voters == 0U ||
-        old_durable < tr_data_majority(old_voters) ||
-        new_durable < tr_data_majority(new_voters)) {
+    return old_voters != 0U && new_voters != 0U &&
+           old_durable >= tr_data_majority(old_voters) &&
+           new_durable >= tr_data_majority(new_voters);
+}
+
+bool tr_raft_data_quorum_peer_durable(
+    const tr_raft_data_quorum_t *quorum,
+    tr_raft_node_id_t node_id)
+{
+    size_t index;
+
+    if (quorum == NULL || node_id == 0U) {
         return false;
     }
-    /* Every replication target must stage before it can receive and apply the
-     * descriptor. A future per-peer AppendEntries gate may safely relax this. */
-    for (index = 0U; index < quorum->config.configuration.member_count; ++index) {
-        if (!quorum->durable[index]) return false;
-    }
-    return true;
+    index = tr_data_member_index(&quorum->config.configuration, node_id);
+    return index != SIZE_MAX && quorum->durable[index];
 }
 
 int tr_raft_data_quorum_make_proposal(
@@ -256,9 +269,53 @@ int tr_raft_data_quorum_make_proposal(
     return SALTS_OK;
 }
 
+static int tr_data_memory_read_at(
+    void *context,
+    uint64_t offset,
+    uint8_t *buffer,
+    size_t capacity,
+    size_t *out_size)
+{
+    tr_data_memory_source_t *source =
+        (tr_data_memory_source_t *)context;
+
+    if (source == NULL || out_size == NULL ||
+        offset > source->size ||
+        capacity > source->size - (size_t)offset ||
+        (capacity != 0U && buffer == NULL)) {
+        return SALTS_EINVAL;
+    }
+    if (capacity != 0U) {
+        memcpy(buffer, source->data + (size_t)offset, capacity);
+    }
+    *out_size = capacity;
+    return SALTS_OK;
+}
+
+static void tr_data_memory_release(void *context)
+{
+    tr_data_memory_source_t *source =
+        (tr_data_memory_source_t *)context;
+
+    if (source != NULL) {
+        free(source->data);
+        free(source);
+    }
+}
+
+static void tr_data_sender_release_source(
+    tr_raft_data_stream_sender_t *sender)
+{
+    if (sender->source_owned && sender->source.release != NULL) {
+        sender->source.release(sender->source.context);
+    }
+    memset(&sender->source, 0, sizeof(sender->source));
+    sender->source_owned = false;
+}
+
 static void tr_data_sender_clear(tr_raft_data_stream_sender_t *sender)
 {
-    sender->data = NULL;
+    tr_data_sender_release_source(sender);
     sender->size = 0U;
     sender->term = 0U;
     sender->stream_id = 0U;
@@ -269,6 +326,33 @@ static void tr_data_sender_clear(tr_raft_data_stream_sender_t *sender)
     sender->complete = false;
     memset(sender->digest, 0, sizeof(sender->digest));
     memset(sender->claims, 0, sizeof(sender->claims));
+}
+
+static bool tr_data_sender_slot_in_use(
+    const tr_raft_data_stream_sender_t *sender,
+    size_t slot)
+{
+    size_t index;
+    for (index = 0U; index < sender->claim_count; ++index) {
+        if (sender->claims[index].slot == slot) return true;
+    }
+    return false;
+}
+
+static int tr_data_sender_find_free_slot(
+    const tr_raft_data_stream_sender_t *sender,
+    size_t *out_slot)
+{
+    size_t slot;
+
+    if (out_slot == NULL) return SALTS_EINVAL;
+    for (slot = 0U; slot < sender->max_inflight_chunks; ++slot) {
+        if (!tr_data_sender_slot_in_use(sender, slot)) {
+            *out_slot = slot;
+            return SALTS_OK;
+        }
+    }
+    return SALTS_EBUSY;
 }
 
 int tr_raft_data_stream_sender_create(
@@ -282,8 +366,7 @@ int tr_raft_data_stream_sender_create(
     if (out_sender == NULL) return SALTS_EINVAL;
     *out_sender = NULL;
     if (config == NULL || config->self_id == 0U || config->peer_id == 0U ||
-        config->self_id == config->peer_id || config->max_stream_bytes == 0U ||
-        config->max_stream_bytes > TR_RAFT_WIRE_MAX_DATA_STREAM_BYTES) {
+        config->self_id == config->peer_id || config->max_stream_bytes == 0U) {
         return SALTS_EINVAL;
     }
     chunk_size = config->chunk_size;
@@ -297,6 +380,11 @@ int tr_raft_data_stream_sender_create(
     }
     sender = (tr_raft_data_stream_sender_t *)calloc(1U, sizeof(*sender));
     if (sender == NULL) return SALTS_ENOMEM;
+    sender->chunk_storage = (uint8_t *)malloc(chunk_size * inflight);
+    if (sender->chunk_storage == NULL) {
+        free(sender);
+        return SALTS_ENOMEM;
+    }
     sender->config = *config;
     sender->chunk_size = chunk_size;
     sender->max_inflight_chunks = inflight;
@@ -308,6 +396,7 @@ void tr_raft_data_stream_sender_destroy(tr_raft_data_stream_sender_t *sender)
 {
     if (sender != NULL) {
         tr_data_sender_clear(sender);
+        free(sender->chunk_storage);
         free(sender);
     }
 }
@@ -317,6 +406,30 @@ void tr_raft_data_stream_sender_reset(tr_raft_data_stream_sender_t *sender)
     if (sender != NULL) tr_data_sender_clear(sender);
 }
 
+int tr_raft_data_stream_sender_begin_source(
+    tr_raft_data_stream_sender_t *sender,
+    tr_raft_term_t term,
+    uint64_t stream_id,
+    const tr_raft_data_stream_source_t *source)
+{
+    if (sender == NULL || source == NULL || source->read_at == NULL ||
+        term == 0U || stream_id == 0U ||
+        source->size > sender->config.max_stream_bytes) {
+        return SALTS_EINVAL;
+    }
+    if (sender->active && !sender->complete) return SALTS_EBUSY;
+
+    tr_data_sender_clear(sender);
+    sender->source = *source;
+    sender->source_owned = true;
+    sender->size = source->size;
+    sender->term = term;
+    sender->stream_id = stream_id;
+    memcpy(sender->digest, source->digest, sizeof(sender->digest));
+    sender->active = true;
+    return SALTS_OK;
+}
+
 int tr_raft_data_stream_sender_begin(
     tr_raft_data_stream_sender_t *sender,
     tr_raft_term_t term,
@@ -324,28 +437,53 @@ int tr_raft_data_stream_sender_begin(
     const uint8_t *data,
     size_t size)
 {
+    tr_data_memory_source_t *memory;
+    tr_raft_data_stream_source_t source;
+    int result;
+
     if (sender == NULL || term == 0U || stream_id == 0U ||
-        size > sender->config.max_stream_bytes || (size != 0U && data == NULL)) {
+        size > sender->config.max_stream_bytes ||
+        (size != 0U && data == NULL)) {
         return SALTS_EINVAL;
     }
-    if (sender->active && !sender->complete) return SALTS_EBUSY;
-    tr_data_sender_clear(sender);
-    sender->data = data;
-    sender->size = size;
-    sender->term = term;
-    sender->stream_id = stream_id;
-    SHA256(size == 0U ? (const uint8_t *)"" : data, size, sender->digest);
-    sender->active = true;
-    return SALTS_OK;
+    memory = (tr_data_memory_source_t *)calloc(1U, sizeof(*memory));
+    if (memory == NULL) return SALTS_ENOMEM;
+    if (size != 0U) {
+        memory->data = (uint8_t *)malloc(size);
+        if (memory->data == NULL) {
+            free(memory);
+            return SALTS_ENOMEM;
+        }
+        memcpy(memory->data, data, size);
+    }
+    memory->size = size;
+
+    memset(&source, 0, sizeof(source));
+    source.context = memory;
+    source.size = size;
+    SHA256(size == 0U ? (const uint8_t *)"" : memory->data,
+           size, source.digest);
+    source.read_at = tr_data_memory_read_at;
+    source.release = tr_data_memory_release;
+    result = tr_raft_data_stream_sender_begin_source(
+        sender, term, stream_id, &source);
+    if (result != SALTS_OK) {
+        tr_data_memory_release(memory);
+    }
+    return result;
 }
 
 int tr_raft_data_stream_sender_next(
     tr_raft_data_stream_sender_t *sender,
     tr_raft_data_chunk_t *out_chunk)
 {
-    size_t remaining;
+    uint64_t remaining;
     size_t length;
+    size_t slot;
+    size_t read_size = 0U;
+    uint8_t *buffer;
     tr_data_claim_t *claim;
+    int result;
 
     if (sender == NULL || out_chunk == NULL) return SALTS_EINVAL;
     if (!sender->active || sender->complete ||
@@ -353,8 +491,23 @@ int tr_raft_data_stream_sender_next(
         (sender->next_offset == sender->size && sender->claim_count != 0U)) {
         return SALTS_EBUSY;
     }
-    remaining = sender->size - (size_t)sender->next_offset;
-    length = remaining < sender->chunk_size ? remaining : sender->chunk_size;
+
+    remaining = sender->size - sender->next_offset;
+    length = remaining < sender->chunk_size
+                 ? (size_t)remaining
+                 : sender->chunk_size;
+    result = tr_data_sender_find_free_slot(sender, &slot);
+    if (result != SALTS_OK) return result;
+
+    buffer = sender->chunk_storage + slot * sender->chunk_size;
+    if (length != 0U) {
+        result = sender->source.read_at(
+            sender->source.context, sender->next_offset,
+            buffer, length, &read_size);
+        if (result != SALTS_OK) return result;
+        if (read_size != length) return SALTS_EPROTO;
+    }
+
     memset(out_chunk, 0, sizeof(*out_chunk));
     out_chunk->from = sender->config.self_id;
     out_chunk->to = sender->config.peer_id;
@@ -363,12 +516,14 @@ int tr_raft_data_stream_sender_next(
     out_chunk->stream_offset = sender->next_offset;
     out_chunk->stream_size = sender->size;
     memcpy(out_chunk->stream_digest, sender->digest, sizeof(sender->digest));
-    out_chunk->data = length == 0U ? NULL : sender->data + sender->next_offset;
+    out_chunk->data = length == 0U ? NULL : buffer;
     out_chunk->data_length = length;
     out_chunk->done = sender->next_offset + length == sender->size;
+
     claim = &sender->claims[sender->claim_count++];
     claim->offset = sender->next_offset;
     claim->length = length;
+    claim->slot = slot;
     sender->next_offset += length;
     return SALTS_OK;
 }
@@ -444,6 +599,7 @@ int tr_raft_data_stream_sender_acknowledge(
     if (ack->next_offset == sender->size) {
         if (!ack->durable) return SALTS_EPROTO;
         sender->complete = true;
+        tr_data_sender_release_source(sender);
     } else if (ack->durable) {
         return SALTS_EPROTO;
     }
@@ -489,7 +645,6 @@ int tr_raft_data_stream_receiver_create(
     *out_receiver = NULL;
     if (config == NULL || config->self_id == 0U ||
         config->max_stream_bytes == 0U ||
-        config->max_stream_bytes > TR_RAFT_WIRE_MAX_DATA_STREAM_BYTES ||
         config->sink.begin == NULL || config->sink.write == NULL ||
         config->sink.commit == NULL || config->sink.abort == NULL) {
         return SALTS_EINVAL;

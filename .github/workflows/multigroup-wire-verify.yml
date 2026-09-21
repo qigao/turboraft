@@ -8,6 +8,7 @@ on:
       - feature/streaming-snapshot
       - feature/multigroup-chaos
       - feature/concurrent-readindex
+      - feature/streaming-data-plane
   workflow_dispatch:
 
 concurrency:
@@ -209,6 +210,30 @@ jobs:
             tests/core/test_raft_snapshot_receiver.c
           run_check "test_raft_snapshot_manager.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -Isrc/service -fsyntax-only tests/core/test_raft_snapshot_manager.c
           run_check "test_raft_read_index.c" \
+          run_check "raft_data_stream.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            src/stream/raft_data_stream.c
+          run_check "test_raft_data_stream.c" \
+          run_check "test_raft_runtime.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            tests/core/test_raft_runtime.c
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            tests/core/test_raft_data_stream.c
             cc -std=c11 -Wall -Wextra \
             -Werror=implicit-function-declaration \
             -Werror=incompatible-pointer-types \
@@ -256,6 +281,56 @@ jobs:
             -Werror=return-type \
             "${INC[@]}" -Isrc/transport -fsyntax-only \
             tests/core/test_raft_snapshot_group_isolation.c
+
+      - name: Run retryable state-machine apply behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -Isrc \
+            -Isrc/core \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/cstl/include \
+            -I../salts/cmeta/include \
+            -I../salts/tinytest/include \
+            tests/core/test_raft_runtime.c \
+            src/runtime/raft_runtime.c \
+            src/stream/raft_data_stream.c \
+            src/core/raft_core.c \
+            src/core/raft_configuration.c \
+            src/core/raft_membership.c \
+            src/core/raft_membership_transition.c \
+            src/core/raft_peer_set.c \
+            src/core/raft_log.c \
+            ../salts/cstl/src/vec.c \
+            ../salts/tinytest/src/tinytest.c \
+            ../salts/tinytest/src/tinymock.c \
+            -lcrypto \
+            -o /tmp/turboraft_runtime_tests
+          /tmp/turboraft_runtime_tests
+
+      - name: Run streaming DataStream behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -Isrc \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/cstl/include \
+            -I../salts/cmeta/include \
+            -I../salts/tinytest/include \
+            tests/core/test_raft_data_stream.c \
+            src/stream/raft_data_stream.c \
+            src/core/raft_configuration.c \
+            ../salts/tinytest/src/tinytest.c \
+            ../salts/tinytest/src/tinymock.c \
+            -lcrypto \
+            -o /tmp/turboraft_data_stream_tests
+          /tmp/turboraft_data_stream_tests
 
       - name: Run concurrent ReadIndex behavior
         shell: bash

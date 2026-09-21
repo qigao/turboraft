@@ -158,14 +158,22 @@ static int tr_service_drain_transport(tr_raft_service_t *service)
 
 static int tr_service_mutation_guard(tr_raft_service_t *service)
 {
+    int result;
+
     if (service->faulted) {
         return SALTS_EPROTO;
     }
     if (service->backup_prepared) {
         return SALTS_EBUSY;
     }
-    return service->transport_backpressured
-               ? tr_service_drain_transport(service)
+    if (service->transport_backpressured) {
+        result = tr_service_drain_transport(service);
+        if (result != SALTS_OK) {
+            return result;
+        }
+    }
+    return tr_raft_runtime_apply_blocked(&service->runtime)
+               ? SALTS_EBUSY
                : SALTS_OK;
 }
 
@@ -423,6 +431,12 @@ static int tr_service_process_ready(
     }
     result = tr_raft_runtime_process(
         &service->runtime, ready, &service->last_runtime_result);
+    if (result == SALTS_EBUSY &&
+        tr_raft_runtime_apply_blocked(&service->runtime)) {
+        result = tr_service_enqueue_read_states(service, ready);
+        return result == SALTS_OK ? SALTS_EBUSY
+                                  : tr_service_fault(service, result);
+    }
     if (result != SALTS_OK) {
         tr_service_clear_pending_transport(service);
         return tr_service_fault(service, result);
@@ -804,10 +818,30 @@ int tr_raft_service_poll(tr_raft_service_t *service)
     if (service == NULL) {
         return SALTS_EINVAL;
     }
-    result = tr_service_mutation_guard(service);
-    if (result != SALTS_OK) {
-        return result;
+    if (service->faulted) {
+        return SALTS_EPROTO;
     }
+    if (service->backup_prepared) {
+        return SALTS_EBUSY;
+    }
+    if (service->transport_backpressured) {
+        result = tr_service_drain_transport(service);
+        if (result != SALTS_OK) {
+            return result;
+        }
+    }
+    if (tr_raft_runtime_apply_blocked(&service->runtime)) {
+        result = tr_raft_runtime_retry_apply(
+            &service->runtime, &service->last_runtime_result);
+        if (result == SALTS_EBUSY) {
+            return result;
+        }
+        if (result != SALTS_OK) {
+            return tr_service_fault(service, result);
+        }
+        return tr_service_snapshot(service, false);
+    }
+
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_poll(service->core, &ready);
     if (result != SALTS_OK) {
