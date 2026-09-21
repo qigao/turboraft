@@ -138,6 +138,7 @@ add_test(NAME turboraft.recovery COMMAND turboraft_recovery_tests)
 
 add_executable(turboraft_runtime_tests test_raft_runtime.c)
 target_link_libraries(turboraft_runtime_tests PRIVATE TurboRaft::Core
+                                                      TurboRaft::DataStream
                                                       Salts::TinyTest)
 add_test(NAME turboraft.runtime COMMAND turboraft_runtime_tests)
 
