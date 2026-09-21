@@ -50,8 +50,13 @@ struct tr_raft_core {
     uint32_t leadership_transfer_elapsed_ticks;
     bool leadership_transfer_sent;
     uint64_t pending_read_context_id;
+    uint64_t pending_read_contexts[TR_RAFT_MAX_PENDING_READS];
+    size_t pending_read_count;
     tr_raft_index_t pending_read_index;
     uint32_t pending_read_acks;
+    uint64_t waiting_read_contexts[TR_RAFT_MAX_PENDING_READS];
+    size_t waiting_read_count;
+    size_t max_pending_reads;
     uint32_t pre_votes;
     uint32_t votes;
     tr_raft_index_t next_index[TR_RAFT_MAX_VOTERS];
@@ -505,7 +510,7 @@ static int tr_finish(tr_raft_core_t *core,
                               ready->role_changed || ready->log_changed ||
                               ready->commit_changed ||
                               ready->committed_entry_count != 0U ||
-                              ready->read_state_ready ||
+                              ready->read_state_count != 0U ||
                               ready->snapshot_request_count != 0U;
     core->in_call = false;
     return SALTS_OK;
@@ -720,6 +725,96 @@ static void tr_fill_peer_replication_window(tr_raft_core_t *core,
     }
 }
 
+static size_t tr_read_total_count(const tr_raft_core_t *core)
+{
+    return core->pending_read_count + core->waiting_read_count;
+}
+
+static bool tr_read_context_exists(const tr_raft_core_t *core,
+                                   uint64_t context_id)
+{
+    size_t index;
+
+    for (index = 0U; index < core->pending_read_count; ++index) {
+        if (core->pending_read_contexts[index] == context_id) {
+            return true;
+        }
+    }
+    for (index = 0U; index < core->waiting_read_count; ++index) {
+        if (core->waiting_read_contexts[index] == context_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void tr_read_clear_active(tr_raft_core_t *core)
+{
+    core->pending_read_context_id = 0U;
+    core->pending_read_index = 0U;
+    core->pending_read_acks = 0U;
+    core->pending_read_count = 0U;
+    memset(core->pending_read_contexts, 0,
+           sizeof(core->pending_read_contexts));
+}
+
+static void tr_read_reset_all(tr_raft_core_t *core)
+{
+    tr_read_clear_active(core);
+    core->waiting_read_count = 0U;
+    memset(core->waiting_read_contexts, 0,
+           sizeof(core->waiting_read_contexts));
+}
+
+static void tr_read_emit_active(tr_raft_core_t *core,
+                                tr_raft_ready_t *ready)
+{
+    size_t index;
+
+    ready->read_state_count = core->pending_read_count;
+    for (index = 0U; index < core->pending_read_count; ++index) {
+        ready->read_states[index].context_id =
+            core->pending_read_contexts[index];
+        ready->read_states[index].index = core->pending_read_index;
+    }
+    if (ready->read_state_count != 0U) {
+        ready->read_state_ready = true;
+        ready->read_state = ready->read_states[0];
+    }
+    tr_read_clear_active(core);
+}
+
+static void tr_read_move_waiting_to_active(tr_raft_core_t *core)
+{
+    size_t index;
+
+    core->pending_read_count = core->waiting_read_count;
+    for (index = 0U; index < core->waiting_read_count; ++index) {
+        core->pending_read_contexts[index] =
+            core->waiting_read_contexts[index];
+    }
+    memset(core->waiting_read_contexts, 0,
+           sizeof(core->waiting_read_contexts));
+    core->waiting_read_count = 0U;
+}
+
+static void tr_read_start_active_barrier(tr_raft_core_t *core,
+                                         tr_raft_ready_t *ready)
+{
+    int self_index = tr_voter_index(core, core->self_id);
+
+    core->pending_read_context_id = core->pending_read_contexts[0];
+    core->pending_read_index = core->commit_index;
+    core->pending_read_acks =
+        UINT32_C(1) << (uint32_t)self_index;
+    if (tr_core_has_quorum(core, core->pending_read_acks)) {
+        tr_read_emit_active(core, ready);
+    } else {
+        tr_broadcast_read_index(
+            core, ready, core->pending_read_context_id);
+    }
+}
+
 static void tr_become_follower(tr_raft_core_t *core, tr_raft_term_t term)
 {
     size_t index;
@@ -740,9 +835,7 @@ static void tr_become_follower(tr_raft_core_t *core, tr_raft_term_t term)
     core->leadership_transfer_target = 0U;
     core->leadership_transfer_elapsed_ticks = 0U;
     core->leadership_transfer_sent = false;
-    core->pending_read_context_id = 0U;
-    core->pending_read_index = 0U;
-    core->pending_read_acks = 0U;
+    tr_read_reset_all(core);
     for (index = 0U; index < TR_RAFT_MAX_VOTERS; ++index) {
         tr_append_window_reset(&core->append_windows[index], true);
     }
@@ -766,9 +859,7 @@ static void tr_become_leader(tr_raft_core_t *core, tr_raft_ready_t *ready)
     core->leadership_transfer_target = 0U;
     core->leadership_transfer_elapsed_ticks = 0U;
     core->leadership_transfer_sent = false;
-    core->pending_read_context_id = 0U;
-    core->pending_read_index = 0U;
-    core->pending_read_acks = 0U;
+    tr_read_reset_all(core);
     for (index = 0U; index < tr_peer_count(core); ++index) {
         tr_append_window_reset(&core->append_windows[index], true);
         core->next_index[index] = next_index;
@@ -1229,17 +1320,20 @@ static void tr_step_read_index_response(tr_raft_core_t *core,
     if (core->role != TR_RAFT_LEADER || response->term != core->term ||
         response->context_id == 0U ||
         response->context_id != core->pending_read_context_id ||
+        core->pending_read_count == 0U ||
         (core->pending_read_acks & bit) != 0U) {
         return;
     }
     core->pending_read_acks |= bit;
     if (tr_core_has_quorum(core, core->pending_read_acks)) {
-        ready->read_state_ready = true;
-        ready->read_state.context_id = core->pending_read_context_id;
-        ready->read_state.index = core->pending_read_index;
-        core->pending_read_context_id = 0U;
-        core->pending_read_index = 0U;
-        core->pending_read_acks = 0U;
+        size_t required = tr_core_voter_count(core) - 1U;
+
+        tr_read_emit_active(core, ready);
+        if (core->waiting_read_count != 0U &&
+            required <= ready->message_capacity - ready->message_count) {
+            tr_read_move_waiting_to_active(core);
+            tr_read_start_active_barrier(core, ready);
+        }
     }
 }
 
@@ -1287,7 +1381,8 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
         config->initial_election_timeout_ticks < config->election_min_ticks ||
         config->initial_election_timeout_ticks > config->election_max_ticks ||
         config->max_inflight_append_requests >
-            TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS) {
+            TR_RAFT_MAX_INFLIGHT_APPEND_REQUESTS ||
+        config->max_pending_reads > TR_RAFT_MAX_PENDING_READS) {
         return SALTS_EINVAL;
     }
     for (index = 0; index < config->voter_count; ++index) {
@@ -1467,6 +1562,10 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
         config->max_inflight_append_requests == 0U
             ? TR_RAFT_DEFAULT_MAX_INFLIGHT_APPEND_REQUESTS
             : config->max_inflight_append_requests;
+    core->max_pending_reads =
+        config->max_pending_reads == 0U
+            ? TR_RAFT_DEFAULT_MAX_PENDING_READS
+            : config->max_pending_reads;
     for (index = 0U; index < TR_RAFT_MAX_VOTERS; ++index) {
         core->append_windows[index].probe = true;
     }
@@ -1841,7 +1940,7 @@ int tr_raft_core_change_membership(
         return SALTS_EPERM;
     }
     if (core->leadership_transfer_target != 0U ||
-        core->pending_read_context_id != 0U) {
+        tr_read_total_count(core) != 0U) {
         core->in_call = false;
         return SALTS_EBUSY;
     }
@@ -1885,7 +1984,8 @@ int tr_raft_core_transfer_leadership(tr_raft_core_t *core,
         core->in_call = false;
         return SALTS_EPROTO;
     }
-    if (core->leadership_transfer_target != 0U) {
+    if (core->leadership_transfer_target != 0U ||
+        tr_read_total_count(core) != 0U) {
         core->in_call = false;
         return SALTS_EBUSY;
     }
@@ -1913,7 +2013,6 @@ int tr_raft_core_read_index(tr_raft_core_t *core,
                             tr_raft_ready_t *ready)
 {
     tr_raft_before_t before;
-    int self_index;
     int result;
 
     if (core == NULL || context_id == 0U) {
@@ -1928,31 +2027,39 @@ int tr_raft_core_read_index(tr_raft_core_t *core,
         return SALTS_EPROTO;
     }
     if (core->leadership_transfer_target != 0U ||
-        core->pending_read_context_id != 0U ||
         !tr_has_committed_current_term(core)) {
         core->in_call = false;
         return SALTS_EBUSY;
     }
-    result = tr_require_capacity(core, ready,
-                                 tr_core_voter_count(core) - 1U);
+    if (tr_read_context_exists(core, context_id)) {
+        core->in_call = false;
+        return SALTS_EALREADY;
+    }
+    if (tr_read_total_count(core) >= core->max_pending_reads) {
+        core->in_call = false;
+        return SALTS_ENOSPC;
+    }
+
+    if (core->pending_read_count != 0U) {
+        if (core->commit_index == core->pending_read_index) {
+            core->pending_read_contexts[core->pending_read_count++] =
+                context_id;
+        } else {
+            core->waiting_read_contexts[core->waiting_read_count++] =
+                context_id;
+        }
+        return tr_finish(core, ready, &before);
+    }
+
+    result = tr_require_capacity(
+        core, ready, tr_core_voter_count(core) - 1U);
     if (result != SALTS_OK) {
         return result;
     }
 
-    self_index = tr_voter_index(core, core->self_id);
-    core->pending_read_context_id = context_id;
-    core->pending_read_index = core->commit_index;
-    core->pending_read_acks = UINT32_C(1) << (uint32_t) self_index;
-    if (tr_core_has_quorum(core, core->pending_read_acks)) {
-        ready->read_state_ready = true;
-        ready->read_state.context_id = context_id;
-        ready->read_state.index = core->pending_read_index;
-        core->pending_read_context_id = 0U;
-        core->pending_read_index = 0U;
-        core->pending_read_acks = 0U;
-    } else {
-        tr_broadcast_read_index(core, ready, context_id);
-    }
+    core->waiting_read_contexts[core->waiting_read_count++] = context_id;
+    tr_read_move_waiting_to_active(core);
+    tr_read_start_active_barrier(core, ready);
     return tr_finish(core, ready, &before);
 }
 
@@ -1963,6 +2070,17 @@ int tr_raft_core_poll(tr_raft_core_t *core, tr_raft_ready_t *ready)
 
     if (result != SALTS_OK) {
         return result;
+    }
+    if (core->role == TR_RAFT_LEADER &&
+        core->pending_read_count == 0U &&
+        core->waiting_read_count != 0U) {
+        result = tr_require_capacity(
+            core, ready, tr_core_voter_count(core) - 1U);
+        if (result != SALTS_OK) {
+            return result;
+        }
+        tr_read_move_waiting_to_active(core);
+        tr_read_start_active_barrier(core, ready);
     }
     tr_fill_replication_windows(core, ready);
     return tr_finish(core, ready, &before);
@@ -2117,6 +2235,9 @@ int tr_raft_core_status(const tr_raft_core_t *core, tr_raft_status_t *status)
     status->leadership_transfer_elapsed_ticks =
         core->leadership_transfer_elapsed_ticks;
     status->pending_read_context_id = core->pending_read_context_id;
+    status->pending_read_count = tr_read_total_count(core);
+    status->waiting_read_count = core->waiting_read_count;
+    status->max_pending_reads = core->max_pending_reads;
     status->inflight_append_count = 0U;
     for (index = 0U; index < tr_peer_count(core); ++index) {
         status->inflight_append_count += core->append_windows[index].count;

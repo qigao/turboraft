@@ -17,7 +17,9 @@ static tr_raft_ready_t read_ready(tr_raft_message_t *messages)
     return ready;
 }
 
-static tr_raft_core_t *read_core(tr_raft_node_id_t self_id)
+static tr_raft_core_t *read_core_with_capacity(
+    tr_raft_node_id_t self_id,
+    size_t max_pending_reads)
 {
     tr_raft_core_config_t config;
     tr_raft_core_t *core = NULL;
@@ -31,8 +33,14 @@ static tr_raft_core_t *read_core(tr_raft_node_id_t self_id)
     config.election_max_ticks = 10U;
     config.initial_election_timeout_ticks = 5U;
     config.max_log_entries = 16U;
+    config.max_pending_reads = max_pending_reads;
     check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
     return core;
+}
+
+static tr_raft_core_t *read_core(tr_raft_node_id_t self_id)
+{
+    return read_core_with_capacity(self_id, 8U);
 }
 
 static tr_raft_term_t read_elect(tr_raft_core_t *core)
@@ -109,7 +117,16 @@ spec("raft read index")
         check_equal(ready.messages[0].context_id, 41U);
         check_equal(tr_raft_core_advance(core), SALTS_OK);
         ready = read_ready(messages);
-        check_equal(tr_raft_core_read_index(core, 42U, &ready), SALTS_EBUSY);
+        check_equal(tr_raft_core_read_index(core, 42U, &ready), SALTS_OK);
+        check_equal(ready.message_count, 0U);
+        check_equal(ready.read_state_count, 0U);
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_transfer_leadership(core, 2U, &ready),
+                    SALTS_EBUSY);
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 43U, &ready), SALTS_OK);
+        check_equal(ready.message_count, 0U);
+        check_equal(ready.read_state_count, 0U);
 
         memset(&response, 0, sizeof(response));
         response.type = TR_RAFT_MSG_READ_INDEX_RESPONSE;
@@ -119,16 +136,20 @@ spec("raft read index")
         response.context_id = 99U;
         ready = read_ready(messages);
         check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
-        check(!ready.read_state_ready);
+        check_equal(ready.read_state_count, 0U);
         response.context_id = 41U;
         ready = read_ready(messages);
         check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
-        check(ready.read_state_ready);
-        check_equal(ready.read_state.context_id, 41U);
-        check_equal(ready.read_state.index, 1U);
+        check_equal(ready.read_state_count, 3U);
+        check_equal(ready.read_states[0].context_id, 41U);
+        check_equal(ready.read_states[1].context_id, 42U);
+        check_equal(ready.read_states[2].context_id, 43U);
+        check_equal(ready.read_states[0].index, 1U);
+        check_equal(ready.read_states[1].index, 1U);
+        check_equal(ready.read_states[2].index, 1U);
         check_equal(tr_raft_core_advance(core), SALTS_OK);
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
-        check_equal(status.pending_read_context_id, 0U);
+        check_equal(status.pending_read_count, 0U);
         tr_raft_core_destroy(core);
     }
 
@@ -156,4 +177,93 @@ spec("raft read index")
         check_equal(ready.messages[0].context_id, 55U);
         tr_raft_core_destroy(core);
     }
+    it("queues a later commit index behind the active barrier")
+    {
+        tr_raft_core_t *core = read_core(1U);
+        tr_raft_message_t messages[4];
+        tr_raft_ready_t ready;
+        tr_raft_message_t response;
+        tr_raft_proposal_t proposal = {2U, "y", 1U};
+        tr_raft_term_t term = read_elect(core);
+
+        read_commit_current_term(core, term);
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 61U, &ready), SALTS_OK);
+        check_equal(ready.message_count, 2U);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 62U, &ready), SALTS_OK);
+        check_equal(ready.message_count, 0U);
+
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_APPEND_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.term = term;
+        response.granted = true;
+        response.previous_log_index = 1U;
+        response.match_index = 2U;
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check(ready.commit_changed);
+        check_equal(ready.commit_index, 2U);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 63U, &ready), SALTS_OK);
+        check_equal(ready.message_count, 0U);
+        check_equal(ready.read_state_count, 0U);
+
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_READ_INDEX_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.term = term;
+        response.context_id = 61U;
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check_equal(ready.read_state_count, 2U);
+        check_equal(ready.read_states[0].context_id, 61U);
+        check_equal(ready.read_states[1].context_id, 62U);
+        check_equal(ready.read_states[0].index, 1U);
+        check_equal(ready.read_states[1].index, 1U);
+        check_equal(ready.message_count, 2U);
+        check_equal(ready.messages[0].type,
+                    TR_RAFT_MSG_READ_INDEX_REQUEST);
+        check_equal(ready.messages[0].context_id, 63U);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        response.context_id = 63U;
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check_equal(ready.read_state_count, 1U);
+        check_equal(ready.read_states[0].context_id, 63U);
+        check_equal(ready.read_states[0].index, 2U);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+        tr_raft_core_destroy(core);
+    }
+
+    it("returns explicit backpressure at the pending read capacity")
+    {
+        tr_raft_core_t *core = read_core_with_capacity(1U, 2U);
+        tr_raft_message_t messages[4];
+        tr_raft_ready_t ready;
+        tr_raft_term_t term = read_elect(core);
+
+        read_commit_current_term(core, term);
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 71U, &ready), SALTS_OK);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 72U, &ready), SALTS_OK);
+        ready = read_ready(messages);
+        check_equal(tr_raft_core_read_index(core, 73U, &ready), SALTS_ENOSPC);
+
+        tr_raft_core_destroy(core);
+    }
+
 }
