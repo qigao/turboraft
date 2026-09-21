@@ -52,6 +52,7 @@ spec("raft configuration wire contract")
 
         memset(&metadata, 0, sizeof(metadata));
         metadata.group_id = 1U;
+        metadata.group_id = 1U;
         metadata.message_id = 7001U;
         configuration_wire_fixture(&configuration, &message);
         check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
