@@ -17,7 +17,7 @@ env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
   SALTS_REF: ce9b57bc166bf86bd311fe6f86b7619dd64673e1
   SALTS_UTILS_REF: 2ceba0f6c46914600960bc410f5b5453911322ec
-  FLOWMQ_REF: 03a52de3b9000f71f0b8a938df76b21a31582928
+  FLOWMQ_REF: c96b7fe71331439e3cbe977cdc4d455535fb04ce
   VCPKG_ROOT: ${{ github.workspace }}/.ci/vcpkg
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
   SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
