@@ -72,7 +72,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake build-essential libtool ninja-build pkg-config re2c
+            autoconf automake build-essential libtool nasm ninja-build pkg-config re2c
 
       - name: Restore vcpkg binary cache
         uses: actions/cache@v4
