@@ -1,4 +1,5 @@
 #include <turboraft/raft_wal_storage.h>
+#include <turboraft/raft_snapshot_stream.h>
 
 #include <tinytest.h>
 #include <salts_error.h>
@@ -49,6 +50,59 @@ static void wal_test_path(char *output, size_t output_size,
                           const char *prefix, const char *suffix)
 {
     snprintf(output, output_size, "%s%s", prefix, suffix);
+}
+
+typedef struct wal_generated_snapshot {
+    uint64_t size;
+    size_t read_calls;
+    size_t max_requested;
+} wal_generated_snapshot_t;
+
+static int wal_generated_snapshot_read(
+    void *context,
+    uint64_t offset,
+    uint8_t *buffer,
+    size_t capacity,
+    size_t *out_size)
+{
+    wal_generated_snapshot_t *source =
+        (wal_generated_snapshot_t *)context;
+    size_t index;
+
+    if (source == NULL || out_size == NULL ||
+        offset > source->size ||
+        capacity > source->size - offset ||
+        (capacity != 0U && buffer == NULL)) {
+        return SALTS_EINVAL;
+    }
+    ++source->read_calls;
+    if (capacity > source->max_requested) {
+        source->max_requested = capacity;
+    }
+    for (index = 0U; index < capacity; ++index) {
+        buffer[index] = (uint8_t)((offset + index) & 0xffU);
+    }
+    *out_size = capacity;
+    return SALTS_OK;
+}
+
+static int wal_read_recovered_snapshot(
+    const tr_raft_wal_recovery_t *recovery,
+    uint8_t *buffer,
+    size_t capacity)
+{
+    size_t read_size = 0U;
+
+    if (recovery == NULL || recovery->snapshot_source.read_at == NULL ||
+        recovery->snapshot_source.size != capacity) {
+        return SALTS_EINVAL;
+    }
+    return recovery->snapshot_source.read_at(
+        recovery->snapshot_source.context, 0U, buffer, capacity, &read_size) ==
+               SALTS_OK &&
+           read_size == capacity
+               ? SALTS_OK
+               : SALTS_EIO;
 }
 
 static void wal_test_cleanup(char *prefix)
@@ -106,7 +160,14 @@ spec("raft segmented WAL storage")
         check_equal(recovery.commit_index, 3U);
         check_equal(recovery.entry_count, 1U);
         check_equal(recovery.entries[0].index, 3U);
-        check_equal(recovery.snapshot_data, snapshot, sizeof(snapshot));
+        {
+            uint8_t recovered[sizeof(snapshot)];
+
+            check_equal(wal_read_recovered_snapshot(
+                            &recovery, recovered, sizeof(recovered)),
+                        SALTS_OK);
+            check_equal(recovered, snapshot, sizeof(snapshot));
+        }
         check_equal(recovery.snapshot_configuration.transition_id, 7U);
         tr_raft_wal_recovery_destroy(&recovery);
         check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
@@ -143,10 +204,96 @@ spec("raft segmented WAL storage")
         check_equal(recovery.snapshot_term, 6U);
         check_equal(recovery.commit_index, 9U);
         check_equal(recovery.entry_count, 0U);
-        check_equal(recovery.snapshot_data, snapshot, sizeof(snapshot));
+        {
+            uint8_t recovered[sizeof(snapshot)];
+
+            check_equal(wal_read_recovered_snapshot(
+                            &recovery, recovered, sizeof(recovered)),
+                        SALTS_OK);
+            check_equal(recovered, snapshot, sizeof(snapshot));
+        }
         tr_raft_wal_recovery_destroy(&recovery);
         check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
         snprintf(snapshot_path, sizeof(snapshot_path), "%s.snapshot.9.6",
+                 prefix);
+        check_equal(tt_remove_file(snapshot_path), 0);
+        wal_test_cleanup(prefix);
+    }
+
+    it("stores and recovers a database-scale snapshot as a bounded source")
+    {
+        enum {
+            SNAPSHOT_BYTES =
+                3U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES + 17U
+        };
+        static const uint8_t expected_digest[
+            TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE] = {
+            0xe1U, 0x6cU, 0x31U, 0x64U, 0x9aU, 0x00U, 0xe2U, 0x5aU,
+            0x9eU, 0x92U, 0xf7U, 0x1dU, 0xeeU, 0x82U, 0xd2U, 0x69U,
+            0xa4U, 0x5cU, 0x24U, 0xa6U, 0x23U, 0x22U, 0x8dU, 0xa6U,
+            0x93U, 0x08U, 0xa3U, 0x4cU, 0x1dU, 0x16U, 0x3bU, 0xb0U
+        };
+        const tr_raft_conf_t configuration = {
+            TR_RAFT_CONF_FINAL, 11U, 1U,
+            {{1U, TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER}}
+        };
+        char *prefix = tt_make_temp_file("turboraft-wal-stream", ".data");
+        tr_raft_wal_storage_config_t config = wal_test_config(prefix, true);
+        tr_raft_wal_storage_t *storage = NULL;
+        tr_raft_storage_t adapter;
+        tr_raft_wal_recovery_t recovery;
+        tr_raft_entry_t entry = wal_test_entry(1U, 1U, 1U, "one");
+        tr_raft_snapshot_source_t source;
+        wal_generated_snapshot_t generated;
+        uint8_t sample[1024];
+        size_t read_size = 0U;
+        char snapshot_path[SALTS_FS_MAX_PATH];
+
+        config.max_snapshot_bytes = SNAPSHOT_BYTES;
+        memset(&source, 0, sizeof(source));
+        memset(&generated, 0, sizeof(generated));
+        generated.size = SNAPSHOT_BYTES;
+        source.context = &generated;
+        source.size = SNAPSHOT_BYTES;
+        memcpy(source.digest, expected_digest, sizeof(expected_digest));
+        source.read_at = wal_generated_snapshot_read;
+
+        check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), SALTS_OK);
+        check_equal(adapter.begin(adapter.context), SALTS_OK);
+        check_equal(adapter.write_hard_state(adapter.context, 1U, 1U),
+                    SALTS_OK);
+        check_equal(adapter.append_log(adapter.context, &entry, 1U),
+                    SALTS_OK);
+        check_equal(adapter.write_commit_index(adapter.context, 1U),
+                    SALTS_OK);
+        check_equal(adapter.commit(adapter.context), SALTS_OK);
+
+        check_equal(tr_raft_wal_storage_store_snapshot_source(
+                         storage, 1U, 1U, &configuration, &source),
+                    SALTS_OK);
+        check(generated.read_calls >= 4U);
+        check(generated.max_requested <=
+              TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES);
+
+        memset(&recovery, 0, sizeof(recovery));
+        check_equal(tr_raft_wal_storage_load(storage, &recovery), SALTS_OK);
+        check_equal(recovery.snapshot_source.size, SNAPSHOT_BYTES);
+        check_equal(recovery.snapshot_source.digest, expected_digest,
+                    sizeof(expected_digest));
+        check_not_null(recovery.snapshot_source.read_at);
+        check_equal(recovery.snapshot_source.read_at(
+                         recovery.snapshot_source.context, 65536U,
+                         sample, sizeof(sample), &read_size),
+                    SALTS_OK);
+        check_equal(read_size, sizeof(sample));
+        check_equal(sample[0], (uint8_t)(65536U & 0xffU));
+        check_equal(sample[1023U],
+                    (uint8_t)((65536U + 1023U) & 0xffU));
+
+        tr_raft_wal_recovery_destroy(&recovery);
+        check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+        snprintf(snapshot_path, sizeof(snapshot_path), "%s.snapshot.1.1",
                  prefix);
         check_equal(tt_remove_file(snapshot_path), 0);
         wal_test_cleanup(prefix);

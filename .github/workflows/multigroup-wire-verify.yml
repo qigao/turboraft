@@ -5,6 +5,7 @@ on:
     branches:
       - feature/multi-group-wire
       - feature/multi-group-multiplex
+      - feature/streaming-snapshot
   workflow_dispatch:
 
 concurrency:
@@ -27,7 +28,8 @@ jobs:
           set -euo pipefail
           mkdir -p diagnostics
           git clone --depth 1 https://github.com/qigao/salts.git ../salts             > diagnostics/salts-clone.log 2>&1
-          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils             > diagnostics/salts-utils-clone.log 2>&1
+          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils
+          git clone --depth 1 https://github.com/Cyan4973/xxHash.git ../xxhash             > diagnostics/salts-utils-clone.log 2>&1
 
       - name: Compile changed production sources and contract test
         shell: bash
@@ -49,6 +51,7 @@ jobs:
             -I../salts/tinytest/include
             -I../salts-utils/tbe/data_bind
             -I../salts-utils/tbe/schema/include
+            -I../xxhash
           )
 
           run_check() {
@@ -88,6 +91,38 @@ jobs:
             -Werror=return-type \
             "${INC[@]}" -fsyntax-only \
             src/snapshot/raft_snapshot_sender.c
+          run_check "raft_snapshot_coordinator.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -Isrc/service -fsyntax-only \
+            src/service/raft_snapshot_coordinator.c
+          run_check "raft_snapshot_peer.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -Isrc/service -fsyntax-only \
+            src/service/raft_snapshot_peer.c
+          run_check "raft_snapshot_manager.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -Isrc/service -fsyntax-only \
+            src/service/raft_snapshot_manager.c
+          run_check "raft_service.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -Isrc/service -fsyntax-only \
+            src/service/raft_service.c
           run_check "raft_group_queue.c" \
             cc -std=c11 -Wall -Wextra \
             -Werror=implicit-function-declaration \
@@ -145,8 +180,40 @@ jobs:
             -Werror=return-type \
             "${INC[@]}" -fsyntax-only \
             tests/core/test_raft_snapshot_manager_runtime.c
+          run_check "raft_wal_storage.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            src/storage/raft_wal_storage.c
+          run_check "test_raft_wal_storage.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            tests/core/test_raft_wal_storage.c
           run_check "test_raft_snapshot_peer.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -Isrc/service -fsyntax-only tests/core/test_raft_snapshot_peer.c
+          run_check "test_raft_snapshot_receiver.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            tests/core/test_raft_snapshot_receiver.c
           run_check "test_raft_snapshot_manager.c"             cc -std=c11 -Wall -Wextra             -Werror=implicit-function-declaration             -Werror=incompatible-pointer-types             -Werror=int-conversion             -Werror=return-type             "${INC[@]}" -Isrc/service -fsyntax-only tests/core/test_raft_snapshot_manager.c
+          run_check "test_raft_snapshot_policy.c" \
+            cc -std=c11 -Wall -Wextra \
+            -Werror=implicit-function-declaration \
+            -Werror=incompatible-pointer-types \
+            -Werror=int-conversion \
+            -Werror=return-type \
+            "${INC[@]}" -fsyntax-only \
+            tests/core/test_raft_snapshot_policy.c
 
       - name: Run bounded fair group queue behavior
         shell: bash
@@ -572,6 +639,895 @@ jobs:
             src/transport/raft_transport.c \
             -o /tmp/group_routing_behavior
           /tmp/group_routing_behavior
+
+      - name: Run bounded streaming snapshot sender behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/streaming_sender_behavior.c <<'EOF'
+          #include <turboraft/raft_snapshot_sender.h>
+          #include <salts_error.h>
+
+          #include <stdint.h>
+          #include <string.h>
+
+          typedef struct generated_source {
+              uint64_t size;
+              size_t reads;
+              size_t max_requested;
+              size_t releases;
+          } generated_source_t;
+
+          static int read_at(void *context,
+                             uint64_t offset,
+                             uint8_t *buffer,
+                             size_t capacity,
+                             size_t *out_size)
+          {
+              generated_source_t *source = (generated_source_t *)context;
+              size_t i;
+
+              if (source == NULL || out_size == NULL ||
+                  offset > source->size ||
+                  capacity > source->size - offset ||
+                  (capacity != 0U && buffer == NULL)) {
+                  return SALTS_EINVAL;
+              }
+              ++source->reads;
+              if (capacity > source->max_requested) {
+                  source->max_requested = capacity;
+              }
+              for (i = 0U; i < capacity; ++i) {
+                  buffer[i] = (uint8_t)((offset + i) & 0xffU);
+              }
+              *out_size = capacity;
+              return SALTS_OK;
+          }
+
+          static void release_source(void *context)
+          {
+              generated_source_t *source = (generated_source_t *)context;
+              if (source != NULL) ++source->releases;
+          }
+
+          int main(void)
+          {
+              const uint64_t snapshot_size =
+                  3U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES + 17U;
+              const tr_raft_conf_t configuration = {
+                  TR_RAFT_CONF_FINAL, 0U, 1U,
+                  {{1U, TR_RAFT_CONF_OLD_VOTER |
+                        TR_RAFT_CONF_NEW_VOTER}}
+              };
+              tr_raft_snapshot_sender_config_t config;
+              tr_raft_snapshot_sender_t *sender = NULL;
+              tr_raft_snapshot_source_t source;
+              generated_source_t generated;
+              tr_raft_snapshot_chunk_t chunk;
+              tr_raft_snapshot_ack_t ack;
+              uint64_t offset = 0U;
+              size_t chunks = 0U;
+
+              memset(&config, 0, sizeof(config));
+              memset(&source, 0, sizeof(source));
+              memset(&generated, 0, sizeof(generated));
+              memset(&ack, 0, sizeof(ack));
+
+              generated.size = snapshot_size;
+              source.context = &generated;
+              source.size = snapshot_size;
+              memset(source.digest, 0x5a, sizeof(source.digest));
+              source.read_at = read_at;
+              source.release = release_source;
+
+              config.self_id = 1U;
+              config.peer_id = 2U;
+              config.max_snapshot_bytes = (size_t)snapshot_size;
+              config.chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+              config.max_inflight_chunks = 1U;
+
+              if (tr_raft_snapshot_sender_create(&config, &sender) !=
+                  SALTS_OK) return 10;
+              if (tr_raft_snapshot_sender_begin_source(
+                      sender, 7U, 9U, 6U, &configuration, &source) !=
+                  SALTS_OK) return 11;
+
+              ack.from = 2U;
+              ack.to = 1U;
+              ack.term = 7U;
+              ack.snapshot_index = 9U;
+              ack.snapshot_size = snapshot_size;
+              ack.accepted = true;
+              memcpy(ack.snapshot_digest, source.digest,
+                     sizeof(ack.snapshot_digest));
+
+              while (offset < snapshot_size) {
+                  size_t i;
+                  if (tr_raft_snapshot_sender_next_chunk(sender, &chunk) !=
+                      SALTS_OK) return 20;
+                  if (chunk.snapshot_offset != offset ||
+                      chunk.data_length >
+                          TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES)
+                      return 21;
+                  for (i = 0U; i < chunk.data_length; ++i) {
+                      if (chunk.data[i] !=
+                          (uint8_t)((offset + i) & 0xffU))
+                          return 22;
+                  }
+                  offset += chunk.data_length;
+                  ++chunks;
+                  ack.next_offset = offset;
+                  if (tr_raft_snapshot_sender_acknowledge(
+                          sender, &ack) != SALTS_OK)
+                      return 23;
+              }
+
+              if (chunks != 4U ||
+                  generated.reads != 4U ||
+                  generated.max_requested >
+                      TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES ||
+                  generated.releases != 1U)
+                  return 30;
+
+              tr_raft_snapshot_sender_destroy(sender);
+              return generated.releases == 1U ? 0 : 31;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -Isrc/core \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/concurrency/include \
+            -I../salts/cmeta/include \
+            /tmp/streaming_sender_behavior.c \
+            src/snapshot/raft_snapshot_sender.c \
+            src/core/raft_configuration.c \
+            -lcrypto \
+            -o /tmp/streaming_sender_behavior
+          /tmp/streaming_sender_behavior
+
+      - name: Run streaming snapshot manager source-provider behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/streaming_manager_behavior.c <<'EOF'
+          #include <turboraft/raft_snapshot_manager.h>
+          #include <salts_error.h>
+
+          #include <stdint.h>
+          #include <string.h>
+
+          typedef struct capture {
+              tr_raft_transport_payload_t payload;
+              size_t payload_count;
+              size_t provider_count;
+              size_t read_count;
+              size_t release_count;
+              size_t complete_count;
+          } capture_t;
+
+          static int read_at(void *context,
+                             uint64_t offset,
+                             uint8_t *buffer,
+                             size_t capacity,
+                             size_t *out_size)
+          {
+              static const uint8_t bytes[] = {0x72U,0x61U,0x66U,0x74U};
+              capture_t *capture = (capture_t *)context;
+
+              if (capture == NULL || out_size == NULL ||
+                  offset > sizeof(bytes) ||
+                  capacity > sizeof(bytes) - offset ||
+                  (capacity != 0U && buffer == NULL))
+                  return SALTS_EINVAL;
+              if (capacity != 0U) {
+                  memcpy(buffer, bytes + (size_t)offset, capacity);
+              }
+              *out_size = capacity;
+              ++capture->read_count;
+              return SALTS_OK;
+          }
+
+          static void release_source(void *context)
+          {
+              capture_t *capture = (capture_t *)context;
+              if (capture != NULL) ++capture->release_count;
+          }
+
+          static int source_provider(
+              void *context,
+              tr_raft_index_t required_index,
+              tr_raft_term_t required_term,
+              tr_raft_snapshot_point_t *out_point,
+              tr_raft_snapshot_source_t *out_source)
+          {
+              static const uint8_t digest[32] = {
+                  0x76U,0xa3U,0x50U,0x72U,0xdfU,0x72U,0x59U,0x1aU,
+                  0x65U,0x6eU,0x69U,0xcaU,0xb6U,0xf6U,0xfaU,0x99U,
+                  0xaaU,0x38U,0x6fU,0xd5U,0xacU,0xe3U,0x5cU,0x90U,
+                  0x42U,0x85U,0x1eU,0xb3U,0x24U,0xecU,0x16U,0xb5U
+              };
+              capture_t *capture = (capture_t *)context;
+
+              if (capture == NULL || out_point == NULL ||
+                  out_source == NULL || required_index != 10U ||
+                  required_term != 7U)
+                  return SALTS_EINVAL;
+
+              memset(out_point, 0, sizeof(*out_point));
+              out_point->index = 10U;
+              out_point->term = 7U;
+              out_point->configuration.phase = TR_RAFT_CONF_FINAL;
+              out_point->configuration.transition_id = 9U;
+              out_point->configuration.member_count = 2U;
+              out_point->configuration.members[0].node_id = 1U;
+              out_point->configuration.members[0].roles =
+                  TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+              out_point->configuration.members[1].node_id = 2U;
+              out_point->configuration.members[1].roles =
+                  TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+
+              memset(out_source, 0, sizeof(*out_source));
+              out_source->context = capture;
+              out_source->size = 4U;
+              memcpy(out_source->digest, digest, sizeof(digest));
+              out_source->read_at = read_at;
+              out_source->release = release_source;
+              ++capture->provider_count;
+              return SALTS_OK;
+          }
+
+          static int enqueue(void *context,
+                             const tr_raft_transport_payload_t *payload)
+          {
+              capture_t *capture = (capture_t *)context;
+
+              if (capture == NULL || payload == NULL ||
+                  capture->payload_count != 0U)
+                  return SALTS_ENOSPC;
+              capture->payload = *payload;
+              ++capture->payload_count;
+              return SALTS_OK;
+          }
+
+          static int complete(void *context,
+                              tr_raft_node_id_t peer_id,
+                              tr_raft_index_t snapshot_index)
+          {
+              capture_t *capture = (capture_t *)context;
+
+              if (capture == NULL || peer_id != 2U ||
+                  snapshot_index != 10U)
+                  return SALTS_EPROTO;
+              ++capture->complete_count;
+              return SALTS_OK;
+          }
+
+          int main(void)
+          {
+              const tr_raft_node_id_t peers[] = {2U};
+              tr_raft_snapshot_manager_config_t config;
+              tr_raft_snapshot_manager_t *manager = NULL;
+              tr_raft_snapshot_request_t request;
+              tr_raft_transport_payload_t ack;
+              capture_t capture;
+
+              memset(&config, 0, sizeof(config));
+              memset(&request, 0, sizeof(request));
+              memset(&ack, 0, sizeof(ack));
+              memset(&capture, 0, sizeof(capture));
+
+              config.self_id = 1U;
+              config.group_id = 88U;
+              config.peer_node_ids = peers;
+              config.peer_count = 1U;
+              config.max_snapshot_bytes = 1024U;
+              config.snapshot_chunk_size = 512U;
+              config.snapshot_max_inflight_chunks = 1U;
+              config.enqueue = enqueue;
+              config.enqueue_context = &capture;
+              config.source_provider = source_provider;
+              config.source_provider_context = &capture;
+              config.complete = complete;
+              config.complete_context = &capture;
+
+              if (tr_raft_snapshot_manager_create(&config, &manager) !=
+                  SALTS_OK) return 10;
+
+              request.peer_id = 2U;
+              request.leader_term = 8U;
+              request.snapshot_index = 10U;
+              request.snapshot_term = 7U;
+              if (tr_raft_snapshot_manager_enqueue_request(
+                      manager, &request) != SALTS_OK)
+                  return 11;
+              if (capture.provider_count != 1U ||
+                  capture.read_count != 1U ||
+                  capture.payload_count != 1U ||
+                  capture.payload.group_id != 88U)
+                  return 12;
+
+              ack.group_id = 88U;
+              ack.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
+              ack.data.snapshot_ack.from = 2U;
+              ack.data.snapshot_ack.to = 1U;
+              ack.data.snapshot_ack.term = 8U;
+              ack.data.snapshot_ack.snapshot_index = 10U;
+              ack.data.snapshot_ack.snapshot_size = 4U;
+              ack.data.snapshot_ack.next_offset = 4U;
+              ack.data.snapshot_ack.accepted = true;
+              memcpy(ack.data.snapshot_ack.snapshot_digest,
+                     capture.payload.data.snapshot_chunk.snapshot_digest,
+                     sizeof(ack.data.snapshot_ack.snapshot_digest));
+
+              if (tr_raft_snapshot_manager_handle_payload(
+                      manager, &ack) != SALTS_OK)
+                  return 13;
+              if (capture.release_count != 1U ||
+                  capture.complete_count != 1U)
+                  return 14;
+
+              tr_raft_snapshot_manager_destroy(manager);
+              return capture.release_count == 1U ? 0 : 15;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -Isrc/core \
+            -Isrc/service \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/concurrency/include \
+            -I../salts/cmeta/include \
+            /tmp/streaming_manager_behavior.c \
+            src/service/raft_snapshot_manager.c \
+            src/service/raft_snapshot_peer.c \
+            src/service/raft_snapshot_coordinator.c \
+            src/snapshot/raft_snapshot_sender.c \
+            src/core/raft_configuration.c \
+            -lcrypto \
+            -o /tmp/streaming_manager_behavior
+          /tmp/streaming_manager_behavior
+
+      - name: Run database-scale streaming snapshot receiver behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/streaming_receiver_behavior.c <<'EOF'
+          #include <turboraft/raft_snapshot_receiver.h>
+          #include <salts_error.h>
+          #include <stdint.h>
+          #include <string.h>
+
+          typedef struct stream_capture {
+              uint64_t expected_size;
+              int begun;
+              int aborted;
+          } stream_capture_t;
+
+          static int stream_begin(
+              void *context,
+              tr_raft_term_t leader_term,
+              tr_raft_index_t snapshot_index,
+              tr_raft_term_t snapshot_term,
+              const tr_raft_conf_t *configuration,
+              uint64_t snapshot_size)
+          {
+              stream_capture_t *capture = (stream_capture_t *)context;
+              if (capture == NULL || leader_term != 5U ||
+                  snapshot_index != 9U || snapshot_term != 4U ||
+                  configuration == NULL ||
+                  snapshot_size != capture->expected_size)
+                  return SALTS_EPROTO;
+              capture->begun = 1;
+              return SALTS_OK;
+          }
+
+          static int stream_write(
+              void *context,
+              uint64_t offset,
+              const uint8_t *data,
+              size_t size)
+          {
+              (void)context;
+              return offset == 0U && data != NULL && size == 1U
+                         ? SALTS_OK
+                         : SALTS_EPROTO;
+          }
+
+          static int stream_commit(void *context)
+          {
+              (void)context;
+              return SALTS_OK;
+          }
+
+          static void stream_abort(void *context)
+          {
+              stream_capture_t *capture = (stream_capture_t *)context;
+              if (capture != NULL)
+                  capture->aborted = 1;
+          }
+
+          static int install(
+              void *context,
+              tr_raft_term_t leader_term,
+              tr_raft_index_t snapshot_index,
+              tr_raft_term_t snapshot_term,
+              const tr_raft_conf_t *configuration,
+              const uint8_t *data,
+              size_t size)
+          {
+              (void)context;
+              (void)leader_term;
+              (void)snapshot_index;
+              (void)snapshot_term;
+              (void)configuration;
+              (void)data;
+              (void)size;
+              return SALTS_OK;
+          }
+
+          static tr_raft_snapshot_chunk_t make_chunk(uint64_t snapshot_size)
+          {
+              static const uint8_t one = 0x5aU;
+              tr_raft_snapshot_chunk_t chunk;
+
+              memset(&chunk, 0, sizeof(chunk));
+              chunk.from = 1U;
+              chunk.to = 2U;
+              chunk.term = 5U;
+              chunk.snapshot_index = 9U;
+              chunk.snapshot_term = 4U;
+              chunk.snapshot_size = snapshot_size;
+              chunk.has_configuration = true;
+              chunk.configuration.phase = TR_RAFT_CONF_FINAL;
+              chunk.configuration.member_count = 1U;
+              chunk.configuration.members[0].node_id = 2U;
+              chunk.configuration.members[0].roles =
+                  TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+              chunk.data = &one;
+              chunk.data_length = 1U;
+              return chunk;
+          }
+
+          int main(void)
+          {
+              const uint64_t large_size =
+                  UINT64_C(512) * 1024U * 1024U;
+              tr_raft_snapshot_receiver_config_t config;
+              tr_raft_snapshot_receiver_t *receiver = NULL;
+              tr_raft_snapshot_receive_result_t result;
+              tr_raft_snapshot_chunk_t chunk;
+              stream_capture_t capture;
+
+              memset(&config, 0, sizeof(config));
+              memset(&capture, 0, sizeof(capture));
+              capture.expected_size = large_size;
+              config.self_id = 2U;
+              config.max_snapshot_bytes = large_size;
+              config.stream.begin = stream_begin;
+              config.stream.write = stream_write;
+              config.stream.commit = stream_commit;
+              config.stream.abort = stream_abort;
+              config.stream.context = &capture;
+
+              if (tr_raft_snapshot_receiver_create(
+                      &config, &receiver) != SALTS_OK)
+                  return 10;
+              chunk = make_chunk(large_size);
+              if (tr_raft_snapshot_receiver_handle(
+                      receiver, &chunk, &result) != SALTS_OK)
+                  return 11;
+              if (!capture.begun || result.ack.next_offset != 1U)
+                  return 12;
+              tr_raft_snapshot_receiver_destroy(receiver);
+              if (!capture.aborted)
+                  return 13;
+
+              memset(&config, 0, sizeof(config));
+              config.self_id = 2U;
+              config.max_snapshot_bytes = 1024U;
+              config.max_buffered_snapshot_bytes = 2U;
+              config.install = install;
+              if (tr_raft_snapshot_receiver_create(
+                      &config, &receiver) != SALTS_OK)
+                  return 20;
+              {
+                  static const uint8_t three[] = {0x61U, 0x62U, 0x63U};
+                  chunk = make_chunk(3U);
+                  chunk.data = three;
+                  chunk.data_length = sizeof(three);
+                  chunk.done = true;
+              }
+              if (tr_raft_snapshot_receiver_handle(
+                      receiver, &chunk, &result) != SALTS_EFBIG)
+                  return 21;
+              tr_raft_snapshot_receiver_destroy(receiver);
+              return 0;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -Isrc/core \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/concurrency/include \
+            -I../salts/cmeta/include \
+            /tmp/streaming_receiver_behavior.c \
+            src/snapshot/raft_snapshot_receiver.c \
+            src/core/raft_configuration.c \
+            -lcrypto \
+            -o /tmp/streaming_receiver_behavior
+          /tmp/streaming_receiver_behavior
+
+      - name: Run streaming WAL persistence and recovery behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/salts_fs_shim.c <<'EOF'
+          #include <salts_fs.h>
+          #include <errno.h>
+          #include <fcntl.h>
+          #include <sys/stat.h>
+          #include <unistd.h>
+
+          static int map_open_flags(int flags)
+          {
+              int native = 0;
+              if (flags & SALTS_FS_O_RDWR) native |= O_RDWR;
+              else if (flags & SALTS_FS_O_WRONLY) native |= O_WRONLY;
+              else native |= O_RDONLY;
+              if (flags & SALTS_FS_O_CREAT) native |= O_CREAT;
+              if (flags & SALTS_FS_O_TRUNC) native |= O_TRUNC;
+              if (flags & SALTS_FS_O_APPEND) native |= O_APPEND;
+              return native;
+          }
+
+          salts_file_t salts_fs_open(const char *path, int flags, int mode)
+          {
+              return open(path, map_open_flags(flags), mode);
+          }
+
+          int salts_fs_close(salts_file_t fd)
+          {
+              return close(fd) == 0 ? 0 : -errno;
+          }
+
+          int salts_fs_write(salts_file_t fd, const char *data, size_t len)
+          {
+              ssize_t rc = write(fd, data, len);
+              return rc < 0 ? -errno : (int)rc;
+          }
+
+          int salts_fs_pread(salts_file_t fd, char *buf, size_t len,
+                             int64_t offset)
+          {
+              ssize_t rc = pread(fd, buf, len, (off_t)offset);
+              return rc < 0 ? -errno : (int)rc;
+          }
+
+          int salts_fs_pwrite(salts_file_t fd, const char *data, size_t len,
+                              int64_t offset)
+          {
+              ssize_t rc = pwrite(fd, data, len, (off_t)offset);
+              return rc < 0 ? -errno : (int)rc;
+          }
+
+          int salts_fs_ftruncate(salts_file_t fd, int64_t length)
+          {
+              return ftruncate(fd, (off_t)length) == 0 ? 0 : -errno;
+          }
+
+          int salts_fs_fsync(salts_file_t fd)
+          {
+              return fsync(fd) == 0 ? 0 : -errno;
+          }
+
+          int salts_fs_lock(salts_file_t fd, int flags,
+                            int64_t offset, uint64_t len)
+          {
+              struct flock lock;
+              int cmd = (flags & SALTS_FS_LOCK_NONBLOCK) ?
+                            F_SETLK : F_SETLKW;
+              lock.l_type = (flags & SALTS_FS_LOCK_SHARED) ?
+                                F_RDLCK : F_WRLCK;
+              lock.l_whence = SEEK_SET;
+              lock.l_start = (off_t)offset;
+              lock.l_len = (off_t)len;
+              lock.l_pid = 0;
+              return fcntl(fd, cmd, &lock) == 0 ? 0 : -errno;
+          }
+
+          int salts_fs_unlock(salts_file_t fd, int64_t offset, uint64_t len)
+          {
+              struct flock lock;
+              lock.l_type = F_UNLCK;
+              lock.l_whence = SEEK_SET;
+              lock.l_start = (off_t)offset;
+              lock.l_len = (off_t)len;
+              lock.l_pid = 0;
+              return fcntl(fd, F_SETLK, &lock) == 0 ? 0 : -errno;
+          }
+
+          int salts_fs_rename(const char *old_path, const char *new_path)
+          {
+              return rename(old_path, new_path) == 0 ? 0 : -errno;
+          }
+
+          int64_t salts_fs_seek(salts_file_t fd, int64_t offset, int whence)
+          {
+              off_t rc = lseek(fd, (off_t)offset, whence);
+              return rc < 0 ? -errno : (int64_t)rc;
+          }
+
+          int salts_fs_stat(const char *path, salts_fs_stat_t *out)
+          {
+              struct stat st;
+              if (out == NULL) return -EINVAL;
+              if (stat(path, &st) != 0) return -errno;
+              out->size = (uint64_t)st.st_size;
+              out->mode = (int)st.st_mode;
+              out->is_file = S_ISREG(st.st_mode);
+              out->is_directory = S_ISDIR(st.st_mode);
+              out->is_symlink = S_ISLNK(st.st_mode);
+              out->atime = 0U;
+              out->mtime = 0U;
+              out->ctime = 0U;
+              return 0;
+          }
+
+          int salts_fs_access(const char *path, int mode)
+          {
+              int native = F_OK;
+              if (mode & SALTS_FS_ACCESS_READ) native |= R_OK;
+              if (mode & SALTS_FS_ACCESS_WRITE) native |= W_OK;
+              if (mode & SALTS_FS_ACCESS_EXEC) native |= X_OK;
+              return access(path, native) == 0 ? 0 : -errno;
+          }
+
+          int salts_fs_unlink(const char *path)
+          {
+              return unlink(path) == 0 ? 0 : -errno;
+          }
+          EOF
+
+          cat > /tmp/wal_stream_behavior.c <<'EOF'
+          #include <turboraft/raft_wal_storage.h>
+          #include <salts_error.h>
+          #include <openssl/sha.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <string.h>
+          #include <unistd.h>
+
+          enum {
+              SNAPSHOT_BYTES =
+                  3U * TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES + 17U
+          };
+
+          typedef struct generated_source {
+              uint64_t size;
+              size_t read_calls;
+              size_t max_requested;
+          } generated_source_t;
+
+          static int generated_read(void *context,
+                                    uint64_t offset,
+                                    uint8_t *buffer,
+                                    size_t capacity,
+                                    size_t *out_size)
+          {
+              generated_source_t *source =
+                  (generated_source_t *)context;
+              size_t i;
+
+              if (source == NULL || out_size == NULL ||
+                  offset > source->size ||
+                  capacity > source->size - offset ||
+                  (capacity != 0U && buffer == NULL)) {
+                  return SALTS_EINVAL;
+              }
+              ++source->read_calls;
+              if (capacity > source->max_requested) {
+                  source->max_requested = capacity;
+              }
+              for (i = 0U; i < capacity; ++i) {
+                  buffer[i] = (uint8_t)((offset + i) & 0xffU);
+              }
+              *out_size = capacity;
+              return SALTS_OK;
+          }
+
+          static int compute_digest(uint8_t digest[SHA256_DIGEST_LENGTH])
+          {
+              generated_source_t source;
+              SHA256_CTX sha;
+              uint8_t buffer[4096];
+              uint64_t offset = 0U;
+
+              memset(&source, 0, sizeof(source));
+              source.size = SNAPSHOT_BYTES;
+              if (SHA256_Init(&sha) != 1) return 1;
+              while (offset < source.size) {
+                  uint64_t remaining = source.size - offset;
+                  size_t request = remaining < sizeof(buffer) ?
+                                       (size_t)remaining : sizeof(buffer);
+                  size_t read_size = 0U;
+                  if (generated_read(&source, offset, buffer, request,
+                                     &read_size) != SALTS_OK ||
+                      read_size != request ||
+                      SHA256_Update(&sha, buffer, read_size) != 1) {
+                      return 2;
+                  }
+                  offset += read_size;
+              }
+              return SHA256_Final(digest, &sha) == 1 ? 0 : 3;
+          }
+
+          static tr_raft_entry_t one_entry(void)
+          {
+              tr_raft_entry_t entry;
+              memset(&entry, 0, sizeof(entry));
+              entry.index = 1U;
+              entry.term = 1U;
+              entry.command_id = 1U;
+              entry.data_length = 1U;
+              entry.data[0] = 0x11U;
+              return entry;
+          }
+
+          int main(void)
+          {
+              char prefix[160];
+              char command[256];
+              tr_raft_wal_storage_config_t config;
+              tr_raft_wal_storage_t *storage = NULL;
+              tr_raft_storage_t adapter;
+              tr_raft_wal_recovery_t recovery;
+              tr_raft_snapshot_source_t source;
+              generated_source_t generated;
+              tr_raft_entry_t entry = one_entry();
+              tr_raft_conf_t conf;
+              uint8_t sample[1024];
+              size_t read_size = 0U;
+              int rc;
+
+              snprintf(prefix, sizeof(prefix),
+                       "/tmp/turboraft-wal-stream-%ld", (long)getpid());
+              snprintf(command, sizeof(command), "rm -f %s*", prefix);
+              (void)system(command);
+
+              memset(&config, 0, sizeof(config));
+              config.path_prefix = prefix;
+              config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
+              config.max_transaction_bytes = 8U * 1024U;
+              config.max_segments = 4U;
+              config.max_log_entries = 16U;
+              config.max_snapshot_bytes = SNAPSHOT_BYTES;
+              config.create_if_missing = true;
+
+              memset(&conf, 0, sizeof(conf));
+              conf.phase = TR_RAFT_CONF_FINAL;
+              conf.transition_id = 1U;
+              conf.member_count = 1U;
+              conf.members[0].node_id = 1U;
+              conf.members[0].roles =
+                  TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+
+              memset(&generated, 0, sizeof(generated));
+              generated.size = SNAPSHOT_BYTES;
+              memset(&source, 0, sizeof(source));
+              source.context = &generated;
+              source.size = SNAPSHOT_BYTES;
+              source.read_at = generated_read;
+              rc = compute_digest(source.digest);
+              if (rc != 0) return 10 + rc;
+
+              if (tr_raft_wal_storage_open(&config, &storage) != SALTS_OK)
+                  return 20;
+              if (tr_raft_wal_storage_bind(storage, &adapter) != SALTS_OK)
+                  return 21;
+              if (adapter.begin(adapter.context) != SALTS_OK ||
+                  adapter.write_hard_state(adapter.context, 1U, 1U) !=
+                      SALTS_OK ||
+                  adapter.append_log(adapter.context, &entry, 1U) !=
+                      SALTS_OK ||
+                  adapter.write_commit_index(adapter.context, 1U) !=
+                      SALTS_OK ||
+                  adapter.commit(adapter.context) != SALTS_OK)
+                  return 22;
+
+              if (tr_raft_wal_storage_store_snapshot_source(
+                      storage, 1U, 1U, &conf, &source) != SALTS_OK)
+                  return 23;
+              if (generated.read_calls < 4U ||
+                  generated.max_requested >
+                      TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES)
+                  return 24;
+
+              if (tr_raft_wal_storage_close(storage) != SALTS_OK)
+                  return 25;
+              storage = NULL;
+              config.create_if_missing = false;
+              if (tr_raft_wal_storage_open(&config, &storage) != SALTS_OK)
+                  return 26;
+
+              memset(&recovery, 0, sizeof(recovery));
+              if (tr_raft_wal_storage_load(storage, &recovery) != SALTS_OK)
+                  return 27;
+              if (recovery.snapshot_data != NULL ||
+                  recovery.snapshot_source.read_at == NULL ||
+                  recovery.snapshot_source.size != SNAPSHOT_BYTES)
+                  return 28;
+              if (recovery.snapshot_source.read_at(
+                      recovery.snapshot_source.context, 65536U,
+                      sample, sizeof(sample), &read_size) != SALTS_OK ||
+                  read_size != sizeof(sample) ||
+                  sample[0] != (uint8_t)(65536U & 0xffU) ||
+                  sample[1023U] !=
+                      (uint8_t)((65536U + 1023U) & 0xffU))
+                  return 29;
+
+              tr_raft_wal_recovery_destroy(&recovery);
+              if (tr_raft_wal_storage_close(storage) != SALTS_OK)
+                  return 30;
+              (void)system(command);
+              return 0;
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra \
+            -D_DEFAULT_SOURCE=1 -D_POSIX_C_SOURCE=200809L \
+            -Iinclude \
+            -Isrc \
+            -Isrc/core \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/concurrency/include \
+            -I../salts/cmeta/include \
+            -I../salts/cstl/include \
+            -I../xxhash \
+            /tmp/wal_stream_behavior.c \
+            /tmp/salts_fs_shim.c \
+            src/storage/raft_wal_storage.c \
+            src/core/raft_configuration.c \
+            ../xxhash/xxhash.c \
+            -lcrypto \
+            -o /tmp/wal_stream_behavior
+          /tmp/wal_stream_behavior
+
+      - name: Run Service streaming snapshot policy behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra \
+            -Iinclude \
+            -Isrc \
+            -Isrc/core \
+            -I../salts/utils/include \
+            -I../salts/platform/include \
+            -I../salts/cstl/include \
+            -I../salts/cmeta/include \
+            -I../salts/tinytest/include \
+            tests/core/test_raft_snapshot_policy.c \
+            src/service/raft_service.c \
+            src/runtime/raft_runtime.c \
+            src/core/raft_core.c \
+            src/core/raft_configuration.c \
+            src/core/raft_membership.c \
+            src/core/raft_membership_transition.c \
+            src/core/raft_peer_set.c \
+            src/core/raft_log.c \
+            ../salts/cstl/src/vec.c \
+            ../salts/tinytest/src/tinytest.c \
+            ../salts/tinytest/src/tinymock.c \
+            -o /tmp/turboraft_snapshot_policy_tests
+          /tmp/turboraft_snapshot_policy_tests
 
       - name: Verify current public group API
         shell: bash

@@ -251,7 +251,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(turboraft_wal_storage
                       PUBLIC TurboRaft::Core
-                      PRIVATE Salts::Core xxHash::xxhash)
+                      PRIVATE Salts::Core xxHash::xxhash OpenSSL::Crypto)
 
 if(TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE)
   if(NOT DEFINED ENV{TURBODB_ROOT} OR

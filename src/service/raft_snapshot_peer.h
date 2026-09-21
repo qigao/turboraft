@@ -15,7 +15,7 @@ typedef struct tr_raft_snapshot_peer_config {
     tr_raft_node_id_t self_id;
     tr_raft_node_id_t peer_id;
     tr_raft_group_id_t group_id;
-    size_t max_snapshot_bytes;
+    uint64_t max_snapshot_bytes;
     size_t chunk_size;
     size_t max_inflight_chunks;
     tr_raft_snapshot_payload_enqueue_fn enqueue;
@@ -36,6 +36,14 @@ int tr_raft_snapshot_peer_begin(
     const tr_raft_conf_t *configuration,
     const uint8_t *data,
     size_t size);
+
+int tr_raft_snapshot_peer_begin_source(
+    tr_raft_snapshot_peer_t *peer,
+    tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source);
 
 int tr_raft_snapshot_peer_handle_payload(
     tr_raft_snapshot_peer_t *peer,

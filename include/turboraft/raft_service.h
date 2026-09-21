@@ -2,6 +2,7 @@
 #define TURBORAFT_RAFT_SERVICE_H
 
 #include <turboraft/raft_runtime.h>
+#include <turboraft/raft_snapshot_stream.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,6 +25,18 @@ typedef int (*tr_raft_snapshot_store_fn)(
     const uint8_t *data,
     size_t size);
 
+typedef int (*tr_raft_snapshot_source_create_fn)(
+    void *context,
+    tr_raft_index_t applied_index,
+    tr_raft_snapshot_source_t *out_source);
+
+typedef int (*tr_raft_snapshot_source_store_fn)(
+    void *context,
+    tr_raft_index_t snapshot_index,
+    tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration,
+    const tr_raft_snapshot_source_t *source);
+
 /**
  * Compacts a journal derived from a snapshot after store has made that
  * snapshot durable. SALTS_EIO keeps the snapshot pending for a retry of this
@@ -37,11 +50,31 @@ typedef int (*tr_raft_snapshot_journal_compact_fn)(
 
 typedef struct tr_raft_snapshot_policy {
     tr_raft_index_t applied_entry_threshold;
-    size_t max_snapshot_bytes;
+    /** Logical snapshot limit; does not imply an in-memory allocation. */
+    uint64_t max_snapshot_bytes;
+    /**
+     * Buffered compatibility cap. Required and non-zero only when create/store
+     * are used; must be zero for source_create/source_store.
+     */
+    uint64_t max_buffered_snapshot_bytes;
+
+    /**
+     * Database-scale path. source_create returns an owned immutable source.
+     * Service releases it exactly once after source_store returns, regardless
+     * of success or failure. source_store must make the snapshot durable before
+     * returning SALTS_OK and must not retain the source after return.
+     */
+    tr_raft_snapshot_source_create_fn source_create;
+    void *source_create_context;
+    tr_raft_snapshot_source_store_fn source_store;
+    void *source_store_context;
+
+    /** Small-snapshot compatibility path; mutually exclusive above. */
     tr_raft_snapshot_create_fn create;
     void *create_context;
     tr_raft_snapshot_store_fn store;
     void *store_context;
+
     /* Optional derived-journal compaction; context is borrowed by Service. */
     tr_raft_snapshot_journal_compact_fn journal_compact;
     void *journal_compact_context;

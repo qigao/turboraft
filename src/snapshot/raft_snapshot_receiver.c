@@ -9,7 +9,8 @@
 
 struct tr_raft_snapshot_receiver {
     tr_raft_node_id_t self_id;
-    size_t max_snapshot_bytes;
+    uint64_t max_snapshot_bytes;
+    uint64_t max_buffered_snapshot_bytes;
     tr_raft_snapshot_install_fn install;
     void *install_context;
     tr_raft_snapshot_stream_sink_t stream;
@@ -114,6 +115,10 @@ static int tr_snapshot_receiver_start(
     uint8_t *data = NULL;
 
     if (receiver->stream.begin == NULL && chunk->snapshot_size != 0U) {
+        if (chunk->snapshot_size > receiver->max_buffered_snapshot_bytes ||
+            chunk->snapshot_size > (uint64_t)SIZE_MAX) {
+            return SALTS_EFBIG;
+        }
         data = (uint8_t *) malloc((size_t) chunk->snapshot_size);
         if (data == NULL) {
             return SALTS_ENOMEM;
@@ -176,14 +181,21 @@ int tr_raft_snapshot_receiver_create(
     }
     *out_receiver = NULL;
     if (config == NULL || config->self_id == 0U ||
-        config->max_snapshot_bytes == 0U ||
-        config->max_snapshot_bytes > TR_RAFT_WIRE_MAX_SNAPSHOT_BYTES) {
+        config->max_snapshot_bytes == 0U) {
         return SALTS_EINVAL;
     }
-    if ((config->install == NULL) == (config->stream.begin == NULL) ||
-        (config->stream.begin != NULL &&
-         (config->stream.write == NULL || config->stream.commit == NULL ||
-          config->stream.abort == NULL))) {
+    if ((config->install == NULL) == (config->stream.begin == NULL)) {
+        return SALTS_EINVAL;
+    }
+    if (config->install != NULL &&
+        (config->max_buffered_snapshot_bytes == 0U ||
+         config->max_buffered_snapshot_bytes > config->max_snapshot_bytes)) {
+        return SALTS_EINVAL;
+    }
+    if (config->stream.begin != NULL &&
+        (config->max_buffered_snapshot_bytes != 0U ||
+         config->stream.write == NULL || config->stream.commit == NULL ||
+         config->stream.abort == NULL)) {
         return SALTS_EINVAL;
     }
     receiver = (tr_raft_snapshot_receiver_t *) calloc(1U, sizeof(*receiver));
@@ -192,6 +204,8 @@ int tr_raft_snapshot_receiver_create(
     }
     receiver->self_id = config->self_id;
     receiver->max_snapshot_bytes = config->max_snapshot_bytes;
+    receiver->max_buffered_snapshot_bytes =
+        config->max_buffered_snapshot_bytes;
     receiver->install = config->install;
     receiver->install_context = config->install_context;
     receiver->stream = config->stream;
