@@ -2,7 +2,7 @@
 #define TURBORAFT_TEXT_SYNTAX_H
 
 #include <salts_error.h>
-#include <salts_vstr.h>
+#include <vstr.h>
 
 #include <stddef.h>
 #include <stdint.h>
