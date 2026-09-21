@@ -3,7 +3,7 @@ name: Full TurboRaft stack acceptance
 on:
   push:
     branches:
-      - feature/proposal-batching-benchmark
+      - master
   workflow_dispatch:
 
 concurrency:
