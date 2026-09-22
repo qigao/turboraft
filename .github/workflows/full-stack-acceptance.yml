@@ -18,9 +18,9 @@ permissions:
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_REF: ce9b57bc166bf86bd311fe6f86b7619dd64673e1
-  SALTS_UTILS_REF: 2ceba0f6c46914600960bc410f5b5453911322ec
-  FLOWMQ_REF: 0043393a5b287e71a78601d5d71586ef0f3e044a
+  SALTS_REF: master
+  SALTS_UTILS_REF: master
+  FLOWMQ_REF: main
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
   SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
   SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
@@ -43,7 +43,7 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout pinned Salts
+      - name: Checkout Salts master
         uses: actions/checkout@v4
         with:
           repository: qigao/salts
@@ -51,7 +51,7 @@ jobs:
           path: .ci/src/salts
           persist-credentials: false
 
-      - name: Checkout pinned SaltsUtils
+      - name: Checkout SaltsUtils master
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
@@ -59,7 +59,7 @@ jobs:
           path: .ci/src/salts-utils
           persist-credentials: false
 
-      - name: Checkout pinned FlowMQ
+      - name: Checkout FlowMQ main
         uses: actions/checkout@v4
         with:
           repository: qigao/flowmq
@@ -109,7 +109,7 @@ jobs:
             --triplet=x64-linux
 
 
-      - name: Build and install pinned Salts
+      - name: Build and install Salts master
         shell: bash
         run: |
           set -euo pipefail
@@ -123,7 +123,7 @@ jobs:
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
           cmake --build .ci/build/salts --target install --parallel 2
 
-      - name: Build and install pinned SaltsUtils
+      - name: Build and install SaltsUtils master
         shell: bash
         run: |
           set -euo pipefail
@@ -139,7 +139,7 @@ jobs:
           cmake --build .ci/build/salts-utils --target install --parallel 2
           test -x "$SALTS_UTILS_ROOT/bin/tbe_compiler"
 
-      - name: Build and install pinned FlowMQ
+      - name: Build and install FlowMQ main
         shell: bash
         run: |
           set -euo pipefail
