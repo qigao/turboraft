@@ -34,6 +34,34 @@ static int elect_single_node(tr_raft_core_t *core)
     return tr_raft_core_advance(core);
 }
 
+static void make_recovery_entries(tr_raft_entry_t entries[3])
+{
+    size_t index;
+
+    memset(entries, 0, sizeof(tr_raft_entry_t) * 3U);
+    for (index = 0U; index < 3U; ++index) {
+        entries[index].index = (tr_raft_index_t) index + 1U;
+        entries[index].term = 1U;
+        entries[index].command_id = 301U + index;
+        entries[index].data[0] = (uint8_t) ('a' + (int) index);
+        entries[index].data_length = 1U;
+    }
+}
+
+static tr_raft_core_config_t recovery_config(
+    const tr_raft_entry_t entries[3],
+    tr_raft_index_t applied_index)
+{
+    tr_raft_core_config_t config = single_node_config();
+
+    config.initial_term = 1U;
+    config.initial_log_entries = entries;
+    config.initial_log_entry_count = 3U;
+    config.initial_commit_index = 3U;
+    config.initial_applied_index = applied_index;
+    return config;
+}
+
 spec("raft split Ready and apply acknowledgement")
 {
     it("re-emits only an unadmitted committed suffix")
@@ -128,22 +156,8 @@ spec("raft split Ready and apply acknowledgement")
         tr_raft_entry_t entries[3];
         tr_raft_ready_t ready;
         tr_raft_status_t status;
-        size_t index;
-
-        memset(entries, 0, sizeof(entries));
-        for (index = 0U; index < 3U; ++index) {
-            entries[index].index = (tr_raft_index_t) index + 1U;
-            entries[index].term = 1U;
-            entries[index].command_id = 301U + index;
-            entries[index].data[0] = (uint8_t) ('a' + (int) index);
-            entries[index].data_length = 1U;
-        }
-
-        config.initial_term = 1U;
-        config.initial_log_entries = entries;
-        config.initial_log_entry_count = 3U;
-        config.initial_commit_index = 3U;
-        config.initial_applied_index = 1U;
+        make_recovery_entries(entries);
+        config = recovery_config(entries, 1U);
 
         check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
 
@@ -158,6 +172,100 @@ spec("raft split Ready and apply acknowledgement")
         check_equal(tr_raft_core_ack_ready(core, 2U), SALTS_OK);
         check_equal(tr_raft_core_ack_applied(core, 2U), SALTS_OK);
         check_equal(tr_raft_core_ack_applied(core, 3U), SALTS_OK);
+
+        tr_raft_core_destroy(core);
+    }
+
+    it("replays an admitted but unapplied suffix after restart")
+    {
+        tr_raft_entry_t entries[3];
+        tr_raft_core_config_t config;
+        tr_raft_core_t *core = NULL;
+        tr_raft_ready_t ready;
+
+        make_recovery_entries(entries);
+        config = recovery_config(entries, 0U);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+
+        memset(&ready, 0, sizeof(ready));
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(ready.committed_entry_count, 3U);
+        check_equal(tr_raft_core_ack_ready(core, 3U), SALTS_OK);
+
+        memset(&ready, 0, sizeof(ready));
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(ready.committed_entry_count, 0U);
+        tr_raft_core_destroy(core);
+        core = NULL;
+
+        config = recovery_config(entries, 0U);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        memset(&ready, 0, sizeof(ready));
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(ready.committed_entry_count, 3U);
+        check_equal(ready.committed_entries[0].index, 1U);
+        check_equal(ready.committed_entries[2].index, 3U);
+
+        tr_raft_core_destroy(core);
+    }
+
+    it("restarts from a durable application marker before Core apply ack")
+    {
+        tr_raft_entry_t entries[3];
+        tr_raft_core_config_t config;
+        tr_raft_core_t *core = NULL;
+        tr_raft_ready_t ready;
+
+        make_recovery_entries(entries);
+        config = recovery_config(entries, 0U);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+
+        memset(&ready, 0, sizeof(ready));
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(tr_raft_core_ack_ready(core, 3U), SALTS_OK);
+        tr_raft_core_destroy(core);
+        core = NULL;
+
+        /* The application proved index 1 durable before Core ack won. */
+        config = recovery_config(entries, 1U);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        memset(&ready, 0, sizeof(ready));
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(ready.committed_entry_count, 2U);
+        check_equal(ready.committed_entries[0].index, 2U);
+        check_equal(ready.committed_entries[1].index, 3U);
+
+        tr_raft_core_destroy(core);
+    }
+
+    it("restarts after an exact Core applied acknowledgement")
+    {
+        tr_raft_entry_t entries[3];
+        tr_raft_core_config_t config;
+        tr_raft_core_t *core = NULL;
+        tr_raft_ready_t ready;
+        tr_raft_status_t status;
+
+        make_recovery_entries(entries);
+        config = recovery_config(entries, 0U);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+
+        memset(&ready, 0, sizeof(ready));
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(tr_raft_core_ack_ready(core, 3U), SALTS_OK);
+        check_equal(tr_raft_core_ack_applied(core, 1U), SALTS_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.applied_index, 1U);
+        tr_raft_core_destroy(core);
+        core = NULL;
+
+        config = recovery_config(entries, 1U);
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        memset(&ready, 0, sizeof(ready));
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(ready.committed_entry_count, 2U);
+        check_equal(ready.committed_entries[0].index, 2U);
+        check_equal(ready.committed_entries[1].index, 3U);
 
         tr_raft_core_destroy(core);
     }
