@@ -21,7 +21,6 @@ env:
   SALTS_REF: ce9b57bc166bf86bd311fe6f86b7619dd64673e1
   SALTS_UTILS_REF: 2ceba0f6c46914600960bc410f5b5453911322ec
   FLOWMQ_REF: 0043393a5b287e71a78601d5d71586ef0f3e044a
-  VCPKG_ROOT: ${{ github.workspace }}/.ci/vcpkg
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
   SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
   SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
@@ -68,14 +67,6 @@ jobs:
           path: .ci/src/flowmq
           persist-credentials: false
 
-      - name: Checkout pinned vcpkg
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/vcpkg
-          ref: ${{ env.VCPKG_BASELINE }}
-          path: .ci/vcpkg
-          persist-credentials: false
-
       - name: Install host build tools
         shell: bash
         run: |
@@ -91,7 +82,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .ci/vcpkg_installed .ci/super-manifest
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
           cat > .ci/super-manifest/vcpkg.json <<'JSON'
           {
             "name": "turboraft-full-stack-ci",
