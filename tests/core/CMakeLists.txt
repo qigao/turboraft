@@ -179,6 +179,10 @@ if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
   if(NOT TARGET Orm::C)
     message(FATAL_ERROR "The TurboDB install does not provide Orm::C")
   endif()
+  if(NOT DEFINED Orm_WITH_SQLITE OR NOT Orm_WITH_SQLITE)
+    message(FATAL_ERROR
+            "The selected Orm package must include SQLite backend support")
+  endif()
 
   add_executable(turboraft_cflow_orm_sqlite_recovery_tests
                  test_raft_cflow_orm_sqlite_recovery.c)
