@@ -160,6 +160,13 @@ target_link_libraries(turboraft_cflow_state_machine_tests
 add_test(NAME turboraft.cflow_state_machine
          COMMAND turboraft_cflow_state_machine_tests)
 
+add_executable(turboraft_cflow_failure_matrix_tests
+               test_raft_cflow_failure_matrix.c)
+target_link_libraries(turboraft_cflow_failure_matrix_tests
+                      PRIVATE TurboRaft::CFlowStateMachine Salts::TinyTest)
+add_test(NAME turboraft.cflow_failure_matrix
+         COMMAND turboraft_cflow_failure_matrix_tests)
+
 add_executable(turboraft_cflow_payload_ownership_tests
                test_raft_cflow_payload_ownership.c)
 target_link_libraries(turboraft_cflow_payload_ownership_tests
