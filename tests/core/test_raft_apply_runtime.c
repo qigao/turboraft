@@ -678,6 +678,198 @@ spec("bounded Raft entry apply runtime")
         tr_raft_core_destroy(core);
     }
 
+    it("queues a later committed Ready while an earlier settlement waits")
+    {
+        static const tr_raft_node_id_t voters[] = {1U};
+        tr_raft_core_config_t core_config;
+        tr_raft_core_t *core = NULL;
+        tr_raft_apply_runtime_t *runtime = NULL;
+        tr_raft_apply_runtime_config_v1_t config;
+        tr_raft_apply_runtime_result_t result;
+        tr_raft_ready_t ready;
+        tr_raft_message_t message;
+        tr_raft_tick_t tick = {5U, 6U};
+        tr_raft_proposal_t proposal;
+        tr_raft_status_t status;
+        io_probe_t io = {0};
+        apply_probe_t apply = {0};
+
+        memset(&core_config, 0, sizeof(core_config));
+        core_config.self_id = 1U;
+        core_config.voters = voters;
+        core_config.voter_count = 1U;
+        core_config.heartbeat_ticks = 2U;
+        core_config.election_min_ticks = 5U;
+        core_config.election_max_ticks = 10U;
+        core_config.initial_election_timeout_ticks = 5U;
+        core_config.max_log_entries = 8U;
+        check_equal(tr_raft_core_create(&core_config, &core), SALTS_OK);
+
+        apply.next_admission = TR_RAFT_APPLY_ADMISSION_ACCEPTED;
+        config = runtime_config(core, &io, &apply, 3U);
+        check_equal(tr_raft_apply_runtime_create(&config, &runtime), SALTS_OK);
+
+        memset(&ready, 0, sizeof(ready));
+        ready.messages = &message;
+        ready.message_capacity = 1U;
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
+        check_equal(tr_raft_apply_runtime_start(runtime, &ready, &result),
+                    SALTS_OK);
+        check_equal(result.state, TR_RAFT_APPLY_RUNTIME_COMPLETE);
+
+        memset(&proposal, 0, sizeof(proposal));
+        proposal.command_id = 101U;
+        proposal.data = "one";
+        proposal.data_length = 3U;
+        memset(&ready, 0, sizeof(ready));
+        ready.messages = &message;
+        ready.message_capacity = 1U;
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
+        check_equal(tr_raft_apply_runtime_start(runtime, &ready, &result),
+                    SALTS_OK);
+        check_equal(result.state,
+                    TR_RAFT_APPLY_RUNTIME_WAITING_SETTLEMENT);
+        check_equal(apply.apply_calls, 1U);
+        check_equal(apply.applied_indexes[0], 1U);
+
+        proposal.command_id = 102U;
+        proposal.data = "two";
+        proposal.data_length = 3U;
+        memset(&ready, 0, sizeof(ready));
+        ready.messages = &message;
+        ready.message_capacity = 1U;
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
+        check_equal(ready.committed_entry_count, 1U);
+        check_equal(ready.committed_entries[0].index, 2U);
+        check_equal(tr_raft_apply_runtime_start(runtime, &ready, &result),
+                    SALTS_OK);
+        check_equal(result.state,
+                    TR_RAFT_APPLY_RUNTIME_WAITING_SETTLEMENT);
+        check_equal(apply.apply_calls, 1U);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_false(status.ready_outstanding);
+        check_equal(status.commit_index, 2U);
+        check_equal(status.applied_index, 0U);
+
+        apply.settlement.token = 1U;
+        apply.settlement.outcome = TR_RAFT_APPLY_OUTCOME_APPLIED;
+        apply.settlement.cause = SALTS_OK;
+        apply.settlement_ready = true;
+        check_equal(tr_raft_apply_runtime_poll(runtime, &result), SALTS_OK);
+        check_equal(result.state,
+                    TR_RAFT_APPLY_RUNTIME_WAITING_SETTLEMENT);
+        check_equal(apply.apply_calls, 2U);
+        check_equal(apply.applied_indexes[1], 2U);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.applied_index, 1U);
+
+        apply.settlement.token = 2U;
+        apply.settlement.outcome = TR_RAFT_APPLY_OUTCOME_APPLIED;
+        apply.settlement.cause = SALTS_OK;
+        apply.settlement_ready = true;
+        check_equal(tr_raft_apply_runtime_poll(runtime, &result), SALTS_OK);
+        check_equal(result.state, TR_RAFT_APPLY_RUNTIME_COMPLETE);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.applied_index, 2U);
+
+        check_equal(tr_raft_apply_runtime_destroy(runtime), SALTS_OK);
+        tr_raft_core_destroy(core);
+    }
+
+    it("rejects a later Ready before side effects when pending capacity is full")
+    {
+        static const tr_raft_node_id_t voters[] = {1U};
+        tr_raft_core_config_t core_config;
+        tr_raft_core_t *core = NULL;
+        tr_raft_apply_runtime_t *runtime = NULL;
+        tr_raft_apply_runtime_config_v1_t config;
+        tr_raft_apply_runtime_result_t result;
+        tr_raft_ready_t ready;
+        tr_raft_message_t message;
+        tr_raft_tick_t tick = {5U, 6U};
+        tr_raft_proposal_t proposal;
+        size_t begin_before;
+        size_t commit_before;
+        size_t enqueue_before;
+        io_probe_t io = {0};
+        apply_probe_t apply = {0};
+
+        memset(&core_config, 0, sizeof(core_config));
+        core_config.self_id = 1U;
+        core_config.voters = voters;
+        core_config.voter_count = 1U;
+        core_config.heartbeat_ticks = 2U;
+        core_config.election_min_ticks = 5U;
+        core_config.election_max_ticks = 10U;
+        core_config.initial_election_timeout_ticks = 5U;
+        core_config.max_log_entries = 8U;
+        check_equal(tr_raft_core_create(&core_config, &core), SALTS_OK);
+
+        apply.next_admission = TR_RAFT_APPLY_ADMISSION_ACCEPTED;
+        config = runtime_config(core, &io, &apply, 1U);
+        check_equal(tr_raft_apply_runtime_create(&config, &runtime), SALTS_OK);
+
+        memset(&ready, 0, sizeof(ready));
+        ready.messages = &message;
+        ready.message_capacity = 1U;
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
+        check_equal(tr_raft_apply_runtime_start(runtime, &ready, &result),
+                    SALTS_OK);
+
+        memset(&proposal, 0, sizeof(proposal));
+        proposal.command_id = 201U;
+        proposal.data = "one";
+        proposal.data_length = 3U;
+        memset(&ready, 0, sizeof(ready));
+        ready.messages = &message;
+        ready.message_capacity = 1U;
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
+        check_equal(tr_raft_apply_runtime_start(runtime, &ready, &result),
+                    SALTS_OK);
+        check_equal(result.state,
+                    TR_RAFT_APPLY_RUNTIME_WAITING_SETTLEMENT);
+
+        proposal.command_id = 202U;
+        proposal.data = "two";
+        proposal.data_length = 3U;
+        memset(&ready, 0, sizeof(ready));
+        ready.messages = &message;
+        ready.message_capacity = 1U;
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
+        begin_before = io.begin_calls;
+        commit_before = io.commit_calls;
+        enqueue_before = io.enqueue_calls;
+        check_equal(tr_raft_apply_runtime_start(runtime, &ready, &result),
+                    SALTS_ENOBUFS);
+        check_equal(io.begin_calls, begin_before);
+        check_equal(io.commit_calls, commit_before);
+        check_equal(io.enqueue_calls, enqueue_before);
+
+        apply.settlement.token = 1U;
+        apply.settlement.outcome = TR_RAFT_APPLY_OUTCOME_APPLIED;
+        apply.settlement.cause = SALTS_OK;
+        apply.settlement_ready = true;
+        check_equal(tr_raft_apply_runtime_poll(runtime, &result), SALTS_OK);
+        check_equal(result.state, TR_RAFT_APPLY_RUNTIME_COMPLETE);
+
+        check_equal(tr_raft_apply_runtime_start(runtime, &ready, &result),
+                    SALTS_OK);
+        check_equal(result.state,
+                    TR_RAFT_APPLY_RUNTIME_WAITING_SETTLEMENT);
+        check_equal(apply.apply_calls, 2U);
+        check_equal(apply.applied_indexes[1], 2U);
+
+        apply.settlement.token = 2U;
+        apply.settlement.outcome = TR_RAFT_APPLY_OUTCOME_APPLIED;
+        apply.settlement.cause = SALTS_OK;
+        apply.settlement_ready = true;
+        check_equal(tr_raft_apply_runtime_poll(runtime, &result), SALTS_OK);
+        check_equal(result.state, TR_RAFT_APPLY_RUNTIME_COMPLETE);
+
+        check_equal(tr_raft_apply_runtime_destroy(runtime), SALTS_OK);
+        tr_raft_core_destroy(core);
+    }
+
     it("refuses destruction while an accepted entry is unsettled")
     {
         tr_raft_entry_t entry = make_entry(1U, "one");
@@ -700,10 +892,6 @@ spec("bounded Raft entry apply runtime")
         check_equal(result.state,
                     TR_RAFT_APPLY_RUNTIME_WAITING_SETTLEMENT);
 
-        check_equal(tr_raft_apply_runtime_start(runtime, &ready, &result),
-                    SALTS_EBUSY);
-        check_equal(result.state,
-                    TR_RAFT_APPLY_RUNTIME_WAITING_SETTLEMENT);
         check_equal(tr_raft_apply_runtime_destroy(runtime), SALTS_EBUSY);
 
         apply.settlement.token = 1U;
