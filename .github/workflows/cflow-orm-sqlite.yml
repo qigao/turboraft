@@ -1,0 +1,221 @@
+name: CFlow ORM SQLite recovery
+
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: cflow-orm-sqlite-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+  SALTS_REF: master
+  SALTS_UTILS_REF: master
+  FLOWMQ_REF: main
+  TURBODB_REF: master
+  VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed_orm
+  SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs-orm/salts
+  SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs-orm/salts-utils
+  FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs-orm/flowmq
+  TURBODB_ROOT: ${{ github.workspace }}/.ci/pkgs-orm/turbodb
+  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-orm/turbodb/lib:${{ github.workspace }}/.ci/pkgs-orm/flowmq/lib:${{ github.workspace }}/.ci/pkgs-orm/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-orm/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_orm/x64-linux/lib
+
+jobs:
+  sqlite-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact TurboRaft head
+        uses: actions/checkout@v4
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore shared re2c binary
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - name: Checkout Salts master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.SALTS_REF }}
+          path: .ci/src-orm/salts
+          persist-credentials: false
+
+      - name: Checkout SaltsUtils master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.SALTS_UTILS_REF }}
+          path: .ci/src-orm/salts-utils
+          persist-credentials: false
+
+      - name: Checkout FlowMQ main
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/flowmq
+          ref: ${{ env.FLOWMQ_REF }}
+          path: .ci/src-orm/flowmq
+          persist-credentials: false
+
+      - name: Checkout TurboDB master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/turbodb
+          ref: ${{ env.TURBODB_REF }}
+          path: .ci/src-orm/turbodb
+          persist-credentials: false
+
+      - name: Install host build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential libtool nasm ninja-build pkg-config
+
+      - name: Bootstrap vcpkg dependency union
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/vcpkg_installed_orm .ci/orm-super-manifest
+          cat > .ci/orm-super-manifest/vcpkg.json <<'JSON'
+          {
+            "name": "turboraft-cflow-orm-sqlite-ci",
+            "version-semver": "0.1.0",
+            "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
+            "dependencies": [
+              { "name": "pkgconf", "host": true },
+              "simde",
+              "zstd",
+              "aklomp-base64",
+              "c-ares",
+              "libuv",
+              "kcp",
+              "boringssl",
+              "miniaudio",
+              "lua",
+              { "name": "zeromq", "default-features": false },
+              { "name": "xxhash", "version>=": "0.8.3" },
+              { "name": "sqlite3", "version>=": "3.49.0" }
+            ]
+          }
+          JSON
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$GITHUB_WORKSPACE/.ci/orm-super-manifest" \
+            --x-install-root="$VCPKG_INSTALLED_DIR" \
+            --triplet=x64-linux
+
+      - name: Build and install Salts master
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src-orm/salts -B .ci/build-orm/salts -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
+          cmake --build .ci/build-orm/salts --target install --parallel 2
+
+      - name: Build and install SaltsUtils master
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src-orm/salts-utils -B .ci/build-orm/salts-utils -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
+            -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
+          cmake --build .ci/build-orm/salts-utils --target install --parallel 2
+
+      - name: Build and install FlowMQ main
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src-orm/flowmq -B .ci/build-orm/flowmq -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$FLOWMQ_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build .ci/build-orm/flowmq --target install --parallel 2
+
+      - name: Build and install TurboDB ORM SQLite profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src-orm/turbodb -B .ci/build-orm/turbodb -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$TURBODB_ROOT" \
+            -DORM_WITH_SQLITE=ON -DORM_WITH_PGSQL=OFF \
+            -DORM_WITH_REDIS=OFF -DORM_WITH_MONGODB=OFF \
+            -DORM_BUILD_TESTS=OFF \
+            -DTURBODB_BUILD_DBTOOLS=OFF \
+            -DTURBODB_DBTOOLS_WITH_SQLITE=OFF \
+            -DTURBODB_DBTOOLS_WITH_PGSQL=OFF \
+            -DTURBODB_BUILD_REDIS=OFF \
+            -DTIDESDB_BUILD_TESTS=OFF \
+            -DTIDESDB_WITH_SNAPPY=OFF -DTIDESDB_WITH_LZ4=OFF \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
+          cmake --build .ci/build-orm/turbodb --target install --parallel 2
+          test -f "$TURBODB_ROOT/lib/cmake/Orm/OrmConfig.cmake"
+
+      - name: Configure TurboRaft ORM SQLite fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B .ci/build-orm/turboraft -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=ON
+
+      - name: Build ORM SQLite fixture targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build .ci/build-orm/turboraft --parallel 2 --target \
+            turboraft_cflow_orm_sqlite_recovery_tests \
+            turboraft_orm_sqlite_crash_node \
+            turboraft_orm_sqlite_crash_tests
+
+      - name: Run ORM SQLite recovery and crash gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir .ci/build-orm/turboraft \
+            -R 'turboraft\.(cflow_orm_sqlite_recovery|orm_sqlite_crash)$' \
+            --output-on-failure
+
+      - name: Upload ORM SQLite diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cflow-orm-sqlite-diagnostics
+          path: .ci/build-orm/turboraft/Testing/Temporary
+          if-no-files-found: ignore

@@ -167,6 +167,51 @@ target_link_libraries(turboraft_cflow_snapshot_replay_tests
 add_test(NAME turboraft.cflow_snapshot_replay
          COMMAND turboraft_cflow_snapshot_replay_tests)
 
+if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
+  if(NOT DEFINED ENV{TURBODB_ROOT} OR
+     "$ENV{TURBODB_ROOT}" STREQUAL "" OR
+     NOT IS_DIRECTORY "$ENV{TURBODB_ROOT}")
+    message(FATAL_ERROR
+            "TURBODB_ROOT must name the TurboDB install prefix when ORM SQLite fixtures are enabled")
+  endif()
+  find_package(Orm CONFIG REQUIRED
+               PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
+  if(NOT TARGET Orm::C)
+    message(FATAL_ERROR "The TurboDB install does not provide Orm::C")
+  endif()
+  if(NOT DEFINED Orm_WITH_SQLITE OR NOT Orm_WITH_SQLITE)
+    message(FATAL_ERROR
+            "The selected Orm package must include SQLite backend support")
+  endif()
+
+  add_executable(turboraft_cflow_orm_sqlite_recovery_tests
+                 test_raft_cflow_orm_sqlite_recovery.c)
+  target_link_libraries(
+    turboraft_cflow_orm_sqlite_recovery_tests
+    PRIVATE TurboRaft::CFlowStateMachine Orm::C Salts::Coroutine Salts::TinyTest)
+  add_test(NAME turboraft.cflow_orm_sqlite_recovery
+           COMMAND turboraft_cflow_orm_sqlite_recovery_tests)
+  set_tests_properties(turboraft.cflow_orm_sqlite_recovery
+                       PROPERTIES LABELS "orm;sqlite;recovery")
+
+  add_executable(turboraft_orm_sqlite_crash_node
+                 ../chaos/raft_orm_sqlite_crash_node.c)
+  target_link_libraries(turboraft_orm_sqlite_crash_node PRIVATE Orm::C)
+
+  add_executable(turboraft_orm_sqlite_crash_tests
+                 ../chaos/test_raft_orm_sqlite_crash.c)
+  target_link_libraries(turboraft_orm_sqlite_crash_tests
+                        PRIVATE Salts::Core Salts::Platform Salts::TinyTest)
+  add_test(NAME turboraft.orm_sqlite_crash
+           COMMAND turboraft_orm_sqlite_crash_tests)
+  set_tests_properties(
+    turboraft.orm_sqlite_crash
+    PROPERTIES ENVIRONMENT
+               "TURBORAFT_ORM_SQLITE_CRASH_NODE=$<TARGET_FILE:turboraft_orm_sqlite_crash_node>"
+               TIMEOUT 60
+               LABELS "orm;sqlite;crash")
+endif()
+
 add_executable(turboraft_service_tests test_raft_service.c)
 target_link_libraries(turboraft_service_tests PRIVATE TurboRaft::Service
                                                       Salts::TinyTest)
