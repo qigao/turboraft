@@ -72,6 +72,24 @@ static int tr_runtime_ack_applied_range(
     return SALTS_OK;
 }
 
+static int tr_runtime_ack_ready_prefix(
+    tr_raft_runtime_t *runtime,
+    const tr_raft_entry_t *entries,
+    size_t entry_count,
+    size_t applied_prefix_end,
+    tr_raft_runtime_result_t *result)
+{
+    int ack_result;
+
+    result->stage = TR_RAFT_RUNTIME_CORE_ADVANCE;
+    ack_result = tr_raft_core_ack_ready(runtime->core, entry_count);
+    if (ack_result != SALTS_OK) {
+        return tr_runtime_fail(runtime, result, result->stage, ack_result);
+    }
+    return tr_runtime_ack_applied_range(
+        runtime, entries, 0U, applied_prefix_end, result);
+}
+
 static int tr_runtime_apply_from(
     tr_raft_runtime_t *runtime,
     const tr_raft_entry_t *entries,
@@ -111,16 +129,8 @@ static int tr_runtime_apply_from(
             runtime->state_machine.context, entries + begin, end - begin);
         if (callback_result == SALTS_EBUSY) {
             if (!ready_acknowledged) {
-                result->stage = TR_RAFT_RUNTIME_CORE_ADVANCE;
-                callback_result = tr_raft_core_ack_ready(
-                    runtime->core, entry_count);
-                if (callback_result != SALTS_OK) {
-                    tr_runtime_clear_apply_block(runtime);
-                    return tr_runtime_fail(runtime, result, result->stage,
-                                           callback_result);
-                }
-                callback_result = tr_runtime_ack_applied_range(
-                    runtime, entries, 0U, begin, result);
+                callback_result = tr_runtime_ack_ready_prefix(
+                    runtime, entries, entry_count, begin, result);
                 if (callback_result != SALTS_OK) {
                     tr_runtime_clear_apply_block(runtime);
                     return callback_result;
@@ -136,9 +146,20 @@ static int tr_runtime_apply_from(
             return SALTS_EBUSY;
         }
         if (callback_result != SALTS_OK) {
+            int apply_error = callback_result;
+
+            if (!ready_acknowledged) {
+                callback_result = tr_runtime_ack_ready_prefix(
+                    runtime, entries, entry_count, begin, result);
+                if (callback_result != SALTS_OK) {
+                    tr_runtime_clear_apply_block(runtime);
+                    return callback_result;
+                }
+            }
             tr_runtime_clear_apply_block(runtime);
-            return tr_runtime_fail(runtime, result, result->stage,
-                                   callback_result);
+            return tr_runtime_fail(runtime, result,
+                                   TR_RAFT_RUNTIME_STATE_MACHINE_APPLY,
+                                   apply_error);
         }
         if (ready_acknowledged) {
             callback_result = tr_runtime_ack_applied_range(
