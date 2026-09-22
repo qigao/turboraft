@@ -139,11 +139,14 @@ static int build_split_apply_entries(tr_raft_entry_t entries[3])
     entries[0].data_length = 1U;
 
     memset(&configuration, 0, sizeof(configuration));
-    configuration.phase = TR_RAFT_CONF_FINAL;
-    configuration.member_count = 1U;
+    configuration.phase = TR_RAFT_CONF_JOINT;
+    configuration.transition_id = 201U;
+    configuration.member_count = 2U;
     configuration.members[0].node_id = 1U;
     configuration.members[0].roles =
         TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+    configuration.members[1].node_id = 2U;
+    configuration.members[1].roles = TR_RAFT_CONF_NEW_VOTER;
     entries[1].index = 2U;
     entries[1].term = 1U;
     result = tr_raft_conf_encode(
