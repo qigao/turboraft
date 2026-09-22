@@ -181,6 +181,29 @@ jobs:
           set -euo pipefail
           cmake --build .ci/build/turboraft --parallel 2
 
+      - name: Install TurboRaft SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --install .ci/build/turboraft \
+            --prefix "$GITHUB_WORKSPACE/.ci/pkgs/turboraft"
+
+      - name: Verify installed Core package and ABI contract
+        shell: bash
+        env:
+          TURBORAFT_ROOT: ${{ github.workspace }}/.ci/pkgs/turboraft
+        run: |
+          set -euo pipefail
+          cmake -S tests/package_core_consumer \
+            -B .ci/build/package-core-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build/package-core-consumer --parallel 2
+          .ci/build/package-core-consumer/turboraft_core_package_consumer
+
       - name: Targeted production integration gates
         shell: bash
         run: |
