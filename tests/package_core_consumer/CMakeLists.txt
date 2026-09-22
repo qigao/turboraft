@@ -13,5 +13,5 @@ if(NOT TARGET TurboRaft::Core)
   message(FATAL_ERROR "TurboRaft Core target was not exported")
 endif()
 
-add_library(turboraft_core_consumer INTERFACE)
-target_link_libraries(turboraft_core_consumer INTERFACE TurboRaft::Core)
+add_executable(turboraft_core_package_consumer main.c)
+target_link_libraries(turboraft_core_package_consumer PRIVATE TurboRaft::Core)
