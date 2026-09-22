@@ -17,6 +17,7 @@ struct tr_raft_apply_runtime {
     size_t entry_capacity;
     size_t entry_count;
     size_t entry_cursor;
+    tr_raft_index_t admitted_through;
     tr_raft_apply_runtime_state_t state;
     tr_raft_apply_runtime_result_t progress;
     bool active;
@@ -49,6 +50,28 @@ static void tr_apply_copy_result(const tr_raft_apply_runtime_t *runtime,
             : runtime->reconciliation_pending
                   ? runtime->entries[runtime->entry_cursor].index
                   : 0U;
+}
+
+static void tr_apply_compact_entries(tr_raft_apply_runtime_t *runtime)
+{
+    size_t remaining;
+
+    if (runtime->entry_cursor == 0U) {
+        return;
+    }
+    remaining = runtime->entry_count - runtime->entry_cursor;
+    if (remaining != 0U) {
+        memmove(runtime->entries,
+                runtime->entries + runtime->entry_cursor,
+                remaining * sizeof(*runtime->entries));
+    }
+    if (remaining < runtime->entry_count) {
+        memset(runtime->entries + remaining, 0,
+               (runtime->entry_count - remaining) *
+                   sizeof(*runtime->entries));
+    }
+    runtime->entry_count = remaining;
+    runtime->entry_cursor = 0U;
 }
 
 static int tr_apply_set_fault(tr_raft_apply_runtime_t *runtime,
@@ -249,6 +272,8 @@ static int tr_apply_drive_admission(
     }
 
     runtime->active = false;
+    runtime->entry_count = 0U;
+    runtime->entry_cursor = 0U;
     runtime->state = TR_RAFT_APPLY_RUNTIME_COMPLETE;
     runtime->progress.stage = TR_RAFT_RUNTIME_COMPLETE;
     runtime->progress.cause = SALTS_OK;
@@ -261,6 +286,7 @@ int tr_raft_apply_runtime_create(
     tr_raft_apply_runtime_t **out_runtime)
 {
     tr_raft_apply_runtime_t *runtime;
+    tr_raft_status_t status;
 
     if (config == NULL || out_runtime == NULL) {
         return SALTS_EINVAL;
@@ -292,6 +318,14 @@ int tr_raft_apply_runtime_create(
     runtime->transport = config->transport;
     runtime->state_machine = config->state_machine;
     runtime->entry_capacity = config->max_pending_entries;
+    if (tr_raft_core_status(runtime->core, &status) != SALTS_OK ||
+        status.applied_index > status.commit_index) {
+        free(runtime->entries);
+        free(runtime);
+        return SALTS_EPROTO;
+    }
+    runtime->admitted_through = status.applied_index;
+    runtime->progress.applied_through = status.applied_index;
     runtime->state = TR_RAFT_APPLY_RUNTIME_IDLE;
     *out_runtime = runtime;
     return SALTS_OK;
@@ -302,9 +336,13 @@ int tr_raft_apply_runtime_start(tr_raft_apply_runtime_t *runtime,
                                 tr_raft_apply_runtime_result_t *result)
 {
     tr_raft_status_t status;
+    tr_raft_apply_runtime_state_t prior_state;
     tr_raft_index_t committed_delta;
+    size_t append_offset;
     size_t index;
+    int prior_cause;
     int callback_result;
+    bool was_active;
 
     if (runtime == NULL || ready == NULL || result == NULL) {
         return SALTS_EINVAL;
@@ -316,13 +354,6 @@ int tr_raft_apply_runtime_start(tr_raft_apply_runtime_t *runtime,
         return runtime->progress.cause == SALTS_OK ? SALTS_EPROTO
                                                    : runtime->progress.cause;
     }
-    if (runtime->active) {
-        result->state = runtime->state;
-        result->cause = SALTS_EBUSY;
-        return SALTS_EBUSY;
-    }
-    runtime->state = TR_RAFT_APPLY_RUNTIME_IDLE;
-    memset(&runtime->progress, 0, sizeof(runtime->progress));
     if ((ready->message_count != 0U && ready->messages == NULL) ||
         ready->message_count > ready->message_capacity ||
         (ready->log_entry_count != 0U && ready->log_entries == NULL) ||
@@ -333,39 +364,57 @@ int tr_raft_apply_runtime_start(tr_raft_apply_runtime_t *runtime,
         return SALTS_EINVAL;
     }
     if (tr_raft_core_status(runtime->core, &status) != SALTS_OK ||
-        !status.ready_outstanding || status.applied_index > status.commit_index) {
+        !status.ready_outstanding ||
+        status.applied_index > status.commit_index ||
+        runtime->admitted_through > status.commit_index) {
         result->cause = SALTS_EPROTO;
         return SALTS_EPROTO;
     }
-    committed_delta = status.commit_index - status.applied_index;
+
+    committed_delta = status.commit_index - runtime->admitted_through;
     if (committed_delta > SIZE_MAX ||
         ready->committed_entry_count != (size_t) committed_delta) {
         result->cause = SALTS_EPROTO;
         return SALTS_EPROTO;
     }
-    if (ready->committed_entry_count > runtime->entry_capacity) {
+
+    tr_apply_compact_entries(runtime);
+    if (ready->committed_entry_count >
+        runtime->entry_capacity - runtime->entry_count) {
+        result->state = runtime->active ? runtime->state
+                                        : TR_RAFT_APPLY_RUNTIME_IDLE;
         result->cause = SALTS_ENOBUFS;
         return SALTS_ENOBUFS;
     }
     for (index = 0U; index < ready->committed_entry_count; ++index) {
         if (ready->committed_entries[index].data_length >
                 TR_RAFT_MAX_ENTRY_BYTES ||
+            runtime->admitted_through == UINT64_MAX ||
             ready->committed_entries[index].index !=
-                status.applied_index + (tr_raft_index_t) index + 1U) {
+                runtime->admitted_through +
+                    (tr_raft_index_t) index + 1U) {
             result->cause = SALTS_EPROTO;
             return SALTS_EPROTO;
         }
     }
+
+    was_active = runtime->active;
+    prior_state = runtime->state;
+    prior_cause = runtime->progress.cause;
+    append_offset = runtime->entry_count;
     if (ready->committed_entry_count != 0U) {
-        memcpy(runtime->entries, ready->committed_entries,
+        memcpy(runtime->entries + append_offset, ready->committed_entries,
                ready->committed_entry_count * sizeof(*runtime->entries));
+        runtime->entry_count += ready->committed_entry_count;
     }
-    runtime->entry_count = ready->committed_entry_count;
-    runtime->entry_cursor = 0U;
     runtime->active = true;
-    runtime->progress.applied_through = status.applied_index;
+    runtime->progress.rollback_error = SALTS_OK;
+    runtime->progress.messages_enqueued = 0U;
+    runtime->progress.snapshots_requested = 0U;
+    runtime->progress.durable = false;
     runtime->progress.read_state_ready = ready->read_state_ready;
     runtime->progress.read_state = ready->read_state;
+    runtime->progress.applied_through = status.applied_index;
 
     if (tr_apply_ready_needs_storage(ready)) {
         if (!tr_apply_storage_complete(&runtime->storage)) {
@@ -381,12 +430,27 @@ int tr_raft_apply_runtime_start(tr_raft_apply_runtime_t *runtime,
     if (callback_result != SALTS_OK) {
         return callback_result;
     }
+
     runtime->progress.stage = TR_RAFT_RUNTIME_CORE_ADVANCE;
-    callback_result = tr_raft_core_ack_ready(runtime->core, runtime->entry_count);
+    callback_result = tr_raft_core_ack_ready(
+        runtime->core, ready->committed_entry_count);
     if (callback_result != SALTS_OK) {
         return tr_apply_fail(runtime, runtime->progress.stage,
                              callback_result, result);
     }
+    runtime->admitted_through +=
+        (tr_raft_index_t) ready->committed_entry_count;
+
+    if (was_active) {
+        runtime->state = prior_state;
+        runtime->progress.cause = prior_cause;
+        runtime->progress.stage = TR_RAFT_RUNTIME_STATE_MACHINE_APPLY;
+        tr_apply_copy_result(runtime, result);
+        return SALTS_OK;
+    }
+
+    runtime->state = TR_RAFT_APPLY_RUNTIME_WAITING_ADMISSION;
+    runtime->progress.cause = SALTS_OK;
     return tr_apply_drive_admission(runtime, result);
 }
 
