@@ -39,6 +39,41 @@ static cflow_statechart_host_result tr_raft_cflow_on_host_transaction(
                                            context, out_error);
 }
 
+static int tr_raft_cflow_status_to_error(
+    cflow_statechart_instance_status status)
+{
+    switch (status) {
+    case CFLOW_STATECHART_INSTANCE_OK:
+        return SALTS_OK;
+    case CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED:
+        return SALTS_ENOMEM;
+    case CFLOW_STATECHART_INSTANCE_INTERNAL_QUEUE_FULL:
+    case CFLOW_STATECHART_INSTANCE_COMPLETION_QUEUE_FULL:
+    case CFLOW_STATECHART_INSTANCE_EFFECT_JOURNAL_FULL:
+    case CFLOW_STATECHART_INSTANCE_EXECUTOR_FULL:
+    case CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED:
+        return SALTS_ENOBUFS;
+    case CFLOW_STATECHART_INSTANCE_EXECUTOR_CLOSED:
+        return SALTS_ESHUTDOWN;
+    case CFLOW_STATECHART_INSTANCE_TASK_CANCELLED:
+        return SALTS_ECANCELED;
+    case CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT:
+    case CFLOW_STATECHART_INSTANCE_BINDING_MISMATCH:
+    case CFLOW_STATECHART_INSTANCE_UNSUPPORTED_TYPE:
+    case CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION:
+    case CFLOW_STATECHART_INSTANCE_INTERNAL_EVENT_INVALID:
+    case CFLOW_STATECHART_INSTANCE_INTERNAL_EVENT_TYPE_MISMATCH:
+    case CFLOW_STATECHART_INSTANCE_MICROSTEP_LIMIT_EXCEEDED:
+        return SALTS_EPROTO;
+    case CFLOW_STATECHART_INSTANCE_GUARD_FAILED:
+    case CFLOW_STATECHART_INSTANCE_ACTION_FAILED:
+    case CFLOW_STATECHART_INSTANCE_HOOK_FAILED:
+    case CFLOW_STATECHART_INSTANCE_WOULD_BLOCK:
+    default:
+        return SALTS_EIO;
+    }
+}
+
 static void tr_raft_cflow_on_settlement(
     void *user,
     const cflow_statechart_external_settlement *settlement)
@@ -71,7 +106,8 @@ static void tr_raft_cflow_on_settlement(
     } else if (settlement->kind ==
                CFLOW_STATECHART_EXTERNAL_SETTLED_FAILED) {
         state_machine->settlement.outcome = TR_RAFT_APPLY_OUTCOME_UNKNOWN;
-        state_machine->settlement.cause = SALTS_EIO;
+        state_machine->settlement.cause =
+            tr_raft_cflow_status_to_error(settlement->status);
     } else {
         state_machine->settlement.outcome = TR_RAFT_APPLY_OUTCOME_UNKNOWN;
         state_machine->settlement.cause = SALTS_EPROTO;
