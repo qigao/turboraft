@@ -36,6 +36,7 @@ struct tr_raft_core {
     tr_raft_log_t log;
     tr_raft_index_t commit_index;
     tr_raft_index_t applied_index;
+    tr_raft_index_t apply_admitted_index;
     tr_raft_index_t pending_apply_index;
     tr_raft_term_t campaign_term;
     uint32_t heartbeat_ticks;
@@ -490,13 +491,13 @@ static int tr_finish(tr_raft_core_t *core,
                      tr_raft_ready_t *ready,
                      const tr_raft_before_t *before)
 {
-    if (core->commit_index > core->applied_index) {
-        tr_raft_index_t first_index = core->applied_index + 1U;
+    if (core->commit_index > core->apply_admitted_index) {
+        tr_raft_index_t first_index = core->apply_admitted_index + 1U;
 
         ready->committed_entries = (const tr_raft_entry_t *)
             tr_raft_log_get(&core->log, first_index);
         ready->committed_entry_count =
-            (size_t) (core->commit_index - core->applied_index);
+            (size_t) (core->commit_index - core->apply_admitted_index);
         core->pending_apply_index = core->commit_index;
     }
     ready->hard_state_changed = before->term != core->term ||
@@ -1548,6 +1549,7 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
     }
     core->commit_index = initial_commit;
     core->applied_index = initial_applied;
+    core->apply_admitted_index = initial_applied;
     result = tr_core_replay_membership_log(core);
     if (result != SALTS_OK) {
         tr_raft_log_destroy(&core->log);
@@ -2107,6 +2109,57 @@ int tr_raft_core_poll(tr_raft_core_t *core, tr_raft_ready_t *ready)
     return tr_finish(core, ready, &before);
 }
 
+int tr_raft_core_ack_ready(tr_raft_core_t *core,
+                           size_t admitted_entry_count)
+{
+    tr_raft_index_t pending_count = 0U;
+
+    if (core == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (core->in_call || !core->ready_outstanding) {
+        return SALTS_EPROTO;
+    }
+    if (core->pending_apply_index != 0U) {
+        if (core->pending_apply_index < core->apply_admitted_index) {
+            return SALTS_EPROTO;
+        }
+        pending_count =
+            core->pending_apply_index - core->apply_admitted_index;
+    }
+    if ((uint64_t) admitted_entry_count > pending_count) {
+        return SALTS_EINVAL;
+    }
+    core->apply_admitted_index +=
+        (tr_raft_index_t) admitted_entry_count;
+    core->pending_apply_index = 0U;
+    core->ready_outstanding = false;
+    return SALTS_OK;
+}
+
+int tr_raft_core_ack_applied(tr_raft_core_t *core,
+                             tr_raft_index_t index)
+{
+    if (core == NULL || index == 0U) {
+        return SALTS_EINVAL;
+    }
+    if (core->in_call) {
+        return SALTS_EPROTO;
+    }
+    if (index <= core->applied_index) {
+        return SALTS_EALREADY;
+    }
+    if (core->applied_index == UINT64_MAX ||
+        index != core->applied_index + 1U) {
+        return SALTS_EPROTO;
+    }
+    if (index > core->apply_admitted_index) {
+        return SALTS_EBUSY;
+    }
+    core->applied_index = index;
+    return SALTS_OK;
+}
+
 int tr_raft_core_advance(tr_raft_core_t *core)
 {
     if (core == NULL) {
@@ -2116,6 +2169,11 @@ int tr_raft_core_advance(tr_raft_core_t *core)
         return SALTS_EPROTO;
     }
     if (core->pending_apply_index != 0U) {
+        if (core->apply_admitted_index != core->applied_index ||
+            core->pending_apply_index < core->apply_admitted_index) {
+            return SALTS_EBUSY;
+        }
+        core->apply_admitted_index = core->pending_apply_index;
         core->applied_index = core->pending_apply_index;
         core->pending_apply_index = 0U;
     }
