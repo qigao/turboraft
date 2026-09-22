@@ -21,6 +21,8 @@ typedef struct runtime_fixture {
     size_t apply_attempts;
     size_t apply_busy_attempts;
     uint64_t apply_busy_command_id;
+    uint64_t apply_fail_command_id;
+    int apply_fail_error;
     int blob_durable;
     size_t descriptor_apply_count;
 } runtime_fixture_t;
@@ -79,8 +81,7 @@ static int storage_rollback(void *ctx)
 static int state_apply(void *ctx, const tr_raft_entry_t *entries, size_t count)
 {
     runtime_fixture_t *fixture = (runtime_fixture_t *)ctx;
-    (void) entries;
-    (void) count;
+
     ++fixture->apply_attempts;
     if (fixture->apply_busy_attempts != 0U &&
         (fixture->apply_busy_command_id == 0U ||
@@ -88,6 +89,12 @@ static int state_apply(void *ctx, const tr_raft_entry_t *entries, size_t count)
           entries[0].command_id == fixture->apply_busy_command_id))) {
         --fixture->apply_busy_attempts;
         return SALTS_EBUSY;
+    }
+    if (fixture->apply_fail_command_id != 0U && count != 0U &&
+        entries[0].command_id == fixture->apply_fail_command_id) {
+        return fixture->apply_fail_error != SALTS_OK
+                   ? fixture->apply_fail_error
+                   : SALTS_EINVAL;
     }
     return record_event(fixture, EVENT_APPLY);
 }
@@ -116,6 +123,43 @@ static int state_apply_descriptor(void *ctx,
     }
     ++fixture->descriptor_apply_count;
     return record_event(fixture, EVENT_APPLY);
+}
+
+static int build_split_apply_entries(tr_raft_entry_t entries[3])
+{
+    tr_raft_conf_t configuration;
+    size_t configuration_length = 0U;
+    int result;
+
+    memset(entries, 0, sizeof(tr_raft_entry_t) * 3U);
+    entries[0].index = 1U;
+    entries[0].term = 1U;
+    entries[0].command_id = 101U;
+    entries[0].data[0] = 'a';
+    entries[0].data_length = 1U;
+
+    memset(&configuration, 0, sizeof(configuration));
+    configuration.phase = TR_RAFT_CONF_FINAL;
+    configuration.member_count = 1U;
+    configuration.members[0].node_id = 1U;
+    configuration.members[0].roles =
+        TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+    entries[1].index = 2U;
+    entries[1].term = 1U;
+    result = tr_raft_conf_encode(
+        &configuration, entries[1].data, sizeof(entries[1].data),
+        &configuration_length);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    entries[1].data_length = configuration_length;
+
+    entries[2].index = 3U;
+    entries[2].term = 1U;
+    entries[2].command_id = 303U;
+    entries[2].data[0] = 'c';
+    entries[2].data_length = 1U;
+    return SALTS_OK;
 }
 
 spec("raft runtime ordering")
@@ -270,39 +314,12 @@ spec("raft runtime ordering")
         tr_raft_runtime_t runtime;
         runtime_fixture_t fixture;
         tr_raft_entry_t entries[3];
-        tr_raft_conf_t configuration;
         tr_raft_ready_t ready;
         tr_raft_runtime_result_t result;
         tr_raft_status_t status;
-        size_t configuration_length = 0U;
         size_t successful_events;
 
-        memset(entries, 0, sizeof(entries));
-        entries[0].index = 1U;
-        entries[0].term = 1U;
-        entries[0].command_id = 101U;
-        entries[0].data[0] = 'a';
-        entries[0].data_length = 1U;
-
-        memset(&configuration, 0, sizeof(configuration));
-        configuration.phase = TR_RAFT_CONF_FINAL;
-        configuration.member_count = 1U;
-        configuration.members[0].node_id = 1U;
-        configuration.members[0].roles =
-            TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
-        entries[1].index = 2U;
-        entries[1].term = 1U;
-        check_equal(tr_raft_conf_encode(
-                        &configuration, entries[1].data,
-                        sizeof(entries[1].data), &configuration_length),
-                    SALTS_OK);
-        entries[1].data_length = configuration_length;
-
-        entries[2].index = 3U;
-        entries[2].term = 1U;
-        entries[2].command_id = 303U;
-        entries[2].data[0] = 'c';
-        entries[2].data_length = 1U;
+        check_equal(build_split_apply_entries(entries), SALTS_OK);
 
         memset(&core_config, 0, sizeof(core_config));
         core_config.self_id = 1U;
@@ -363,6 +380,68 @@ spec("raft runtime ordering")
         check_equal(fixture.events[fixture.event_count - 1U], EVENT_APPLY);
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.applied_index, 3U);
+
+        tr_raft_core_destroy(core);
+    }
+
+    it("records a successful prefix before a terminal suffix failure")
+    {
+        static const tr_raft_node_id_t voters[] = {1U};
+        tr_raft_core_config_t core_config;
+        tr_raft_core_t *core = NULL;
+        tr_raft_runtime_config_t runtime_config;
+        tr_raft_runtime_t runtime;
+        runtime_fixture_t fixture;
+        tr_raft_entry_t entries[3];
+        tr_raft_ready_t ready;
+        tr_raft_runtime_result_t result;
+        tr_raft_status_t status;
+
+        check_equal(build_split_apply_entries(entries), SALTS_OK);
+        memset(&core_config, 0, sizeof(core_config));
+        core_config.self_id = 1U;
+        core_config.voters = voters;
+        core_config.voter_count = 1U;
+        core_config.heartbeat_ticks = 2U;
+        core_config.election_min_ticks = 5U;
+        core_config.election_max_ticks = 10U;
+        core_config.initial_election_timeout_ticks = 5U;
+        core_config.initial_term = 1U;
+        core_config.initial_log_entries = entries;
+        core_config.initial_log_entry_count = 3U;
+        core_config.initial_commit_index = 3U;
+        core_config.max_log_entries = 8U;
+        check_equal(tr_raft_core_create(&core_config, &core), SALTS_OK);
+
+        memset(&fixture, 0, sizeof(fixture));
+        fixture.apply_fail_command_id = 303U;
+        fixture.apply_fail_error = SALTS_EINVAL;
+        memset(&runtime_config, 0, sizeof(runtime_config));
+        runtime_config.core = core;
+        runtime_config.storage.context = &fixture;
+        runtime_config.storage.begin = storage_begin;
+        runtime_config.storage.write_hard_state = storage_hard;
+        runtime_config.storage.truncate_log = storage_truncate;
+        runtime_config.storage.append_log = storage_append;
+        runtime_config.storage.write_commit_index = storage_commit_index;
+        runtime_config.storage.commit = storage_commit;
+        runtime_config.storage.rollback = storage_rollback;
+        runtime_config.state_machine.context = &fixture;
+        runtime_config.state_machine.apply_batch = state_apply;
+        check_equal(tr_raft_runtime_init(&runtime, &runtime_config), SALTS_OK);
+
+        memset(&ready, 0, sizeof(ready));
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
+                    SALTS_EINVAL);
+        check(tr_raft_runtime_is_faulted(&runtime));
+        check_false(tr_raft_runtime_apply_blocked(&runtime));
+        check_equal(fixture.apply_attempts, 2U);
+        check_equal(result.applied_through, 2U);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_false(status.ready_outstanding);
+        check_equal(status.commit_index, 3U);
+        check_equal(status.applied_index, 2U);
 
         tr_raft_core_destroy(core);
     }
