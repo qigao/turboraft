@@ -16,7 +16,7 @@ permissions:
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  FLOWMQ_REF: 0043393a5b287e71a78601d5d71586ef0f3e044a
+  FLOWMQ_REF: main
   VCPKG_ROOT: ${{ github.workspace }}/.ci/vcpkg
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
   SALTS_VERSION: 1.1.0
@@ -33,7 +33,7 @@ jobs:
       - name: Checkout exact TurboRaft stack
         uses: actions/checkout@v4
 
-      - name: Checkout pinned FlowMQ
+      - name: Checkout FlowMQ main
         uses: actions/checkout@v4
         with:
           repository: qigao/flowmq
@@ -146,7 +146,7 @@ jobs:
           path: .ci/vcpkg-bincache
           key: vcpkg-linux-${{ env.VCPKG_BASELINE }}-turboraft-full-v1
 
-      - name: Build and install pinned FlowMQ
+      - name: Build and install FlowMQ main
         shell: bash
         run: |
           set -euo pipefail
