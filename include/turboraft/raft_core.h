@@ -363,8 +363,30 @@ int tr_raft_core_read_index(tr_raft_core_t *core,
 int tr_raft_core_poll(tr_raft_core_t *core, tr_raft_ready_t *ready);
 
 /**
- * Acknowledges that persistence, transmission, and committed-entry application
- * for the last non-empty Ready all completed successfully.
+ * Acknowledges the non-application effects of the current Ready and transfers
+ * ownership of an exact committed-entry prefix to the application driver.
+ *
+ * admitted_entry_count is relative to the current Ready and must not exceed
+ * ready.committed_entry_count. Entries not admitted remain eligible for the
+ * next Ready. This function never changes applied_index.
+ */
+int tr_raft_core_ack_ready(tr_raft_core_t *core,
+                           size_t admitted_entry_count);
+
+/**
+ * Acknowledges terminal application of exactly the next contiguous admitted
+ * log index. The index must already have been admitted through
+ * tr_raft_core_ack_ready().
+ */
+int tr_raft_core_ack_applied(tr_raft_core_t *core,
+                             tr_raft_index_t index);
+
+/**
+ * Compatibility acknowledgement for atomic Ready consumers.
+ *
+ * Persistence, transmission, and the complete committed-entry suffix from the
+ * last non-empty Ready must all have completed successfully. This retains the
+ * historical all-or-nothing behavior.
  */
 int tr_raft_core_advance(tr_raft_core_t *core);
 
