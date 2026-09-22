@@ -204,6 +204,22 @@ jobs:
           cmake --build .ci/build/package-core-consumer --parallel 2
           .ci/build/package-core-consumer/turboraft_core_package_consumer
 
+      - name: Verify installed CFlowStateMachine package contract
+        shell: bash
+        env:
+          TURBORAFT_ROOT: ${{ github.workspace }}/.ci/pkgs/turboraft
+        run: |
+          set -euo pipefail
+          cmake -S tests/package_cflow_consumer \
+            -B .ci/build/package-cflow-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build/package-cflow-consumer --parallel 2
+          .ci/build/package-cflow-consumer/turboraft_cflow_package_consumer
+
       - name: Targeted production integration gates
         shell: bash
         run: |
