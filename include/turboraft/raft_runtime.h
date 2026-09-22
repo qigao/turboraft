@@ -95,10 +95,12 @@ int tr_raft_runtime_init(tr_raft_runtime_t *runtime,
  * writes became durable. enqueue() means accepted by a reliable local queue.
  * apply_batch() atomically persists application state and its applied index.
  *
- * SALTS_EBUSY from apply_batch is a retryable local-availability gate: storage
- * and transport are not replayed, Core remains unadvanced, and the exact
- * remaining committed suffix is retained until tr_raft_runtime_retry_apply().
- * Every other callback failure faults the runtime.
+ * SALTS_EBUSY from apply_batch is a retryable local-availability gate:
+ * storage and transport are not replayed. Runtime acknowledges ownership of
+ * the exact committed suffix, advances Core applied_index only through the
+ * proven contiguous prefix, and retains the remaining suffix until
+ * tr_raft_runtime_retry_apply(). Every other callback failure faults the
+ * runtime.
  */
 int tr_raft_runtime_process(tr_raft_runtime_t *runtime,
                             const tr_raft_ready_t *ready,
@@ -110,8 +112,9 @@ bool tr_raft_runtime_is_faulted(const tr_raft_runtime_t *runtime);
 bool tr_raft_runtime_apply_blocked(const tr_raft_runtime_t *runtime);
 
 /**
- * Retries only the blocked state-machine suffix, then advances Core.
- * Durability and transport effects from the original Ready are never replayed.
+ * Retries only the blocked state-machine suffix.
+ * Durability, transport, and Ready acknowledgement from the original drive are
+ * never replayed. Each newly proven contiguous index is acknowledged exactly.
  */
 int tr_raft_runtime_retry_apply(tr_raft_runtime_t *runtime,
                                 tr_raft_runtime_result_t *result);
