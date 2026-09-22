@@ -83,6 +83,11 @@ If `apply_batch()` returns `SALTS_EBUSY`:
 5. later retry success advances the exact remaining applied indices without
    replaying storage or transport.
 
+If a later batch returns a terminal non-`EBUSY` error, Runtime performs the
+same Ready acknowledgement and exact successful-prefix acknowledgement before
+faulting. The failed index is never marked applied. This keeps Core aligned
+with application facts even when the process cannot continue without recovery.
+
 This fixes the successful-prefix / failed-suffix divergence while preserving
 batching for existing state machines.
 
