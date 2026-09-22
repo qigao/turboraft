@@ -20,7 +20,7 @@ env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
   SALTS_REF: master
   SALTS_UTILS_REF: master
-  FLOWMQ_REF: 0043393a5b287e71a78601d5d71586ef0f3e044a
+  FLOWMQ_REF: main
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
   SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
   SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
@@ -59,7 +59,7 @@ jobs:
           path: .ci/src/salts-utils
           persist-credentials: false
 
-      - name: Checkout pinned FlowMQ
+      - name: Checkout FlowMQ main
         uses: actions/checkout@v4
         with:
           repository: qigao/flowmq
@@ -139,7 +139,7 @@ jobs:
           cmake --build .ci/build/salts-utils --target install --parallel 2
           test -x "$SALTS_UTILS_ROOT/bin/tbe_compiler"
 
-      - name: Build and install pinned FlowMQ
+      - name: Build and install FlowMQ main
         shell: bash
         run: |
           set -euo pipefail
