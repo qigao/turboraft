@@ -16,6 +16,19 @@ extern "C" {
 
 typedef struct tr_raft_cflow_state_machine tr_raft_cflow_state_machine_t;
 
+/**
+ * Decodes one Runtime-owned committed entry into a bounded trivial CFlow Event.
+ *
+ * entry is borrowed only for this callback. out_event->payload may reference
+ * context-owned scratch, but that storage must remain valid until the enclosing
+ * try_apply call returns. On successful mailbox admission CFlow copies exactly
+ * payload_type->size bytes before try_apply returns; neither the adapter nor
+ * CFlow retains the entry or decoder scratch afterwards.
+ *
+ * Codecs representing variable-length commands must use a self-contained
+ * bounded trivial Event representation (for example length + inline bytes) and
+ * reject input that exceeds that declared bound.
+ */
 typedef int (*tr_raft_cflow_decode_entry_fn)(
     void *context,
     const tr_raft_entry_t *entry,
