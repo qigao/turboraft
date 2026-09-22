@@ -105,12 +105,19 @@ int tr_raft_apply_runtime_create(
     tr_raft_apply_runtime_t **out_runtime);
 
 /**
- * Starts one outstanding Ready.
+ * Consumes one outstanding Ready without waiting for application settlement.
  *
- * The Runtime copies all committed entries before external side effects,
- * persists and enqueues the Ready exactly once, then admits entries in index
- * order. A Ready larger than max_pending_entries returns SALTS_ENOBUFS while
- * the Runtime remains idle and no callback has run.
+ * The Runtime copies the Ready's newly committed suffix before external side
+ * effects, persists and enqueues the Ready exactly once, then transfers that
+ * exact suffix through tr_raft_core_ack_ready(). While an earlier entry is
+ * still waiting for admission or settlement, later Ready objects may be
+ * consumed and appended to the same fixed pending-entry buffer so Raft
+ * storage/transport progress is not head-of-line blocked by application work.
+ *
+ * max_pending_entries bounds the total retained current+queued committed
+ * entries across Ready objects. Applied prefixes are compacted before each new
+ * Ready. Capacity exhaustion returns SALTS_ENOBUFS before storage, transport,
+ * or Core acknowledgement and leaves the Ready outstanding for retry.
  */
 int tr_raft_apply_runtime_start(tr_raft_apply_runtime_t *runtime,
                                 const tr_raft_ready_t *ready,
