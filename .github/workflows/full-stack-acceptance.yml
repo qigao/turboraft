@@ -12,19 +12,18 @@ concurrency:
 
 permissions:
   contents: read
+  packages: read
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_REF: ce9b57bc166bf86bd311fe6f86b7619dd64673e1
-  SALTS_UTILS_REF: 2ceba0f6c46914600960bc410f5b5453911322ec
   FLOWMQ_REF: 0043393a5b287e71a78601d5d71586ef0f3e044a
   VCPKG_ROOT: ${{ github.workspace }}/.ci/vcpkg
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
-  SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
-  SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
+  SALTS_VERSION: 1.1.0
+  SALTS_UTILS_VERSION: 2.0.0
   FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs/flowmq
   VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.ci/vcpkg-bincache,readwrite
-  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs/flowmq/lib:${{ github.workspace }}/.ci/pkgs/salts-utils/lib:${{ github.workspace }}/.ci/pkgs/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed/x64-linux/lib
+  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs/flowmq/lib:${{ github.workspace }}/.ci/vcpkg_installed/x64-linux/lib
 
 jobs:
   full-release:
@@ -33,22 +32,6 @@ jobs:
     steps:
       - name: Checkout exact TurboRaft stack
         uses: actions/checkout@v4
-
-      - name: Checkout pinned Salts
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts
-          ref: ${{ env.SALTS_REF }}
-          path: .ci/src/salts
-          persist-credentials: false
-
-      - name: Checkout pinned SaltsUtils
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          ref: ${{ env.SALTS_UTILS_REF }}
-          path: .ci/src/salts-utils
-          persist-credentials: false
 
       - name: Checkout pinned FlowMQ
         uses: actions/checkout@v4
@@ -66,19 +49,53 @@ jobs:
           path: .ci/vcpkg
           persist-credentials: false
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore versioned Salts SDK graph
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          packages="$RUNNER_TEMP/qigao-native-sdk"
+          config="$RUNNER_TEMP/qigao-native-sdk.config"
+          project="$RUNNER_TEMP/qigao-native-sdk.csproj"
+          cat > "$config" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration><packageSources><clear /></packageSources></configuration>
+          EOF
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<EOF
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Salts.Native" Version="[$SALTS_VERSION]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[$SALTS_UTILS_VERSION]" />
+            </ItemGroup>
+          </Project>
+          EOF
+          dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cache
+          salts_root="$packages/salts.native/$SALTS_VERSION/sdk/linux-x64"
+          salts_utils_root="$packages/saltsutils.native/$SALTS_UTILS_VERSION/sdk/linux-x64"
+          test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -f "$salts_utils_root/bin/tbe_compiler"
+          chmod +x "$salts_utils_root/bin/tbe_compiler"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$salts_utils_root" >> "$GITHUB_ENV"
+          echo "$salts_utils_root/bin" >> "$GITHUB_PATH"
+
       - name: Install host build tools
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake build-essential libtool nasm ninja-build pkg-config re2c
-
-      - name: Install pinned re2c 4.6 and Unicode data
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash .ci/src/salts-utils/cmake/ci/install-re2c.sh
+            autoconf automake build-essential libtool nasm ninja-build pkg-config
 
       - name: Restore vcpkg binary cache
         id: vcpkg-cache
@@ -128,36 +145,6 @@ jobs:
         with:
           path: .ci/vcpkg-bincache
           key: vcpkg-linux-${{ env.VCPKG_BASELINE }}-turboraft-full-v1
-
-      - name: Build and install pinned Salts
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake -S .ci/src/salts -B .ci/build/salts -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
-          cmake --build .ci/build/salts --target install --parallel 2
-
-      - name: Build and install pinned SaltsUtils
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake -S .ci/src/salts-utils -B .ci/build/salts-utils -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
-            -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
-          cmake --build .ci/build/salts-utils --target install --parallel 2
-          test -x "$SALTS_UTILS_ROOT/bin/tbe_compiler"
 
       - name: Build and install pinned FlowMQ
         shell: bash
