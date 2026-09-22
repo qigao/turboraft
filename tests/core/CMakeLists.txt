@@ -147,6 +147,26 @@ target_link_libraries(turboraft_runtime_tests PRIVATE TurboRaft::Core
                                                       Salts::TinyTest)
 add_test(NAME turboraft.runtime COMMAND turboraft_runtime_tests)
 
+add_executable(turboraft_apply_runtime_tests
+               test_raft_apply_runtime.c)
+target_link_libraries(turboraft_apply_runtime_tests
+                      PRIVATE TurboRaft::Core Salts::TinyTest)
+add_test(NAME turboraft.apply_runtime COMMAND turboraft_apply_runtime_tests)
+
+add_executable(turboraft_cflow_state_machine_tests
+               test_raft_cflow_state_machine.c)
+target_link_libraries(turboraft_cflow_state_machine_tests
+                      PRIVATE TurboRaft::CFlowStateMachine Salts::TinyTest)
+add_test(NAME turboraft.cflow_state_machine
+         COMMAND turboraft_cflow_state_machine_tests)
+
+add_executable(turboraft_cflow_snapshot_replay_tests
+               test_raft_cflow_snapshot_replay.c)
+target_link_libraries(turboraft_cflow_snapshot_replay_tests
+                      PRIVATE TurboRaft::CFlowStateMachine Salts::TinyTest)
+add_test(NAME turboraft.cflow_snapshot_replay
+         COMMAND turboraft_cflow_snapshot_replay_tests)
+
 add_executable(turboraft_service_tests test_raft_service.c)
 target_link_libraries(turboraft_service_tests PRIVATE TurboRaft::Service
                                                       Salts::TinyTest)
