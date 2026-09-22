@@ -1,6 +1,8 @@
 name: Full TurboRaft stack acceptance
 
 on:
+  pull_request:
+    branches: [master]
   push:
     branches:
       - master
@@ -12,18 +14,17 @@ concurrency:
 
 permissions:
   contents: read
+  packages: read
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
   SALTS_REF: ce9b57bc166bf86bd311fe6f86b7619dd64673e1
   SALTS_UTILS_REF: 2ceba0f6c46914600960bc410f5b5453911322ec
   FLOWMQ_REF: 0043393a5b287e71a78601d5d71586ef0f3e044a
-  VCPKG_ROOT: ${{ github.workspace }}/.ci/vcpkg
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
   SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
   SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
   FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs/flowmq
-  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.ci/vcpkg-bincache,readwrite
   LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs/flowmq/lib:${{ github.workspace }}/.ci/pkgs/salts-utils/lib:${{ github.workspace }}/.ci/pkgs/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed/x64-linux/lib
 
 jobs:
@@ -33,6 +34,14 @@ jobs:
     steps:
       - name: Checkout exact TurboRaft stack
         uses: actions/checkout@v4
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore shared re2c binary
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
       - name: Checkout pinned Salts
         uses: actions/checkout@v4
@@ -58,41 +67,21 @@ jobs:
           path: .ci/src/flowmq
           persist-credentials: false
 
-      - name: Checkout pinned vcpkg
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/vcpkg
-          ref: ${{ env.VCPKG_BASELINE }}
-          path: .ci/vcpkg
-          persist-credentials: false
-
       - name: Install host build tools
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake build-essential libtool nasm ninja-build pkg-config re2c
+            autoconf automake build-essential libtool nasm ninja-build pkg-config
 
-      - name: Install pinned re2c 4.6 and Unicode data
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash .ci/src/salts-utils/cmake/ci/install-re2c.sh
 
-      - name: Restore vcpkg binary cache
-        id: vcpkg-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: .ci/vcpkg-bincache
-          key: vcpkg-linux-${{ env.VCPKG_BASELINE }}-turboraft-full-v1
 
       - name: Bootstrap vcpkg and install the dependency union
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p .ci/vcpkg-bincache .ci/vcpkg_installed .ci/super-manifest
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          mkdir -p .ci/vcpkg_installed .ci/super-manifest
           cat > .ci/super-manifest/vcpkg.json <<'JSON'
           {
             "name": "turboraft-full-stack-ci",
@@ -111,9 +100,6 @@ jobs:
               "lua",
               { "name": "zeromq", "default-features": false },
               { "name": "xxhash", "version>=": "0.8.3" }
-            ],
-            "overrides": [
-              { "name": "c-ares", "version": "1.34.5", "port-version": 1 }
             ]
           }
           JSON
@@ -122,12 +108,6 @@ jobs:
             --x-install-root="$VCPKG_INSTALLED_DIR" \
             --triplet=x64-linux
 
-      - name: Save vcpkg binary cache
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: .ci/vcpkg-bincache
-          key: vcpkg-linux-${{ env.VCPKG_BASELINE }}-turboraft-full-v1
 
       - name: Build and install pinned Salts
         shell: bash
