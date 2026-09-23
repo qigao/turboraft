@@ -98,21 +98,26 @@ static int redis_async_open_connection(
         (void) redis_io_runtime_destroy(runtime);
         return SALTS_EIO;
     }
-    connect_step = redis_cflow_connection_connect_next(connection);
-    if (connect_step.kind != REDIS_CFLOW_CONNECT_WAIT ||
-        redis_io_runtime_wait_idle(
-            runtime, REDIS_ASYNC_WAIT_TIMEOUT_NS) != SALTS_OK) {
-        (void) redis_cflow_connection_destroy(connection);
-        (void) redis_io_runtime_close(runtime);
-        (void) redis_io_runtime_destroy(runtime);
-        return SALTS_EIO;
-    }
-    connect_step = redis_cflow_connection_connect_next(connection);
+    do {
+        connect_step = redis_cflow_connection_connect_next(connection);
+        if (connect_step.kind == REDIS_CFLOW_CONNECT_WAIT) {
+            if (redis_io_runtime_wait_idle(
+                    runtime, REDIS_ASYNC_WAIT_TIMEOUT_NS) != SALTS_OK) {
+                (void) redis_cflow_connection_destroy(connection);
+                (void) redis_io_runtime_close(runtime);
+                (void) redis_io_runtime_destroy(runtime);
+                return SALTS_EIO;
+            }
+        }
+    } while (connect_step.kind == REDIS_CFLOW_CONNECT_WAIT);
     if (connect_step.kind != REDIS_CFLOW_CONNECT_DONE) {
+        int status = connect_step.status != SALTS_OK
+                         ? connect_step.status
+                         : SALTS_EIO;
         (void) redis_cflow_connection_destroy(connection);
         (void) redis_io_runtime_close(runtime);
         (void) redis_io_runtime_destroy(runtime);
-        return SALTS_EIO;
+        return status;
     }
     return SALTS_OK;
 }
