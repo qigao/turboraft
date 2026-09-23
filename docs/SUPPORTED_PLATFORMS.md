@@ -18,11 +18,13 @@ same change.
 | Linux Release | `ubuntu-latest`, GCC (current hosted image; GCC 13.3 observed at qualification) | Salts `master`, SaltsUtils `master`, FlowMQ `main`; x64-linux vcpkg baseline below | configure/build, focused production integration, 58/58 full CTest, SDK install, installed Core/CFlow/FlowMQ consumers |
 | Linux ASan | `ubuntu-latest`, GCC Debug + AddressSanitizer | same source branches; dependency Debug SDKs are intentionally **not** ASan-instrumented so TurboRaft owns the sanitizer runtime | focused production gates + complete CTest inventory under ASan |
 | Linux UBSan | `ubuntu-latest`, GCC Debug + UndefinedBehaviorSanitizer | same source branches; dependency Debug SDKs are intentionally uninstrumented to avoid mixed sanitizer runtimes | focused production gates + complete CTest inventory under UBSan |
+| Linux TSan | `ubuntu-latest`, GCC Debug + ThreadSanitizer | same source branches; dependency Debug SDKs remain uninstrumented so TurboRaft owns the TSan runtime | focused production gates + complete CTest inventory under TSan |
 | Windows Release | `windows-latest`, x64 MSVC via `VsDevCmd` + Ninja (MSVC 19.51 observed at qualification) | Salts.Native 1.2.0, SaltsUtils.Native 2.0.2, current FlowMQ `main`, x64-windows vcpkg baseline below | MSVC configure/build, focused production gates, 58/58 full CTest, SDK install, installed Core/FlowMQ consumers |
 
 Qualification evidence on 2026-09-23:
 
 - Linux ASan/UBSan: PR #60, sanitizer run `35808420578`.
+- Linux TSan qualification: PR #63, sanitizer run `35811839340`.
 - Windows MSVC Release: PR #61, Windows run `35810071848`.
 - Windows qualification includes the real FlowMQ/mTLS peer-service gate and
   the multi-process chaos test.
@@ -93,17 +95,17 @@ on POSIX and Windows paths.
 
 ## Sanitizer policy
 
-ASan and UBSan are release-blocking Linux gates.
+ASan, UBSan, and TSan are release-blocking Linux gates.
 
 Dependency Debug SDKs are built with their default ASan options explicitly
 disabled in the sanitizer workflow. Only the TurboRaft build receives the
-matrix-selected sanitizer. This prevents an UBSan process from loading an
-ASan-instrumented first-party SDK and makes sanitizer failures attributable to
-the product under test.
+matrix-selected sanitizer. This prevents mixed sanitizer runtimes and makes
+sanitizer failures attributable to the product under test.
 
-TSan is **not yet a release-blocking profile**. It may become one only after a
-hosted compiler/runtime combination proves stable enough that failures are
-actionable rather than runtime/toolchain noise.
+TSan uses the same focused production gates and complete CTest inventory as
+ASan/UBSan, with `halt_on_error=1`. The qualification run must therefore fail
+on the first actionable race or deadlock report rather than treating TSan as an
+informational-only profile.
 
 ## Not currently release-qualified
 
@@ -113,7 +115,6 @@ merge gates:
 
 - macOS;
 - Android;
-- Linux TSan;
 - compilers/toolchain versions older than the hosted matrix;
 - 32-bit targets;
 - non-x64 Windows targets.
