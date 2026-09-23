@@ -52,6 +52,17 @@ never skips a damaged committed record.
 An FSM restore failure faults startup. Do not start from an empty FSM or apply
 suffix entries on top of an unverified state.
 
+For the versioned asynchronous CFlow/CMeta application contract, the
+application's durable applied marker and exact entry identity are separate
+facts from the Raft snapshot boundary. Recreate the CFlow instance and
+application persistence first, initialize Core from the proven durable
+application boundary, then replay/reconcile the committed suffix. Never treat
+Ready admission as application completion or blindly retry an uncertain host
+commit.
+
+See `docs/architecture/cflow-replicated-state-machine.md` for the complete
+ownership, crash-cut, reconciliation, and shutdown protocol.
+
 ## Restore or rebuild
 
 Restore a complete matching backup set while the node is stopped. If no valid
