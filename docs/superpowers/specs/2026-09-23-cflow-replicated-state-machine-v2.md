@@ -3,6 +3,10 @@
 Issue: #22
 Depends on: #23 / PR #50
 
+> Canonical architecture and closeout evidence now live in
+> `docs/architecture/cflow-replicated-state-machine.md`. This file preserves
+> the implementation-slice design context.
+
 ## Boundary
 
 TurboRaft Core remains consensus-only. CFlow/CMeta support is an optional
