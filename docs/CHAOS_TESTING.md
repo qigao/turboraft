@@ -97,20 +97,6 @@ head b0882af6839145223965d16d318283d03fa2522f
 result SUCCESS
 ~~~
 
-## Remaining combined R0 evidence
-
-The following still require the complete project/private dependency
-environment before R0 is closed:
-
-- run `turboraft.multiprocess_chaos` with the production wire codec;
-- run the authoritative production FlowMQ/mTLS snapshot-catch-up case while
-  sibling groups continue committing on the shared physical transport;
-- run the full Release CTest suite with zero failures.
-
-Unknown/stopped-group routing isolation is independently covered by the
-transport #27 tests; malformed/auth/session/protocol failures remain
-peer-session failures.
-
 ## Running the real chaos test
 
 Run the test with the normal preset:
@@ -148,6 +134,55 @@ $env:TURBORAFT_CHAOS_FIRST_SEED = "23"
 $env:TURBORAFT_CHAOS_SEED_COUNT = "1"
 ctest --preset win-release-user -R "^turboraft\.multiprocess_chaos$" --output-on-failure
 ~~~
+
+## Extended reliability campaign
+
+`.github/workflows/extended-reliability.yml` turns the bounded deterministic
+fixture into a retained campaign rather than changing the fixture semantics.
+
+The profiles are:
+
+- pull-request validation: seeds 1 through 4 and one real
+  `turboraft.flowmq_peer_service` pass;
+- scheduled weekly qualification: 16 contiguous seeds plus four repeated
+  real FlowMQ/mTLS peer-service passes;
+- manual qualification: optional `first_seed`, `seed_count` (1..16), and
+  `flowmq_repetitions` (1..16).
+
+When a scheduled/manual first seed is not supplied, the workflow derives a
+deterministic nonzero range from the workflow run number. The exact first/last
+seed, count, commit SHA, run number, and a single-seed reproduction command are
+written to `campaign-metadata.txt`.
+
+The multi-process test already covers, per seed:
+
+- packet loss/duplication/reorder/delay;
+- partition and heal;
+- leader process termination and restart from the same WAL;
+- leader and follower online WAL backup handoff;
+- durable election/log/application invariants and final convergence.
+
+The repeated `turboraft.flowmq_peer_service` phase retains the production
+FlowMQ/mTLS path, including the authenticated peer boundary and snapshot/data
+transport scenarios, alongside the deterministic simulated-network campaign.
+
+Every run uploads a 30-day `extended-reliability-<run_id>` artifact containing:
+
+- campaign metadata;
+- verbose multi-process chaos output;
+- extracted `reproduce_env` / seed-stage-round lines;
+- verbose FlowMQ peer-service output;
+- CTest temporary diagnostics.
+
+Both campaign phases are allowed to complete independently even if one fails;
+the final evaluation fails the workflow if either phase failed. This preserves
+evidence for both fault domains in the same run.
+
+A failing deterministic seed should be promoted to a permanent regression by
+first reproducing it with `TURBORAFT_CHAOS_SEED_COUNT=1`, then adding either a
+focused regression or a documented retained seed to the normal bounded
+qualification set. Do not increase the hard 16-seed cap merely to mask or
+dilute a discovered failure.
 
 The deterministic parent-owned network does not replace the CNet/FlowMQ mTLS
 tests. Those tests validate the physical peer transport; this harness validates
