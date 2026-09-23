@@ -125,6 +125,7 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
+            -DSALTS_ENABLE_EPOLL_READINESS=ON \
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
           cmake --build .ci/build-redis/salts --target install --parallel 2
 
