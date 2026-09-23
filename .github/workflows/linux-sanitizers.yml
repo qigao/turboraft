@@ -129,6 +129,7 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
+            -DENABLE_ASAN=OFF -DENABLE_SANITIZER_ADDRESS=OFF \
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
           cmake --build ".ci/build-${{ matrix.name }}/salts" --target install --parallel 2
 
@@ -144,6 +145,7 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
+            -DENABLE_ASAN=OFF -DENABLE_SANITIZER_ADDRESS=OFF \
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
             -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
           cmake --build ".ci/build-${{ matrix.name }}/salts-utils" --target install --parallel 2
@@ -161,6 +163,7 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DCMAKE_INSTALL_PREFIX="$FLOWMQ_ROOT" \
+            -DENABLE_ASAN=OFF \
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
           cmake --build ".ci/build-${{ matrix.name }}/flowmq" --target install --parallel 2
 
