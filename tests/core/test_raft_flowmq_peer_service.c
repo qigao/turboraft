@@ -23,6 +23,10 @@
 #define TR_FLOWMQ_TEST_CNET_IO_BYTES 1024U
 #define TR_FLOWMQ_TEST_CNET_TIMEOUT_MS 2000U
 #define TR_FLOWMQ_TEST_CNET_STOP_TIMEOUT_MS 5000U
+#define TR_FLOWMQ_TEST_NODE1_CERTIFICATE_SHA256                              \
+    "sha256:cb334522bda1caf62ec1e374f43b0df0b9d7aee5c91d064ff81ac82f005f2aff"
+#define TR_FLOWMQ_TEST_NODE2_CERTIFICATE_SHA256                              \
+    "sha256:483ac612f03ae69445ea33f6b8ef27342ce9fad891416413e91f57c3b3693733"
 
 typedef struct tr_flowmq_message_capture {
     tr_raft_group_id_t group_id;
@@ -80,6 +84,7 @@ typedef struct tr_flowmq_live_service_config {
     tr_raft_flowmq_tls_config_t listener_tls;
     tr_raft_node_id_t peer_node_id;
     const char *peer_identity;
+    const char *peer_certificate_sha256;
     const char *peer_endpoint;
     tr_raft_flowmq_tls_config_t peer_tls;
     tr_raft_transport_payload_handler_fn on_payload;
@@ -116,6 +121,55 @@ static tr_raft_handshake_config_t protocol_config(
     config.max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
     config.max_snapshot_chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
     return config;
+}
+
+static void init_service_config(
+    tr_raft_flowmq_peer_service_config_t *config,
+    tr_raft_flowmq_peer_config_t *peer,
+    tr_raft_handshake_result_t *handshake,
+    size_t capacity)
+{
+    memset(config, 0, sizeof(*config));
+    memset(peer, 0, sizeof(*peer));
+    memset(handshake, 0, sizeof(*handshake));
+    config->protocol = protocol_config(1U);
+    peer->node_id = 2U;
+    handshake->complete = 1;
+    handshake->cluster_id = config->protocol.cluster_id;
+    handshake->local_node_id = 1U;
+    handshake->peer_node_id = 2U;
+    handshake->peer_process_incarnation.bytes[0] = 1U;
+    handshake->feature_bits = 0U;
+    handshake->wire_major = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
+    handshake->wire_minor = TR_RAFT_HANDSHAKE_WIRE_MINOR;
+    handshake->max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
+    handshake->max_snapshot_chunk_size =
+        TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+    peer->handshake = handshake;
+    peer->identity = "node-2";
+    peer->endpoint = "tcp://127.0.0.1:57992";
+    config->bind_endpoint = "tcp://127.0.0.1:0";
+    config->local_identity = "node-1";
+    config->peers = peer;
+    config->peer_count = 1U;
+    config->outbound_limits.total_item_capacity = capacity;
+    config->outbound_limits.total_data_bytes =
+        TR_RAFT_FLOWMQ_RECOMMENDED_INFLIGHT_DATA_BYTES;
+    config->outbound_limits.max_active_groups = capacity;
+    config->outbound_limits.per_group_item_capacity = capacity;
+    config->outbound_limits.per_group_data_bytes =
+        TR_RAFT_FLOWMQ_RECOMMENDED_INFLIGHT_DATA_BYTES;
+    config->max_send_batch_items =
+        TR_RAFT_FLOWMQ_RECOMMENDED_SEND_BATCH_ITEMS;
+    config->max_receive_batch_items =
+        TR_RAFT_FLOWMQ_RECOMMENDED_RECEIVE_BATCH_ITEMS;
+    config->send_hwm_messages = capacity;
+    config->receive_hwm_messages = capacity;
+    config->send_hwm_bytes = 8U * 1024U * 1024U;
+    config->receive_hwm_bytes = 8U * 1024U * 1024U;
+    config->reconnect_initial_ms = 100U;
+    config->reconnect_max_ms = 1000U;
+    config->on_payload = ignore_payload;
 }
 
 static tr_raft_flowmq_peer_service_t *make_service(
@@ -623,6 +677,7 @@ static int create_live_service(
     tr_raft_flowmq_peer_service_config_t config;
     tr_raft_flowmq_peer_config_t peer;
     tr_raft_handshake_result_t handshake;
+    const char *certificate_sha256[1];
 
     if (live == NULL || out_service == NULL) {
         return SALTS_EINVAL;
@@ -634,6 +689,11 @@ static int create_live_service(
     peer.node_id = live->peer_node_id;
     peer.handshake = &handshake;
     peer.identity = live->peer_identity;
+    if (live->peer_certificate_sha256 != NULL) {
+        certificate_sha256[0] = live->peer_certificate_sha256;
+        peer.client_certificate_sha256 = certificate_sha256;
+        peer.client_certificate_sha256_count = 1U;
+    }
     peer.endpoint = live->peer_endpoint;
     peer.tls = live->peer_tls;
     config.bind_endpoint = live->bind_endpoint;
@@ -703,9 +763,11 @@ static int close_live_pair(tr_flowmq_live_pair_t *pair)
     return first_error;
 }
 
-static int open_live_pair_with_handlers(
+static int open_live_pair_with_policy(
     tr_flowmq_live_pair_t *pair,
     int provide_client_certificate,
+    const char *expected_client_certificate_sha256,
+    const char *client_identity,
     tr_raft_transport_payload_handler_fn node1_handler,
     void *node1_context,
     tr_raft_transport_payload_handler_fn node2_handler,
@@ -721,7 +783,8 @@ static int open_live_pair_with_handlers(
     const char *stage = "reserve-node1";
     int result;
 
-    if (pair == NULL) {
+    if (pair == NULL || expected_client_certificate_sha256 == NULL ||
+        client_identity == NULL) {
         return SALTS_EINVAL;
     }
     memset(pair, 0, sizeof(*pair));
@@ -763,7 +826,7 @@ static int open_live_pair_with_handlers(
     }
 
     node1.local_node_id = 1U;
-    node1.local_identity = "node-1";
+    node1.local_identity = client_identity;
     node1.bind_endpoint = pair->node1_endpoint;
     node1.peer_node_id = 2U;
     node1.peer_identity = "node-2";
@@ -787,6 +850,7 @@ static int open_live_pair_with_handlers(
     node2.listener_tls.require_client_certificate = 1;
     node2.peer_node_id = 1U;
     node2.peer_identity = "node-1";
+    node2.peer_certificate_sha256 = expected_client_certificate_sha256;
     node2.peer_endpoint = pair->node1_endpoint;
     node2.capture = &pair->node2_capture;
     node2.on_payload = node2_handler;
@@ -814,6 +878,20 @@ static int open_live_pair_with_handlers(
         (void)close_live_pair(pair);
     }
     return result;
+}
+
+static int open_live_pair_with_handlers(
+    tr_flowmq_live_pair_t *pair,
+    int provide_client_certificate,
+    tr_raft_transport_payload_handler_fn node1_handler,
+    void *node1_context,
+    tr_raft_transport_payload_handler_fn node2_handler,
+    void *node2_context)
+{
+    return open_live_pair_with_policy(
+        pair, provide_client_certificate,
+        TR_FLOWMQ_TEST_NODE1_CERTIFICATE_SHA256, "node-1",
+        node1_handler, node1_context, node2_handler, node2_context);
 }
 
 static int open_live_pair(tr_flowmq_live_pair_t *pair,
@@ -1181,7 +1259,8 @@ spec("Raft FlowMQ caller-driven service")
         check_true(probe.failed);
         check_true(probe.connected);
         check_equal(probe.receive_status, SALTS_OK);
-        check_equal(probe.failure_status, SALTS_ECONNABORTED);
+        check_true(probe.failure_status == SALTS_ECONNABORTED ||
+                   probe.failure_status == SALTS_EPROTO);
         check_not_null(probe.failure_stage);
         if (probe.failure_stage != NULL) {
             check_equal(strcmp(probe.failure_stage, "read"), 0);
@@ -1189,6 +1268,143 @@ spec("Raft FlowMQ caller-driven service")
         check_equal(pair.node2_capture.count, 0U);
         check_equal(close_tls_probe(&probe), SALTS_OK);
         check_equal(close_live_pair(&pair), SALTS_OK);
+    }
+
+    it("rejects a CA-valid peer with a mismatched certificate or identity")
+    {
+        static const struct {
+            const char *expected_certificate;
+            const char *claimed_identity;
+        } cases[] = {
+            {TR_FLOWMQ_TEST_NODE2_CERTIFICATE_SHA256, "node-1"},
+            {TR_FLOWMQ_TEST_NODE1_CERTIFICATE_SHA256, "forged-node"}};
+        size_t case_index;
+
+        for (case_index = 0U;
+             case_index < sizeof(cases) / sizeof(cases[0]); ++case_index) {
+            tr_flowmq_live_pair_t pair;
+            tr_raft_flowmq_peer_service_step_result_t node1_step;
+            tr_raft_flowmq_peer_service_step_result_t node2_step;
+            tr_raft_flowmq_peer_service_status_t node2_status;
+            tr_raft_message_t message = heartbeat();
+            uint32_t progress;
+            int result = open_live_pair_with_policy(
+                &pair, 1, cases[case_index].expected_certificate,
+                cases[case_index].claimed_identity,
+                NULL, NULL, NULL, NULL);
+
+            memset(&node2_status, 0, sizeof(node2_status));
+            check_equal(result, SALTS_OK);
+            if (result == SALTS_OK) {
+                message.term = 9U + case_index;
+                result = tr_raft_flowmq_peer_service_enqueue_group(
+                    pair.node1, 1U, &message);
+                check_equal(result, SALTS_OK);
+            }
+            for (progress = 0U;
+                 result == SALTS_OK &&
+                 node2_status.tls_identity_rejections == 0U &&
+                 progress < TR_FLOWMQ_TEST_PROGRESS_LIMIT;
+                 ++progress) {
+                memset(&node1_step, 0, sizeof(node1_step));
+                memset(&node2_step, 0, sizeof(node2_step));
+                result = step_live_pair(&pair, &node1_step, &node2_step);
+                if (result == SALTS_OK) {
+                    result = tr_raft_flowmq_peer_service_get_status(
+                        pair.node2, &node2_status);
+                }
+                if (node2_status.tls_identity_rejections == 0U) {
+                    salts_sleep_ms(1U);
+                }
+            }
+            check_equal(result, SALTS_OK);
+            check_greater(node2_status.tls_identity_rejections, 0U);
+            check_equal(pair.node2_capture.count, 0U);
+            check_equal(node2_status.last_error, SALTS_OK);
+            if (result == SALTS_OK) {
+                uint64_t rejection_count =
+                    node2_status.tls_identity_rejections;
+
+                result = tr_raft_flowmq_peer_service_stop(pair.node2);
+                check_equal(result, SALTS_OK);
+                pair.node2_started = 0;
+                if (result == SALTS_OK) {
+                    result = tr_raft_flowmq_peer_service_get_status(
+                        pair.node2, &node2_status);
+                    check_equal(result, SALTS_OK);
+                    check_equal(node2_status.tls_identity_rejections,
+                                rejection_count);
+                }
+            }
+            check_equal(close_live_pair(&pair), SALTS_OK);
+        }
+    }
+
+    it("validates TLS peer certificate policy before bind")
+    {
+        const char *fingerprints[
+            TR_RAFT_FLOWMQ_MAX_CERTIFICATES_PER_PEER + 1U] = {
+            TR_FLOWMQ_TEST_NODE1_CERTIFICATE_SHA256,
+            TR_FLOWMQ_TEST_NODE2_CERTIFICATE_SHA256,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222"};
+        const char *malformed[] = {"sha256:not-a-fingerprint"};
+        tr_raft_flowmq_peer_service_config_t config;
+        tr_raft_flowmq_peer_config_t peer;
+        tr_raft_handshake_result_t handshake;
+        tr_raft_flowmq_peer_service_t *service = NULL;
+
+        init_service_config(&config, &peer, &handshake,
+                            TR_FLOWMQ_TEST_QUEUE_CAPACITY);
+        config.bind_endpoint = "tls://127.0.0.1:0";
+        config.tls.ca_file = "ca.pem";
+        config.tls.cert_file = "server-cert.pem";
+        config.tls.key_file = "server-key.pem";
+        config.tls.require_client_certificate = 1;
+
+        check_equal(tr_raft_flowmq_peer_service_create(&config, &service),
+                    SALTS_EINVAL);
+        check_null(service);
+
+        peer.client_certificate_sha256 = fingerprints;
+        peer.client_certificate_sha256_count = 1U;
+        config.tls.require_client_certificate = 0;
+        check_equal(tr_raft_flowmq_peer_service_create(&config, &service),
+                    SALTS_EINVAL);
+        check_null(service);
+
+        config.tls.require_client_certificate = 1;
+        check_equal(tr_raft_flowmq_peer_service_create(&config, &service),
+                    SALTS_OK);
+        check_not_null(service);
+        check_equal(tr_raft_flowmq_peer_service_destroy(service), SALTS_OK);
+        service = NULL;
+
+        peer.client_certificate_sha256_count =
+            TR_RAFT_FLOWMQ_MAX_CERTIFICATES_PER_PEER + 1U;
+        check_equal(tr_raft_flowmq_peer_service_create(&config, &service),
+                    SALTS_ERANGE);
+        check_null(service);
+
+        peer.client_certificate_sha256 = malformed;
+        peer.client_certificate_sha256_count = 1U;
+        check_equal(tr_raft_flowmq_peer_service_create(&config, &service),
+                    SALTS_EINVAL);
+        check_null(service);
+
+        peer.client_certificate_sha256 = NULL;
+        check_equal(tr_raft_flowmq_peer_service_create(&config, &service),
+                    SALTS_EINVAL);
+        check_null(service);
+
+        init_service_config(&config, &peer, &handshake,
+                            TR_FLOWMQ_TEST_QUEUE_CAPACITY);
+        peer.client_certificate_sha256 = fingerprints;
+        peer.client_certificate_sha256_count = 1U;
+        check_equal(tr_raft_flowmq_peer_service_create(&config, &service),
+                    SALTS_EINVAL);
+        check_null(service);
     }
 
     it("copies messages into a bounded peer group queue")

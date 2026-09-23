@@ -220,6 +220,22 @@ jobs:
           cmake --build .ci/build/package-cflow-consumer --parallel 2
           .ci/build/package-cflow-consumer/turboraft_cflow_package_consumer
 
+      - name: Verify installed FlowMQ peer identity package contract
+        shell: bash
+        env:
+          TURBORAFT_ROOT: ${{ github.workspace }}/.ci/pkgs/turboraft
+        run: |
+          set -euo pipefail
+          cmake -S tests/package_flowmq_consumer \
+            -B .ci/build/package-flowmq-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build/package-flowmq-consumer --parallel 2
+          .ci/build/package-flowmq-consumer/turboraft_flowmq_package_consumer
+
       - name: Targeted production integration gates
         shell: bash
         run: |

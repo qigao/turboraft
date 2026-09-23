@@ -10,6 +10,7 @@ extern "C" {
 #endif
 
 #define TR_RAFT_FLOWMQ_MAX_IDENTITY_SIZE 255U
+#define TR_RAFT_FLOWMQ_MAX_CERTIFICATES_PER_PEER 4U
 #define TR_RAFT_FLOWMQ_MAX_OUTBOUND_QUEUE_CAPACITY 65536U
 #define TR_RAFT_FLOWMQ_RECOMMENDED_SEND_BATCH_ITEMS 16U
 #define TR_RAFT_FLOWMQ_RECOMMENDED_RECEIVE_BATCH_ITEMS 64U
@@ -32,6 +33,14 @@ typedef struct tr_raft_flowmq_peer_config {
     const tr_raft_handshake_result_t *handshake;
     /** Exact ROUTER identity presented by this peer. */
     const char *identity;
+    /**
+     * Borrowed canonical SHA-256 fingerprints authorized for this identity.
+     * Service creation copies them into FlowMQ's immutable listener policy.
+     * A TLS listener requires 1..TR_RAFT_FLOWMQ_MAX_CERTIFICATES_PER_PEER;
+     * a plaintext listener requires NULL and zero.
+     */
+    const char *const *client_certificate_sha256;
+    size_t client_certificate_sha256_count;
     /** FlowMQ endpoint URI, for example tcp://127.0.0.1:9002. */
     const char *endpoint;
     tr_raft_flowmq_tls_config_t tls;
@@ -79,6 +88,7 @@ typedef struct tr_raft_flowmq_peer_service_status {
     uint64_t frames_sent;
     uint64_t frames_received;
     uint64_t group_routing_rejections;
+    uint64_t tls_identity_rejections;
     int started;
     int stopping;
     int step_active;

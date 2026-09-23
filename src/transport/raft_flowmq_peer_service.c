@@ -4,12 +4,26 @@
 #include "raft_transport_payload_storage.h"
 
 #include <salts_error.h>
+#include <flowmq_tls_identity_map.h>
 
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define TR_RAFT_FLOWMQ_ENDPOINT_CAPACITY 512U
+#define TR_RAFT_FLOWMQ_TLS_IDENTITY_BINDING_CAPACITY                         \
+    ((TR_RAFT_MAX_VOTERS - 1U) * TR_RAFT_FLOWMQ_MAX_CERTIFICATES_PER_PEER)
+#define TR_RAFT_FLOWMQ_TLS_IDENTITY_STRING_BYTES                             \
+    (TR_RAFT_FLOWMQ_TLS_IDENTITY_BINDING_CAPACITY *                          \
+     (FLOWMQ_TLS_CERTIFICATE_SHA256_CAPACITY +                               \
+      TR_RAFT_FLOWMQ_MAX_IDENTITY_SIZE + 1U))
+
+_Static_assert(TR_RAFT_FLOWMQ_TLS_IDENTITY_BINDING_CAPACITY <=
+                   FLOWMQ_TLS_IDENTITY_MAP_MAX_BINDINGS,
+               "TurboRaft peer certificate policy exceeds FlowMQ capacity");
+_Static_assert(TR_RAFT_FLOWMQ_TLS_IDENTITY_STRING_BYTES <=
+                   FLOWMQ_TLS_IDENTITY_MAP_MAX_TOTAL_STRING_BYTES,
+               "TurboRaft peer certificate strings exceed FlowMQ capacity");
 
 typedef struct tr_raft_flowmq_peer {
     tr_raft_node_id_t node_id;
@@ -38,6 +52,7 @@ struct tr_raft_flowmq_peer_service {
     uint8_t *packet;
     uint64_t frames_sent;
     uint64_t frames_received;
+    uint64_t tls_identity_rejections;
     int started;
     int stopping;
     int step_active;
@@ -172,6 +187,71 @@ static int tr_raft_flowmq_configure_tls(flowmq_socket_t *socket,
                                            tls->server_name);
     }
     return result;
+}
+
+static int tr_raft_flowmq_validate_identity_policy(
+    const tr_raft_flowmq_peer_service_config_t *config)
+{
+    int tls_listener = tr_raft_flowmq_is_tls_endpoint(config->bind_endpoint);
+    size_t index;
+
+    if (tls_listener && !config->tls.require_client_certificate) {
+        return SALTS_EINVAL;
+    }
+    for (index = 0U; index < config->peer_count; ++index) {
+        const tr_raft_flowmq_peer_config_t *peer = &config->peers[index];
+
+        if (tls_listener) {
+            if (peer->client_certificate_sha256 == NULL ||
+                peer->client_certificate_sha256_count == 0U) {
+                return SALTS_EINVAL;
+            }
+            if (peer->client_certificate_sha256_count >
+                TR_RAFT_FLOWMQ_MAX_CERTIFICATES_PER_PEER) {
+                return SALTS_ERANGE;
+            }
+        } else if (peer->client_certificate_sha256 != NULL ||
+                   peer->client_certificate_sha256_count != 0U) {
+            return SALTS_EINVAL;
+        }
+    }
+    return SALTS_OK;
+}
+
+static int tr_raft_flowmq_configure_identity_policy(
+    flowmq_socket_t *router,
+    const tr_raft_flowmq_peer_service_config_t *config)
+{
+    flowmq_tls_identity_binding_t
+        bindings[TR_RAFT_FLOWMQ_TLS_IDENTITY_BINDING_CAPACITY];
+    flowmq_tls_identity_map_config_t policy =
+        FLOWMQ_TLS_IDENTITY_MAP_CONFIG_INIT;
+    size_t binding_count = 0U;
+    size_t peer_index;
+
+    for (peer_index = 0U; peer_index < config->peer_count; ++peer_index) {
+        const tr_raft_flowmq_peer_config_t *peer =
+            &config->peers[peer_index];
+        size_t certificate_index;
+
+        for (certificate_index = 0U;
+             certificate_index < peer->client_certificate_sha256_count;
+             ++certificate_index) {
+            flowmq_tls_identity_binding_t *binding =
+                &bindings[binding_count++];
+            *binding = (flowmq_tls_identity_binding_t)
+                FLOWMQ_TLS_IDENTITY_BINDING_INIT;
+            binding->certificate_sha256 =
+                peer->client_certificate_sha256[certificate_index];
+            binding->hello_identity = peer->identity;
+        }
+    }
+    policy.bindings = bindings;
+    policy.binding_count = binding_count;
+    policy.max_total_string_bytes =
+        TR_RAFT_FLOWMQ_TLS_IDENTITY_STRING_BYTES;
+    return flowmq_setsockopt(router, FLOWMQ_TLS_IDENTITY_POLICY, &policy,
+                             sizeof(policy));
 }
 
 static int tr_raft_flowmq_transient(int result)
@@ -312,7 +392,11 @@ int tr_raft_flowmq_peer_service_create(
     size_t index;
     int result;
 
-    if (config == NULL || out_service == NULL ||
+    if (out_service == NULL) {
+        return SALTS_EINVAL;
+    }
+    *out_service = NULL;
+    if (config == NULL ||
         config->bind_endpoint == NULL || config->local_identity == NULL ||
         config->on_payload == NULL || config->peer_count == 0U ||
         config->peer_count > TR_RAFT_MAX_VOTERS - 1U ||
@@ -333,7 +417,10 @@ int tr_raft_flowmq_peer_service_create(
             TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES) {
         return SALTS_EPROTONOSUPPORT;
     }
-    *out_service = NULL;
+    result = tr_raft_flowmq_validate_identity_policy(config);
+    if (result != SALTS_OK) {
+        return result;
+    }
     service = (tr_raft_flowmq_peer_service_t *)calloc(1U, sizeof(*service));
     if (service == NULL) {
         return SALTS_ENOMEM;
@@ -390,6 +477,11 @@ int tr_raft_flowmq_peer_service_create(
         tr_raft_flowmq_is_tls_endpoint(config->bind_endpoint)) {
         result = tr_raft_flowmq_configure_tls(service->router, &config->tls,
                                                1);
+    }
+    if (result == SALTS_OK &&
+        tr_raft_flowmq_is_tls_endpoint(config->bind_endpoint)) {
+        result = tr_raft_flowmq_configure_identity_policy(service->router,
+                                                           config);
     }
     if (result != SALTS_OK) {
         tr_raft_flowmq_release(service);
@@ -732,6 +824,15 @@ int tr_raft_flowmq_peer_service_stop(tr_raft_flowmq_peer_service_t *service)
         }
     }
     if (service->router != NULL) {
+        size_t option_size = sizeof(service->tls_identity_rejections);
+
+        result = flowmq_getsockopt(service->router,
+                                   FLOWMQ_TLS_IDENTITY_REJECTIONS,
+                                   &service->tls_identity_rejections,
+                                   &option_size);
+        if (result != SALTS_OK && first_error == SALTS_OK) {
+            first_error = result;
+        }
         result = flowmq_close(service->router);
         if (result != SALTS_OK && first_error == SALTS_OK) {
             first_error = result;
@@ -822,6 +923,8 @@ int tr_raft_flowmq_peer_service_get_status(
     tr_raft_flowmq_peer_service_status_t *out_status)
 {
     size_t index;
+    size_t option_size;
+    int result;
 
     if (service == NULL || out_status == NULL) {
         return SALTS_EINVAL;
@@ -831,6 +934,17 @@ int tr_raft_flowmq_peer_service_get_status(
     out_status->outbound_limits = service->outbound_limits;
     out_status->frames_sent = service->frames_sent;
     out_status->frames_received = service->frames_received;
+    out_status->tls_identity_rejections = service->tls_identity_rejections;
+    if (service->router != NULL) {
+        option_size = sizeof(out_status->tls_identity_rejections);
+        result = flowmq_getsockopt(service->router,
+                                   FLOWMQ_TLS_IDENTITY_REJECTIONS,
+                                   &out_status->tls_identity_rejections,
+                                   &option_size);
+        if (result != SALTS_OK) {
+            return result;
+        }
+    }
     out_status->started = service->started;
     out_status->stopping = service->stopping;
     out_status->step_active = service->step_active;
