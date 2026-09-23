@@ -22,6 +22,7 @@ env:
   FLOWMQ_REF: main
   ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+  TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
 
 jobs:
   sanitizer:
@@ -36,6 +37,8 @@ jobs:
             cmake_flags: -DENABLE_SANITIZER_ADDRESS=ON -DENABLE_SANITIZER_UNDEFINED=OFF
           - name: ubsan
             cmake_flags: -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=ON
+          - name: tsan
+            cmake_flags: -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_SANITIZER_THREAD=ON
     env:
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}
       SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts
