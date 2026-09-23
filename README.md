@@ -40,6 +40,11 @@ Configure requires exact active-profile installations provided through:
 The supplied user presets resolve Debug and Release profiles independently and
 use `NO_DEFAULT_PATH` for first-party package discovery.
 
+The production-qualified OS/compiler/dependency boundary is documented in
+[`docs/SUPPORTED_PLATFORMS.md`](docs/SUPPORTED_PLATFORMS.md). A platform that
+is not in that matrix may still compile, but it is not a TurboRaft 0.2.x
+release gate until hosted CI proves the same runtime and package contracts.
+
 ```powershell
 cmake --preset win-dev-user
 cmake --build --preset win-dev-user
