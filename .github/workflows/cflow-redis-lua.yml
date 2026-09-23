@@ -1,0 +1,247 @@
+name: CFlow Redis Lua recovery
+
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: cflow-redis-lua-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+  SALTS_REF: master
+  SALTS_UTILS_REF: master
+  FLOWMQ_REF: main
+  TURBODB_REF: master
+  VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed_redis
+  SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/salts
+  SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/salts-utils
+  FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/flowmq
+  TURBODB_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/turbodb
+  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-redis/turbodb/lib:${{ github.workspace }}/.ci/pkgs-redis/flowmq/lib:${{ github.workspace }}/.ci/pkgs-redis/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-redis/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_redis/x64-linux/lib
+
+jobs:
+  redis-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact TurboRaft head
+        uses: actions/checkout@v4
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore shared re2c binary
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - name: Checkout Salts master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.SALTS_REF }}
+          path: .ci/src-redis/salts
+          persist-credentials: false
+
+      - name: Checkout SaltsUtils master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.SALTS_UTILS_REF }}
+          path: .ci/src-redis/salts-utils
+          persist-credentials: false
+
+      - name: Checkout FlowMQ main
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/flowmq
+          ref: ${{ env.FLOWMQ_REF }}
+          path: .ci/src-redis/flowmq
+          persist-credentials: false
+
+      - name: Checkout TurboDB master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/turbodb
+          ref: ${{ env.TURBODB_REF }}
+          path: .ci/src-redis/turbodb
+          persist-credentials: false
+
+      - name: Install host build tools and Redis
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential libtool nasm ninja-build pkg-config \
+            redis-server redis-tools
+
+      - name: Bootstrap vcpkg dependency union
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/vcpkg_installed_redis .ci/redis-super-manifest
+          cat > .ci/redis-super-manifest/vcpkg.json <<'JSON'
+          {
+            "name": "turboraft-cflow-redis-ci",
+            "version-semver": "0.1.0",
+            "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
+            "dependencies": [
+              { "name": "pkgconf", "host": true },
+              "simde",
+              "zstd",
+              "aklomp-base64",
+              "c-ares",
+              "libuv",
+              "kcp",
+              "boringssl",
+              "miniaudio",
+              "lua",
+              { "name": "zeromq", "default-features": false },
+              { "name": "xxhash", "version>=": "0.8.3" }
+            ]
+          }
+          JSON
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$GITHUB_WORKSPACE/.ci/redis-super-manifest" \
+            --x-install-root="$VCPKG_INSTALLED_DIR" \
+            --triplet=x64-linux
+
+      - name: Build and install Salts master
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src-redis/salts -B .ci/build-redis/salts -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
+            -DSALTS_ENABLE_EPOLL_READINESS=ON \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
+          cmake --build .ci/build-redis/salts --target install --parallel 2
+
+      - name: Build and install SaltsUtils master
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src-redis/salts-utils -B .ci/build-redis/salts-utils -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
+            -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
+          cmake --build .ci/build-redis/salts-utils --target install --parallel 2
+
+      - name: Build and install FlowMQ main
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src-redis/flowmq -B .ci/build-redis/flowmq -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$FLOWMQ_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build .ci/build-redis/flowmq --target install --parallel 2
+
+      - name: Build and install TurboDB Redis profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src-redis/turbodb -B .ci/build-redis/turbodb -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$TURBODB_ROOT" \
+            -DTURBODB_BUILD_REDIS=ON \
+            -DORM_WITH_SQLITE=OFF -DORM_WITH_PGSQL=OFF \
+            -DORM_WITH_REDIS=OFF -DORM_WITH_MONGODB=OFF \
+            -DORM_BUILD_TESTS=OFF \
+            -DTURBODB_BUILD_DBTOOLS=OFF \
+            -DTURBODB_DBTOOLS_WITH_SQLITE=OFF \
+            -DTURBODB_DBTOOLS_WITH_PGSQL=OFF \
+            -DTIDESDB_BUILD_TESTS=OFF \
+            -DTIDESDB_WITH_SNAPPY=OFF -DTIDESDB_WITH_LZ4=OFF \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
+          cmake --build .ci/build-redis/turbodb --target install --parallel 2
+          test -f "$TURBODB_ROOT/lib/cmake/TurboDB/TurboDBConfig.cmake"
+
+      - name: Start isolated Redis
+        shell: bash
+        run: |
+          set -euo pipefail
+          redis-server \
+            --port 6399 \
+            --bind 127.0.0.1 \
+            --save "" \
+            --appendonly no \
+            --daemonize yes
+          for attempt in {1..30}; do
+            if redis-cli -p 6399 ping | grep -q PONG; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Configure TurboRaft Redis async fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B .ci/build-redis/turboraft -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=ON
+
+      - name: Build Redis compatibility and CFlow async targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build .ci/build-redis/turboraft --parallel 2 --target \
+            turboraft_turbodb_redis_state_machine_tests \
+            turboraft_cflow_redis_recovery_tests
+
+      - name: Run Redis compatibility and CFlow async recovery gates
+        shell: bash
+        env:
+          TURBODB_REDIS_TEST_PORT: "6399"
+        run: |
+          set -euo pipefail
+          ctest --test-dir .ci/build-redis/turboraft \
+            -R 'turboraft\.(turbodb_redis_state_machine|cflow_redis_recovery)$' \
+            --output-on-failure
+
+      - name: Stop isolated Redis
+        if: always()
+        shell: bash
+        run: |
+          redis-cli -p 6399 shutdown nosave || true
+
+      - name: Upload Redis diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cflow-redis-lua-diagnostics
+          path: .ci/build-redis/turboraft/Testing/Temporary
+          if-no-files-found: ignore

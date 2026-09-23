@@ -521,5 +521,18 @@ if(TARGET turboraft_turbodb_redis_state_machine)
                                 Salts::TinyTest)
   add_test(NAME turboraft.turbodb_redis_state_machine
            COMMAND turboraft_turbodb_redis_state_machine_tests)
+
+  add_executable(turboraft_cflow_redis_recovery_tests
+                 test_raft_cflow_redis_recovery.c)
+  target_link_libraries(
+    turboraft_cflow_redis_recovery_tests
+    PRIVATE TurboRaft::CFlowStateMachine
+            TurboRaft::TurboDbRedisStateMachine
+            Salts::Coroutine
+            Salts::TinyTest)
+  add_test(NAME turboraft.cflow_redis_recovery
+           COMMAND turboraft_cflow_redis_recovery_tests)
+  set_tests_properties(turboraft.cflow_redis_recovery
+                       PROPERTIES LABELS "cflow;redis;recovery")
 endif()
 cmake_config_directory_targets(FOLDER "tests/core")
