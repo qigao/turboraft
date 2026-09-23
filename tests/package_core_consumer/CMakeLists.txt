@@ -6,8 +6,10 @@ if(NOT DEFINED ENV{TURBORAFT_ROOT} OR "$ENV{TURBORAFT_ROOT}" STREQUAL "" OR
   message(FATAL_ERROR "TURBORAFT_ROOT must name the installed TurboRaft prefix")
 endif()
 
+file(TO_CMAKE_PATH "$ENV{TURBORAFT_ROOT}" TURBORAFT_PACKAGE_ROOT)
+
 find_package(TurboRaft CONFIG REQUIRED COMPONENTS Core
-             PATHS "$ENV{TURBORAFT_ROOT}" NO_DEFAULT_PATH)
+             PATHS "${TURBORAFT_PACKAGE_ROOT}" NO_DEFAULT_PATH)
 
 if(NOT TARGET TurboRaft::Core)
   message(FATAL_ERROR "TurboRaft Core target was not exported")
