@@ -466,13 +466,21 @@ static int tr_turbodb_redis_test_open_connection(
         TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS};
     if (redis_cflow_connection_open(connection, &connection_config) != SALTS_OK)
         return SALTS_EIO;
-    connect_step = redis_cflow_connection_connect_next(connection);
-    if (connect_step.kind != REDIS_CFLOW_CONNECT_WAIT ||
-        redis_io_runtime_wait_idle(runtime,
-                                   TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS) != SALTS_OK)
-        return SALTS_EIO;
-    connect_step = redis_cflow_connection_connect_next(connection);
-    return connect_step.kind == REDIS_CFLOW_CONNECT_DONE ? SALTS_OK : SALTS_EIO;
+    do {
+        connect_step = redis_cflow_connection_connect_next(connection);
+        if (connect_step.kind == REDIS_CFLOW_CONNECT_WAIT) {
+            if (redis_io_runtime_wait_idle(
+                    runtime, TR_TURBODB_REDIS_TEST_WAIT_TIMEOUT_NS) !=
+                SALTS_OK) {
+                return SALTS_EIO;
+            }
+        }
+    } while (connect_step.kind == REDIS_CFLOW_CONNECT_WAIT);
+    return connect_step.kind == REDIS_CFLOW_CONNECT_DONE
+               ? SALTS_OK
+               : connect_step.status != SALTS_OK
+                     ? connect_step.status
+                     : SALTS_EIO;
 }
 
 static tr_turbodb_redis_state_machine_config_t
