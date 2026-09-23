@@ -5,8 +5,10 @@ if(NOT DEFINED ENV{TURBORAFT_ROOT} OR "$ENV{TURBORAFT_ROOT}" STREQUAL "")
   message(FATAL_ERROR "TURBORAFT_ROOT must name the installed TurboRaft prefix")
 endif()
 
+file(TO_CMAKE_PATH "$ENV{TURBORAFT_ROOT}" TURBORAFT_PACKAGE_ROOT)
+
 find_package(TurboRaft 0.2 CONFIG REQUIRED COMPONENTS FlowMQ
-             PATHS "$ENV{TURBORAFT_ROOT}" NO_DEFAULT_PATH)
+             PATHS "${TURBORAFT_PACKAGE_ROOT}" NO_DEFAULT_PATH)
 
 add_executable(turboraft_flowmq_package_consumer main.c)
 target_link_libraries(turboraft_flowmq_package_consumer
