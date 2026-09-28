@@ -52,7 +52,11 @@ int tr_raft_cnet_peer_enqueue_group(
     tr_raft_group_id_t group_id,
     const tr_raft_message_t *message);
 
-/** Admits at most one copied CNet write; progress remains caller-driven. */
+/**
+ * Admits at most one retained CNet write; the encoded frame stays in its
+ * Salts mem_buffer backing until CNet reports the logical send terminal.
+ * Progress remains caller-driven.
+ */
 int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer);
 
 /** Begins close; poll the borrowed CNet client through its terminal callback. */
