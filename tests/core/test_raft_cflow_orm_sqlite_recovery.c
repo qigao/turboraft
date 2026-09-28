@@ -1,6 +1,7 @@
 #include <turboraft/raft_cflow_state_machine.h>
 
 #include <orm.h>
+#include <orm_runtime.h>
 #include <salts_coro_executor.h>
 #include <salts_error.h>
 #include "tinytest.h"
@@ -61,6 +62,7 @@ typedef struct app_store_snapshot {
 } app_store_snapshot_t;
 
 typedef struct app_store {
+    orm_runtime_t *runtime;
     orm_connection_t *connection;
     app_store_failure_t failure;
     uint64_t failure_index;
@@ -136,32 +138,70 @@ static orm_status_t app_execute(
 
 static bool app_store_open(app_store_t *store, const char *filename)
 {
+    const char *plugin = getenv("ORM_SQLITE_PLUGIN");
+    orm_runtime_config_t runtime_config;
+    orm_driver_load_config_t load;
     orm_config_t config;
     orm_option_t option;
     orm_error_t error;
 
-    if (store == NULL || filename == NULL || store->connection != NULL) {
+    if (store == NULL || filename == NULL || store->runtime != NULL ||
+        store->connection != NULL || plugin == NULL || plugin[0] == '\0') {
         return false;
     }
     orm_error_init(&error);
+    orm_runtime_config_init(&runtime_config);
+    if (orm_runtime_create(&runtime_config, &store->runtime, &error) !=
+        ORM_STATUS_OK) {
+        return false;
+    }
+
+    memset(&load, 0, sizeof(load));
+    load.struct_size = (uint32_t)sizeof(load);
+    load.abi_version = ORM_RUNTIME_ABI_VERSION;
+    load.module_path = orm_view(plugin);
+    load.expected_driver_id = orm_view("sqlite");
+    if (orm_runtime_load_driver(store->runtime, &load, &error) !=
+        ORM_STATUS_OK) {
+        (void)orm_runtime_close(store->runtime, &error);
+        orm_runtime_release(store->runtime);
+        store->runtime = NULL;
+        return false;
+    }
+
     orm_config(&config);
     option.keyword = orm_view("filename");
     option.value = orm_view(filename);
     config.driver = orm_view("sqlite");
     config.options = &option;
     config.option_count = 1U;
-    return orm_connect(&config, &store->connection, &error) == ORM_STATUS_OK;
+    if (orm_runtime_connect(store->runtime, &config, &store->connection,
+                            &error) != ORM_STATUS_OK) {
+        (void)orm_runtime_close(store->runtime, &error);
+        orm_runtime_release(store->runtime);
+        store->runtime = NULL;
+        return false;
+    }
+    return true;
 }
 
 static void app_store_close(app_store_t *store)
 {
+    orm_error_t error;
+
     if (store == NULL) {
         return;
     }
     if (store->connection != NULL) {
         orm_disconnect(store->connection);
+        store->connection = NULL;
     }
-    store->connection = NULL;
+    if (store->runtime != NULL) {
+        orm_error_init(&error);
+        (void)orm_runtime_close(store->runtime, &error);
+        orm_runtime_release(store->runtime);
+        store->runtime = NULL;
+    }
 }
 
 static bool app_store_create_schema(app_store_t *store)
