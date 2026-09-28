@@ -24,7 +24,8 @@ env:
   SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs-orm/salts-utils
   FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs-orm/flowmq
   TURBODB_ROOT: ${{ github.workspace }}/.ci/pkgs-orm/turbodb
-  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-orm/turbodb/lib:${{ github.workspace }}/.ci/pkgs-orm/flowmq/lib:${{ github.workspace }}/.ci/pkgs-orm/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-orm/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_orm/x64-linux/lib
+  ORM_SQLITE_PLUGIN: ${{ github.workspace }}/.ci/pkgs-orm/turbodb/lib/turbodb/drivers/turbodb_driver_sqlite.so
+  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-orm/turbodb/lib/turbodb/drivers:${{ github.workspace }}/.ci/pkgs-orm/turbodb/lib:${{ github.workspace }}/.ci/pkgs-orm/flowmq/lib:${{ github.workspace }}/.ci/pkgs-orm/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-orm/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_orm/x64-linux/lib
 
 jobs:
   sqlite-recovery:
@@ -169,10 +170,14 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DCMAKE_INSTALL_PREFIX="$TURBODB_ROOT" \
-            -DORM_WITH_SQLITE=ON -DORM_WITH_PGSQL=OFF \
-            -DORM_WITH_REDIS=OFF -DORM_WITH_MONGODB=OFF \
+            -DORM_BUILD_SQLITE_DRIVER=ON \
+            -DORM_BUILD_POSTGRESQL_DRIVER=OFF \
+            -DORM_BUILD_LEGACY_POSTGRESQL_COMPONENT=OFF \
+            -DORM_BUILD_REDIS_DRIVER=OFF \
+            -DORM_BUILD_MONGODB_DRIVER=OFF \
+            -DORM_BUILD_MYSQL_DRIVER=OFF \
+            -DORM_BUILD_TIDESDB_DRIVER=OFF \
             -DORM_BUILD_TESTS=OFF \
-            -DTURBODB_BUILD_DBTOOLS=OFF \
             -DTURBODB_DBTOOLS_WITH_SQLITE=OFF \
             -DTURBODB_DBTOOLS_WITH_PGSQL=OFF \
             -DTURBODB_BUILD_REDIS=OFF \
@@ -181,6 +186,7 @@ jobs:
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
           cmake --build .ci/build-orm/turbodb --target install --parallel 2
           test -f "$TURBODB_ROOT/lib/cmake/Orm/OrmConfig.cmake"
+          test -f "$ORM_SQLITE_PLUGIN"
 
       - name: Configure TurboRaft ORM SQLite fixtures
         shell: bash
