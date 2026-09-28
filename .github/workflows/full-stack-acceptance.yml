@@ -106,6 +106,7 @@ jobs:
           "$VCPKG_ROOT/vcpkg" install \
             --x-manifest-root="$GITHUB_WORKSPACE/.ci/super-manifest" \
             --x-install-root="$VCPKG_INSTALLED_DIR" \
+            --only-binarycaching \
             --triplet=x64-linux
 
 
