@@ -271,7 +271,20 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
         peer->packet_ready = 1;
     }
 
-    result = cnet_send_buffer(peer->client, peer->connection, peer->packet);
+    {
+        mem_slice_t packet_slice =
+            mem_slice(peer->packet, 0U, peer->packet_size);
+
+        if (packet_slice.buffer == NULL ||
+            packet_slice.length != peer->packet_size) {
+            peer->last_error = SALTS_EPROTO;
+            mem_slice_release(&packet_slice);
+            return SALTS_EPROTO;
+        }
+        result = cnet_send_slicev(
+            peer->client, peer->connection, &packet_slice, 1U);
+        mem_slice_release(&packet_slice);
+    }
     if (result != SALTS_OK) {
         if (result != SALTS_EBUSY) {
             peer->last_error = result;
