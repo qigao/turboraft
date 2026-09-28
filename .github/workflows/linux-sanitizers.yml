@@ -149,7 +149,7 @@ jobs:
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
             -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
           cmake --build ".ci/build-${{ matrix.name }}/salts-utils" --target install --parallel 2
-          test -x "$SALTS_UTILS_ROOT/bin/tbe_compiler"
+          test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
 
       - name: Build and install FlowMQ Debug
         shell: bash
