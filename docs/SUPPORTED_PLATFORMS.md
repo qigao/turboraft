@@ -15,10 +15,10 @@ same change.
 
 | Profile | Runner / toolchain | Dependency contract | Required evidence |
 | --- | --- | --- | --- |
-| Linux Release | `ubuntu-latest`, GCC (current hosted image; GCC 13.3 observed at qualification) | Salts `master`, SaltsUtils `master`, FlowMQ `main`; x64-linux vcpkg baseline below | configure/build, focused production integration, 58/58 full CTest, SDK install, installed Core/CFlow/FlowMQ consumers |
-| Linux ASan | `ubuntu-latest`, GCC Debug + AddressSanitizer | same source branches; dependency Debug SDKs are intentionally **not** ASan-instrumented so TurboRaft owns the sanitizer runtime | focused production gates + complete CTest inventory under ASan |
-| Linux UBSan | `ubuntu-latest`, GCC Debug + UndefinedBehaviorSanitizer | same source branches; dependency Debug SDKs are intentionally uninstrumented to avoid mixed sanitizer runtimes | focused production gates + complete CTest inventory under UBSan |
-| Windows Release | `windows-latest`, x64 MSVC via `VsDevCmd` + Ninja (MSVC 19.51 observed at qualification) | Salts.Native 1.2.0, SaltsUtils.Native 2.0.2, current FlowMQ `main`, x64-windows vcpkg baseline below | MSVC configure/build, focused production gates, 58/58 full CTest, SDK install, installed Core/FlowMQ consumers |
+| Linux Release | `ubuntu-latest`, GCC (current hosted image; GCC 13.3 observed at qualification) | Salts 1.8.3, SaltsUtils 4.1.3, FlowMQ `main`; x64-linux vcpkg baseline below | configure/build, focused production integration, full CTest, SDK install, installed Core/CFlow/FlowMQ consumers |
+| Linux ASan | `ubuntu-latest`, GCC Debug + AddressSanitizer | Salts 1.8.3 / SaltsUtils 4.1.3 source tags; dependency Debug SDKs are intentionally **not** ASan-instrumented so TurboRaft owns the sanitizer runtime | focused production gates + complete CTest inventory under ASan |
+| Linux UBSan | `ubuntu-latest`, GCC Debug + UndefinedBehaviorSanitizer | Salts 1.8.3 / SaltsUtils 4.1.3 source tags; dependency Debug SDKs are intentionally uninstrumented to avoid mixed sanitizer runtimes | focused production gates + complete CTest inventory under UBSan |
+| Windows Release | `windows-latest`, x64 MSVC via `VsDevCmd` + Ninja (MSVC 19.51 observed at qualification) | Salts.Native 1.8.3, SaltsUtils.Native 4.1.3, current FlowMQ `main`, x64-windows vcpkg baseline below | MSVC configure/build, focused production gates, full CTest, SDK install, installed Core/FlowMQ consumers |
 
 Qualification evidence on 2026-09-23:
 
@@ -46,16 +46,12 @@ The first-party dependency policy is:
 
 | Dependency | Linux hosted gates | Windows hosted gate | Public contract |
 | --- | --- | --- | --- |
-| Salts | current `master`, built in the workflow | Salts.Native 1.2.0 Windows SDK | `find_package(Salts CONFIG REQUIRED)` |
-| SaltsUtils | current `master`, built in the workflow | SaltsUtils.Native 2.0.2 Windows SDK | `find_package(SaltsUtils CONFIG REQUIRED)`; supplies `tbe_compiler` |
+| Salts | v1.8.3 source tag, built in the workflow | Salts.Native 1.8.3 Windows SDK | `find_package(Salts 1.8.3 EXACT CONFIG REQUIRED)` |
+| SaltsUtils | v4.1.3 source tag, built in the workflow | SaltsUtils.Native 4.1.3 Windows SDK | `find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED)`; supplies `salts-idlc` |
 | FlowMQ | current `main`, built in the workflow | current `main`, built in the workflow | FlowMQ >= 1.1.0; TLS certificate/HELLO identity contract is required |
 | TurboDB | not a Core dependency | not a Core dependency | only opt-in Redis/SQLite application qualification workflows |
 
-Linux intentionally follows the current first-party integration branches
-rather than SHA-pinning them. This makes the hosted gate an ecosystem
-compatibility gate: a breaking Salts/SaltsUtils/FlowMQ mainline change must be
-caught immediately in TurboRaft CI. Windows intentionally consumes released
-Salts SDK versions while building current FlowMQ from source.
+TurboRaft qualifies Salts and SaltsUtils against one published dependency epoch across platforms: Linux builds the released source tags and Windows restores the matching released SDK packages. FlowMQ remains a current-source integration dependency and is built against those exact roots. This prevents an ambient or moving Salts mainline from changing TurboRaft qualification semantics.
 
 ## Toolchain and generated-code contract
 
@@ -64,7 +60,7 @@ Salts SDK versions while building current FlowMQ from source.
 - vcpkg builtin baseline:
   `b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01`.
 - re2c host package: `Qigao.Re2c.Binary 4.6.3` (binary reports re2c 4.6).
-- TurboRaft wire generation uses the SaltsUtils `tbe_compiler` from the
+- TurboRaft wire generation uses the SaltsUtils `salts-idlc` from the
   active host SDK/root.
 - The build-host Lemon parser generator is deliberately excluded from global
   product sanitizer instrumentation. Generated TurboRaft product code remains

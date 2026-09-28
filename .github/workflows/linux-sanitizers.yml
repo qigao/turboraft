@@ -17,8 +17,8 @@ permissions:
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_REF: master
-  SALTS_UTILS_REF: master
+  SALTS_REF: v1.8.3
+  SALTS_UTILS_REF: v4.1.3
   FLOWMQ_REF: main
   ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
@@ -54,7 +54,7 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout Salts master
+      - name: Checkout Salts 1.8.3
         uses: actions/checkout@v4
         with:
           repository: qigao/salts
@@ -62,7 +62,7 @@ jobs:
           path: .ci/src-${{ matrix.name }}/salts
           persist-credentials: false
 
-      - name: Checkout SaltsUtils master
+      - name: Checkout SaltsUtils 4.1.3
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
@@ -115,6 +115,7 @@ jobs:
           "$VCPKG_ROOT/vcpkg" install \
             --x-manifest-root="$GITHUB_WORKSPACE/.ci/super-manifest-${{ matrix.name }}" \
             --x-install-root="$VCPKG_INSTALLED_DIR" \
+            --only-binarycaching \
             --triplet=x64-linux
 
       - name: Build and install Salts Debug
@@ -149,7 +150,7 @@ jobs:
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
             -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
           cmake --build ".ci/build-${{ matrix.name }}/salts-utils" --target install --parallel 2
-          test -x "$SALTS_UTILS_ROOT/bin/tbe_compiler"
+          test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
 
       - name: Build and install FlowMQ Debug
         shell: bash

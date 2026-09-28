@@ -52,7 +52,12 @@ int tr_raft_cnet_peer_enqueue_group(
     tr_raft_group_id_t group_id,
     const tr_raft_message_t *message);
 
-/** Admits at most one copied CNet write; progress remains caller-driven. */
+/**
+ * Admits at most one retained CNet scatter/gather write. The current wire
+ * frame is one canonical mem_slice_t over a Salts mem_buffer, so no payload
+ * bytes are copied into CNet write storage; future frame segmentation can add
+ * slices without changing this API. Progress remains caller-driven.
+ */
 int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer);
 
 /** Begins close; poll the borrowed CNet client through its terminal callback. */

@@ -16,7 +16,7 @@ struct tr_raft_cnet_peer {
     tr_raft_group_queue_t outbound;
     tr_raft_transport_queue_limits_t outbound_limits;
     tr_raft_group_queue_token_t packet_token;
-    uint8_t *packet;
+    mem_buffer_t *packet;
     size_t packet_size;
     uint64_t frames_admitted;
     uint64_t bytes_admitted;
@@ -121,7 +121,7 @@ static void tr_raft_cnet_release(tr_raft_cnet_peer_t *peer)
     }
     tr_raft_group_queue_destroy(&peer->outbound);
     tr_raft_transport_session_destroy(peer->transport);
-    free(peer->packet);
+    mem_buffer_release(peer->packet);
     free(peer);
 }
 
@@ -146,7 +146,7 @@ int tr_raft_cnet_peer_create(const tr_raft_cnet_peer_config_t *config,
     }
     peer->client = config->client;
     peer->outbound_limits = config->outbound_limits;
-    peer->packet = (uint8_t *)malloc(TR_RAFT_TRANSPORT_MAX_PACKET_SIZE);
+    peer->packet = mem_get_buffer(mem_global(), TR_RAFT_TRANSPORT_MAX_PACKET_SIZE);
     if (peer->packet == NULL) {
         tr_raft_cnet_release(peer);
         return SALTS_ENOMEM;
@@ -259,18 +259,32 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
             return result;
         }
         result = tr_raft_transport_encode_payload(
-            peer->transport, &owned->payload, peer->packet,
-            TR_RAFT_TRANSPORT_MAX_PACKET_SIZE, &peer->packet_size);
+            peer->transport, &owned->payload,
+            (uint8_t *)mem_buffer_data(peer->packet),
+            mem_buffer_capacity(peer->packet), &peer->packet_size);
         if (result != SALTS_OK) {
             peer->last_error = result;
             return result;
         }
+        mem_set_used(peer->packet, peer->packet_size);
         peer->packet_token_valid = 1;
         peer->packet_ready = 1;
     }
 
-    result = cnet_send(peer->client, peer->connection, peer->packet,
-                       peer->packet_size);
+    {
+        mem_slice_t packet_slice =
+            mem_slice(peer->packet, 0U, peer->packet_size);
+
+        if (packet_slice.buffer == NULL ||
+            packet_slice.length != peer->packet_size) {
+            peer->last_error = SALTS_EPROTO;
+            mem_slice_release(&packet_slice);
+            return SALTS_EPROTO;
+        }
+        result = cnet_send_slicev(
+            peer->client, peer->connection, &packet_slice, 1U);
+        mem_slice_release(&packet_slice);
+    }
     if (result != SALTS_OK) {
         if (result != SALTS_EBUSY) {
             peer->last_error = result;

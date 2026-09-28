@@ -15,8 +15,8 @@ permissions:
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_REF: master
-  SALTS_UTILS_REF: master
+  SALTS_REF: v1.8.3
+  SALTS_UTILS_REF: v4.1.3
   FLOWMQ_REF: main
   TURBODB_REF: master
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed_orm
@@ -24,7 +24,8 @@ env:
   SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs-orm/salts-utils
   FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs-orm/flowmq
   TURBODB_ROOT: ${{ github.workspace }}/.ci/pkgs-orm/turbodb
-  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-orm/turbodb/lib:${{ github.workspace }}/.ci/pkgs-orm/flowmq/lib:${{ github.workspace }}/.ci/pkgs-orm/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-orm/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_orm/x64-linux/lib
+  ORM_SQLITE_PLUGIN: ${{ github.workspace }}/.ci/pkgs-orm/turbodb/lib/turbodb/drivers/turbodb_driver_sqlite.so
+  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-orm/turbodb/lib/turbodb/drivers:${{ github.workspace }}/.ci/pkgs-orm/turbodb/lib:${{ github.workspace }}/.ci/pkgs-orm/flowmq/lib:${{ github.workspace }}/.ci/pkgs-orm/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-orm/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_orm/x64-linux/lib
 
 jobs:
   sqlite-recovery:
@@ -42,7 +43,7 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout Salts master
+      - name: Checkout Salts 1.8.3
         uses: actions/checkout@v4
         with:
           repository: qigao/salts
@@ -50,7 +51,7 @@ jobs:
           path: .ci/src-orm/salts
           persist-credentials: false
 
-      - name: Checkout SaltsUtils master
+      - name: Checkout SaltsUtils 4.1.3
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
@@ -112,9 +113,10 @@ jobs:
           "$VCPKG_ROOT/vcpkg" install \
             --x-manifest-root="$GITHUB_WORKSPACE/.ci/orm-super-manifest" \
             --x-install-root="$VCPKG_INSTALLED_DIR" \
+            --only-binarycaching \
             --triplet=x64-linux
 
-      - name: Build and install Salts master
+      - name: Build and install Salts 1.8.3
         shell: bash
         run: |
           set -euo pipefail
@@ -128,7 +130,7 @@ jobs:
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
           cmake --build .ci/build-orm/salts --target install --parallel 2
 
-      - name: Build and install SaltsUtils master
+      - name: Build and install SaltsUtils 4.1.3
         shell: bash
         run: |
           set -euo pipefail
@@ -168,10 +170,14 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DCMAKE_INSTALL_PREFIX="$TURBODB_ROOT" \
-            -DORM_WITH_SQLITE=ON -DORM_WITH_PGSQL=OFF \
-            -DORM_WITH_REDIS=OFF -DORM_WITH_MONGODB=OFF \
+            -DORM_BUILD_SQLITE_DRIVER=ON \
+            -DORM_BUILD_POSTGRESQL_DRIVER=OFF \
+            -DORM_BUILD_LEGACY_POSTGRESQL_COMPONENT=OFF \
+            -DORM_BUILD_REDIS_DRIVER=OFF \
+            -DORM_BUILD_MONGODB_DRIVER=OFF \
+            -DORM_BUILD_MYSQL_DRIVER=OFF \
+            -DORM_BUILD_TIDESDB_DRIVER=OFF \
             -DORM_BUILD_TESTS=OFF \
-            -DTURBODB_BUILD_DBTOOLS=OFF \
             -DTURBODB_DBTOOLS_WITH_SQLITE=OFF \
             -DTURBODB_DBTOOLS_WITH_PGSQL=OFF \
             -DTURBODB_BUILD_REDIS=OFF \
@@ -180,6 +186,7 @@ jobs:
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
           cmake --build .ci/build-orm/turbodb --target install --parallel 2
           test -f "$TURBODB_ROOT/lib/cmake/Orm/OrmConfig.cmake"
+          test -f "$ORM_SQLITE_PLUGIN"
 
       - name: Configure TurboRaft ORM SQLite fixtures
         shell: bash
