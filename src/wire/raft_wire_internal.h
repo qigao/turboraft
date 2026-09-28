@@ -22,4 +22,18 @@ int tr_raft_wire_encode_data_chunk_prefix(
     size_t *out_prefix_length,
     size_t *out_frame_length);
 
+/*
+ * Encodes a SNAPSHOT_CHUNK through the final chunk-data length prefix without
+ * copying the chunk bytes themselves. The caller may append the borrowed chunk
+ * bytes as the next stream span.
+ */
+int tr_raft_wire_encode_snapshot_chunk_prefix(
+    tr_raft_wire_codec_t *codec,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_snapshot_chunk_t *chunk,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *out_prefix_length,
+    size_t *out_frame_length);
+
 #endif
