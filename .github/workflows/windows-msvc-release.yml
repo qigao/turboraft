@@ -138,7 +138,7 @@ jobs:
             ]
           }
           '@ | Set-Content -LiteralPath (Join-Path $manifest "vcpkg.json")
-          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=$manifest --x-install-root=$env:VCPKG_INSTALLED_DIR --triplet=x64-windows
+          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=$manifest --x-install-root=$env:VCPKG_INSTALLED_DIR --triplet=x64-windows --only-binarycaching
           if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency bootstrap failed" }
 
       - name: Build and install FlowMQ main
