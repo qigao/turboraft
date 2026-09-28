@@ -1,5 +1,7 @@
 #include <turboraft/raft_transport.h>
 
+#include "../../src/transport/raft_transport_internal.h"
+
 #include <salts_error.h>
 #include <tinytest.h>
 
@@ -256,6 +258,88 @@ spec("Raft transport framing")
 
         check_equal(tr_raft_transport_session_destroy(receiver), SALTS_OK);
         check_equal(tr_raft_transport_session_destroy(sender), SALTS_OK);
+    }
+
+    it("keeps DATA_CHUNK SG framing and message-id progression identical")
+    {
+        transport_capture_t left_capture;
+        transport_capture_t right_capture;
+        tr_raft_transport_session_t *contiguous_session;
+        tr_raft_transport_session_t *sg_session;
+        tr_raft_transport_payload_t payload;
+        tr_raft_transport_status_t contiguous_status;
+        tr_raft_transport_status_t sg_status;
+        tr_raft_message_t heartbeat = make_heartbeat(1U, 2U);
+        uint8_t data[4096];
+        uint8_t contiguous[TR_RAFT_TRANSPORT_MAX_PACKET_SIZE];
+        uint8_t prefix[256];
+        uint8_t contiguous_next[TR_RAFT_TRANSPORT_MAX_PACKET_SIZE];
+        uint8_t sg_next[TR_RAFT_TRANSPORT_MAX_PACKET_SIZE];
+        size_t contiguous_size = 0U;
+        size_t prefix_size = 0U;
+        size_t sg_packet_size = 0U;
+        size_t contiguous_next_size = 0U;
+        size_t sg_next_size = 0U;
+
+        memset(&left_capture, 0, sizeof(left_capture));
+        memset(&right_capture, 0, sizeof(right_capture));
+        memset(&payload, 0, sizeof(payload));
+        memset(data, 0x4a, sizeof(data));
+        contiguous_session = make_session(1U, 2U, &left_capture);
+        sg_session = make_session(1U, 2U, &right_capture);
+
+        payload.group_id = 77U;
+        payload.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+        payload.data.data_chunk.from = 1U;
+        payload.data.data_chunk.to = 2U;
+        payload.data.data_chunk.term = 7U;
+        payload.data.data_chunk.stream_id = 9U;
+        payload.data.data_chunk.stream_size = sizeof(data);
+        payload.data.data_chunk.data = data;
+        payload.data.data_chunk.data_length = sizeof(data);
+        payload.data.data_chunk.done = true;
+        memset(payload.data.data_chunk.stream_digest, 0xa4,
+               sizeof(payload.data.data_chunk.stream_digest));
+
+        check_equal(tr_raft_transport_encode_payload(
+                        contiguous_session, &payload,
+                        contiguous, sizeof(contiguous), &contiguous_size),
+                    SALTS_OK);
+        check_equal(tr_raft_transport_encode_data_chunk_prefix(
+                        sg_session, &payload, prefix, sizeof(prefix),
+                        &prefix_size, &sg_packet_size),
+                    SALTS_OK);
+        check_equal(sg_packet_size, contiguous_size);
+        check_equal(prefix_size + sizeof(data), sg_packet_size);
+        check_equal(memcmp(contiguous, prefix, prefix_size), 0);
+        check_equal(memcmp(contiguous + prefix_size, data, sizeof(data)), 0);
+
+        check_equal(tr_raft_transport_get_status(
+                        contiguous_session, &contiguous_status),
+                    SALTS_OK);
+        check_equal(tr_raft_transport_get_status(sg_session, &sg_status),
+                    SALTS_OK);
+        check_equal(contiguous_status.last_outbound_message_id, 1U);
+        check_equal(sg_status.last_outbound_message_id, 1U);
+        check_equal(contiguous_status.frames_encoded, 1U);
+        check_equal(sg_status.frames_encoded, 1U);
+        check_equal(contiguous_status.bytes_encoded, sg_status.bytes_encoded);
+
+        check_equal(tr_raft_transport_encode(
+                        contiguous_session, 78U, &heartbeat,
+                        contiguous_next, sizeof(contiguous_next),
+                        &contiguous_next_size),
+                    SALTS_OK);
+        check_equal(tr_raft_transport_encode(
+                        sg_session, 78U, &heartbeat,
+                        sg_next, sizeof(sg_next), &sg_next_size),
+                    SALTS_OK);
+        check_equal(contiguous_next_size, sg_next_size);
+        check_equal(memcmp(contiguous_next, sg_next, sg_next_size), 0);
+
+        check_equal(tr_raft_transport_session_destroy(sg_session), SALTS_OK);
+        check_equal(tr_raft_transport_session_destroy(contiguous_session),
+                    SALTS_OK);
     }
 
 }
