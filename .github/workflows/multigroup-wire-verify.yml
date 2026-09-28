@@ -31,8 +31,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p diagnostics
-          git clone --depth 1 https://github.com/qigao/salts.git ../salts             > diagnostics/salts-clone.log 2>&1
-          git clone --depth 1 https://github.com/qigao/salts-utils.git ../salts-utils
+          git clone --depth 1 --branch v1.8.0 https://github.com/qigao/salts.git ../salts             > diagnostics/salts-clone.log 2>&1
+          git clone --depth 1 --branch v4.1.0 https://github.com/qigao/salts-utils.git ../salts-utils
           git clone --depth 1 https://github.com/Cyan4973/xxHash.git ../xxhash             > diagnostics/salts-utils-clone.log 2>&1
 
       - name: Compile changed production sources and contract test
