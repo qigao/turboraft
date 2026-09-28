@@ -112,6 +112,7 @@ jobs:
           "$VCPKG_ROOT/vcpkg" install \
             --x-manifest-root="$GITHUB_WORKSPACE/.ci/orm-super-manifest" \
             --x-install-root="$VCPKG_INSTALLED_DIR" \
+            --only-binarycaching \
             --triplet=x64-linux
 
       - name: Build and install Salts 1.8.3
