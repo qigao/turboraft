@@ -20,7 +20,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch v1.8.0 https://github.com/qigao/salts.git ../salts
+          git clone --depth 1 --branch v1.8.3 https://github.com/qigao/salts.git ../salts
           git clone --depth 1 https://github.com/Cyan4973/xxHash.git ../xxhash
 
       - name: Build and run proposal durability benchmark
