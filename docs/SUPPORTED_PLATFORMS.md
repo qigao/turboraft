@@ -47,7 +47,7 @@ The first-party dependency policy is:
 | Dependency | Linux hosted gates | Windows hosted gate | Public contract |
 | --- | --- | --- | --- |
 | Salts | v1.8.0 source tag, built in the workflow | Salts.Native 1.8.0 Windows SDK | `find_package(Salts 1.8.0 EXACT CONFIG REQUIRED)` |
-| SaltsUtils | v4.1.0 source tag, built in the workflow | SaltsUtils.Native 4.1.0 Windows SDK | `find_package(SaltsUtils 4.1.0 EXACT CONFIG REQUIRED)`; supplies `tbe_compiler` |
+| SaltsUtils | v4.1.0 source tag, built in the workflow | SaltsUtils.Native 4.1.0 Windows SDK | `find_package(SaltsUtils 4.1.0 EXACT CONFIG REQUIRED)`; supplies `salts-idlc` |
 | FlowMQ | current `main`, built in the workflow | current `main`, built in the workflow | FlowMQ >= 1.1.0; TLS certificate/HELLO identity contract is required |
 | TurboDB | not a Core dependency | not a Core dependency | only opt-in Redis/SQLite application qualification workflows |
 
@@ -60,7 +60,7 @@ TurboRaft qualifies Salts and SaltsUtils against one published dependency epoch 
 - vcpkg builtin baseline:
   `b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01`.
 - re2c host package: `Qigao.Re2c.Binary 4.6.3` (binary reports re2c 4.6).
-- TurboRaft wire generation uses the SaltsUtils `tbe_compiler` from the
+- TurboRaft wire generation uses the SaltsUtils `salts-idlc` from the
   active host SDK/root.
 - The build-host Lemon parser generator is deliberately excluded from global
   product sanitizer instrumentation. Generated TurboRaft product code remains
