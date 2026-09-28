@@ -1,6 +1,7 @@
 #include <turboraft/raft_cnet_peer.h>
 
 #include "raft_group_queue.h"
+#include "raft_transport_internal.h"
 #include "raft_transport_payload_storage.h"
 
 #include <salts_error.h>
@@ -17,12 +18,14 @@ struct tr_raft_cnet_peer {
     tr_raft_transport_queue_limits_t outbound_limits;
     tr_raft_group_queue_token_t packet_token;
     mem_buffer_t *packet;
+    size_t packet_prefix_size;
     size_t packet_size;
     uint64_t frames_admitted;
     uint64_t bytes_admitted;
     uint64_t completed_writes;
     int packet_token_valid;
     int packet_ready;
+    int packet_data_sg;
     int write_pending;
     int stopping;
     int last_error;
@@ -238,6 +241,9 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
 {
     const tr_raft_owned_transport_payload_t *owned;
     tr_raft_owned_transport_payload_t discard;
+    tr_raft_group_queue_token_t next_token;
+    mem_slice_t segments[2] = {{0}};
+    size_t segment_count = 1U;
     int result;
 
     if (peer == NULL) {
@@ -251,50 +257,99 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
         return SALTS_EBUSY;
     }
 
-    if (!peer->packet_ready) {
-        result = tr_raft_group_queue_peek_next(
-            &peer->outbound, &peer->packet_token, &owned);
+    result = tr_raft_group_queue_peek_next(
+        &peer->outbound, &next_token, &owned);
+    if (result != SALTS_OK) {
+        peer->last_error = result;
+        return result;
+    }
+    if (peer->packet_ready) {
+        if (!peer->packet_token_valid || next_token != peer->packet_token) {
+            peer->last_error = SALTS_EPROTO;
+            return SALTS_EPROTO;
+        }
+    } else {
+        peer->packet_token = next_token;
+        peer->packet_data_sg = 0;
+        peer->packet_prefix_size = 0U;
+        peer->packet_size = 0U;
+
+        if (owned->payload.kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
+            owned->payload.data.data_chunk.data_length != 0U &&
+            owned->payload_data != NULL) {
+            result = tr_raft_transport_encode_data_chunk_prefix(
+                peer->transport, &owned->payload,
+                (uint8_t *)mem_buffer_data(peer->packet),
+                mem_buffer_capacity(peer->packet),
+                &peer->packet_prefix_size, &peer->packet_size);
+            if (result == SALTS_OK) {
+                peer->packet_data_sg = 1;
+            }
+        } else {
+            result = tr_raft_transport_encode_payload(
+                peer->transport, &owned->payload,
+                (uint8_t *)mem_buffer_data(peer->packet),
+                mem_buffer_capacity(peer->packet), &peer->packet_size);
+            if (result == SALTS_OK) {
+                peer->packet_prefix_size = peer->packet_size;
+            }
+        }
         if (result != SALTS_OK) {
             peer->last_error = result;
             return result;
         }
-        result = tr_raft_transport_encode_payload(
-            peer->transport, &owned->payload,
-            (uint8_t *)mem_buffer_data(peer->packet),
-            mem_buffer_capacity(peer->packet), &peer->packet_size);
-        if (result != SALTS_OK) {
-            peer->last_error = result;
-            return result;
-        }
-        mem_set_used(peer->packet, peer->packet_size);
+        mem_set_used(peer->packet, peer->packet_prefix_size);
         peer->packet_token_valid = 1;
         peer->packet_ready = 1;
     }
 
-    {
-        mem_slice_t packet_slice =
-            mem_slice(peer->packet, 0U, peer->packet_size);
+    segments[0] = mem_slice(
+        peer->packet, 0U, peer->packet_prefix_size);
+    if (segments[0].buffer == NULL ||
+        segments[0].length != peer->packet_prefix_size) {
+        peer->last_error = SALTS_EPROTO;
+        mem_slice_release(&segments[0]);
+        return SALTS_EPROTO;
+    }
 
-        if (packet_slice.buffer == NULL ||
-            packet_slice.length != peer->packet_size) {
+    if (peer->packet_data_sg) {
+        const size_t data_length =
+            owned->payload.data.data_chunk.data_length;
+        const uint8_t *data =
+            owned->payload.data.data_chunk.data;
+
+        if (owned->payload_data == NULL ||
+            data_length == 0U ||
+            mem_buffer_used(owned->payload_data) != data_length ||
+            (const uint8_t *)mem_buffer_const_data(owned->payload_data) != data) {
             peer->last_error = SALTS_EPROTO;
-            mem_slice_release(&packet_slice);
+            mem_slice_release(&segments[0]);
             return SALTS_EPROTO;
         }
-        result = cnet_send_slicev(
-            peer->client, peer->connection, &packet_slice, 1U);
-        mem_slice_release(&packet_slice);
+        segments[1] = mem_slice(owned->payload_data, 0U, data_length);
+        if (segments[1].buffer == NULL ||
+            segments[1].length != data_length) {
+            peer->last_error = SALTS_EPROTO;
+            mem_slice_release(&segments[1]);
+            mem_slice_release(&segments[0]);
+            return SALTS_EPROTO;
+        }
+        segment_count = 2U;
     }
+
+    result = cnet_send_slicev(
+        peer->client, peer->connection, segments, segment_count);
+    if (segment_count == 2U) {
+        mem_slice_release(&segments[1]);
+    }
+    mem_slice_release(&segments[0]);
     if (result != SALTS_OK) {
         if (result != SALTS_EBUSY) {
             peer->last_error = result;
         }
         return result;
     }
-    if (!peer->packet_token_valid) {
-        peer->last_error = SALTS_EPROTO;
-        return SALTS_EPROTO;
-    }
+
     memset(&discard, 0, sizeof(discard));
     result = tr_raft_group_queue_pop(
         &peer->outbound, peer->packet_token, &discard, NULL);
@@ -305,6 +360,8 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
     tr_raft_owned_transport_payload_release(&discard);
     peer->packet_token_valid = 0;
     peer->packet_ready = 0;
+    peer->packet_data_sg = 0;
+    peer->packet_prefix_size = 0U;
     peer->write_pending = 1;
     ++peer->frames_admitted;
     peer->bytes_admitted += peer->packet_size;

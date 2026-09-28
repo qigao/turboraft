@@ -42,9 +42,11 @@ own a socket or event loop.
 polls CNet, and calls `tr_raft_cnet_peer_step()` on the same owner thread.
 Outbound frames are staged in Salts `mem_buffer_t` storage and admitted through
 CNet's retained scatter/gather surface (`cnet_send_slicev`). TurboRaft does not
-fall back to the copied `cnet_send` data path. The current wire frame is one
-retained slice; future framing may split metadata and large payload backing into
-multiple slices without changing the peer API or wire byte stream.
+fall back to the copied `cnet_send` data path. Ordinary/control frames remain
+one retained slice. `DATA_CHUNK` uses two slices: the length/envelope/fixed
+metadata prefix and the queue-owned payload buffer. The concatenated bytes are
+identical to the contiguous wire encoder, but the chunk payload is not copied
+into the staging frame or CNet write storage.
 
 `TurboRaft::FlowMQ` uses one ROUTER plus one DEALER per peer. No connector
 thread, mutex handoff, hidden poller, or second ingress queue exists. The

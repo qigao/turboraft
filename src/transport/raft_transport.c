@@ -1,5 +1,8 @@
 #include <turboraft/raft_transport.h>
 
+#include "raft_transport_internal.h"
+#include "../wire/raft_wire_internal.h"
+
 #include <salts_error.h>
 
 #include <limits.h>
@@ -284,22 +287,17 @@ static int tr_raft_transport_payload_nodes(
     }
 }
 
-int tr_raft_transport_encode_payload(
+static int tr_raft_transport_prepare_outbound(
     tr_raft_transport_session_t *session,
     const tr_raft_transport_payload_t *payload,
-    uint8_t *output,
-    size_t output_capacity,
-    size_t *output_size)
+    tr_raft_wire_metadata_t *out_metadata)
 {
-    tr_raft_wire_metadata_t metadata;
     tr_raft_node_id_t from;
     tr_raft_node_id_t to;
-    size_t frame_size = 0U;
     int result;
 
-    if (session == NULL || payload == NULL || payload->group_id == 0U ||
-        output == NULL || output_size == NULL ||
-        output_capacity < TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE) {
+    if (session == NULL || payload == NULL || out_metadata == NULL ||
+        payload->group_id == 0U) {
         return SALTS_EINVAL;
     }
     result = tr_raft_transport_payload_nodes(payload, &from, &to);
@@ -312,10 +310,48 @@ int tr_raft_transport_encode_payload(
         return SALTS_EPROTO;
     }
 
-    memset(&metadata, 0, sizeof(metadata));
-    metadata.cluster_id = session->cluster_id;
-    metadata.group_id = payload->group_id;
-    metadata.message_id = session->next_outbound_message_id;
+    memset(out_metadata, 0, sizeof(*out_metadata));
+    out_metadata->cluster_id = session->cluster_id;
+    out_metadata->group_id = payload->group_id;
+    out_metadata->message_id = session->next_outbound_message_id;
+    return SALTS_OK;
+}
+
+static void tr_raft_transport_commit_outbound(
+    tr_raft_transport_session_t *session,
+    size_t packet_size)
+{
+    session->status.last_outbound_message_id =
+        session->next_outbound_message_id;
+    if (session->next_outbound_message_id == UINT64_MAX) {
+        session->outbound_ids_exhausted = 1;
+    } else {
+        session->next_outbound_message_id++;
+    }
+    session->status.frames_encoded++;
+    session->status.bytes_encoded += packet_size;
+}
+
+int tr_raft_transport_encode_payload(
+    tr_raft_transport_session_t *session,
+    const tr_raft_transport_payload_t *payload,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_size)
+{
+    tr_raft_wire_metadata_t metadata;
+    size_t frame_size = 0U;
+    int result;
+
+    if (output == NULL || output_size == NULL ||
+        output_capacity < TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE) {
+        return SALTS_EINVAL;
+    }
+    result = tr_raft_transport_prepare_outbound(
+        session, payload, &metadata);
+    if (result != SALTS_OK) {
+        return result;
+    }
 
     switch (payload->kind) {
     case TR_RAFT_WIRE_PAYLOAD_RAFT:
@@ -367,17 +403,66 @@ int tr_raft_transport_encode_payload(
         return SALTS_EPROTO;
     }
 
-    tr_raft_transport_write_u32_be(output, (uint32_t) frame_size);
+    tr_raft_transport_write_u32_be(output, (uint32_t)frame_size);
     *output_size = frame_size + TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE;
-    session->status.last_outbound_message_id =
-        session->next_outbound_message_id;
-    if (session->next_outbound_message_id == UINT64_MAX) {
-        session->outbound_ids_exhausted = 1;
-    } else {
-        session->next_outbound_message_id++;
+    tr_raft_transport_commit_outbound(session, *output_size);
+    return SALTS_OK;
+}
+
+int tr_raft_transport_encode_data_chunk_prefix(
+    tr_raft_transport_session_t *session,
+    const tr_raft_transport_payload_t *payload,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *out_prefix_size,
+    size_t *out_packet_size)
+{
+    tr_raft_wire_metadata_t metadata;
+    size_t frame_prefix_size = 0U;
+    size_t frame_size = 0U;
+    int result;
+
+    if (out_prefix_size != NULL) {
+        *out_prefix_size = 0U;
     }
-    session->status.frames_encoded++;
-    session->status.bytes_encoded += *output_size;
+    if (out_packet_size != NULL) {
+        *out_packet_size = 0U;
+    }
+    if (payload == NULL ||
+        payload->kind != TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK ||
+        output == NULL || out_prefix_size == NULL ||
+        out_packet_size == NULL ||
+        output_capacity < TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE) {
+        return SALTS_EINVAL;
+    }
+
+    result = tr_raft_transport_prepare_outbound(
+        session, payload, &metadata);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    result = tr_raft_wire_encode_data_chunk_prefix(
+        session->codec, &metadata, &payload->data.data_chunk,
+        output + TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE,
+        output_capacity - TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE,
+        &frame_prefix_size, &frame_size);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    if (frame_size > UINT32_MAX ||
+        frame_prefix_size >
+            SIZE_MAX - TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE ||
+        frame_size >
+            SIZE_MAX - TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE) {
+        return SALTS_EPROTO;
+    }
+
+    tr_raft_transport_write_u32_be(output, (uint32_t)frame_size);
+    *out_prefix_size =
+        frame_prefix_size + TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE;
+    *out_packet_size =
+        frame_size + TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE;
+    tr_raft_transport_commit_outbound(session, *out_packet_size);
     return SALTS_OK;
 }
 

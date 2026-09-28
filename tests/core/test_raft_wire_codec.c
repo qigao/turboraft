@@ -1,5 +1,7 @@
 #include <turboraft/raft_wire_codec.h>
 
+#include "../../src/wire/raft_wire_internal.h"
+
 #include <tinytest.h>
 #include <salts_error.h>
 
@@ -386,6 +388,51 @@ spec("raft wire codec")
         check_equal(decoded_metadata.group_id, 7U);
         check_equal(decoded.data_length, sizeof(data));
         check_equal(decoded.data, data, sizeof(data));
+        tr_raft_wire_codec_destroy(codec);
+    }
+
+    it("preserves DATA_CHUNK bytes when payload is emitted as a second SG span")
+    {
+        tr_raft_wire_codec_t *codec = NULL;
+        tr_raft_wire_metadata_t metadata = metadata_for(81U, 180U);
+        tr_raft_data_chunk_t chunk;
+        uint8_t data[4096];
+        uint8_t contiguous[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+        uint8_t prefix[TR_RAFT_WIRE_HEADER_SIZE + 128U];
+        size_t contiguous_length = 0U;
+        size_t prefix_length = 0U;
+        size_t sg_frame_length = 0U;
+
+        memset(data, 0x5c, sizeof(data));
+        memset(&chunk, 0, sizeof(chunk));
+        chunk.from = 1U;
+        chunk.to = 2U;
+        chunk.term = 12U;
+        chunk.stream_id = 33U;
+        chunk.stream_size = sizeof(data);
+        chunk.data = data;
+        chunk.data_length = sizeof(data);
+        chunk.done = true;
+        memset(chunk.stream_digest, 0x91, sizeof(chunk.stream_digest));
+
+        check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
+        check_equal(tr_raft_wire_encode_data_chunk(
+                         codec, &metadata, &chunk,
+                         contiguous, sizeof(contiguous),
+                         &contiguous_length),
+                    SALTS_OK);
+        check_equal(tr_raft_wire_encode_data_chunk_prefix(
+                         codec, &metadata, &chunk,
+                         prefix, sizeof(prefix),
+                         &prefix_length, &sg_frame_length),
+                    SALTS_OK);
+        check_equal(sg_frame_length, contiguous_length);
+        check_true(prefix_length < sg_frame_length);
+        check_equal(prefix_length + sizeof(data), sg_frame_length);
+        check_equal(memcmp(contiguous, prefix, prefix_length), 0);
+        check_equal(memcmp(contiguous + prefix_length,
+                           data, sizeof(data)), 0);
+
         tr_raft_wire_codec_destroy(codec);
     }
 
