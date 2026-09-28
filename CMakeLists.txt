@@ -106,16 +106,16 @@ if(NOT DEFINED ENV{${_turboraft_tbe_root_name}} OR
           "${_turboraft_tbe_root_name} must name the SaltsUtils host install prefix")
 endif()
 file(REAL_PATH "$ENV{${_turboraft_tbe_root_name}}" _turboraft_tbe_root_real)
-unset(TURBORAFT_TBE_COMPILER CACHE)
-unset(TURBORAFT_TBE_COMPILER)
-find_program(TURBORAFT_TBE_COMPILER NAMES tbe_compiler tbe_compiler.exe
+unset(TURBORAFT_IDLC CACHE)
+unset(TURBORAFT_IDLC)
+find_program(TURBORAFT_IDLC NAMES salts-idlc salts-idlc.exe
              PATHS "${_turboraft_tbe_root_real}/bin" NO_DEFAULT_PATH
-             DOC "SaltsUtils TBE schema compiler")
-if(NOT TURBORAFT_TBE_COMPILER)
+             DOC "SaltsUtils IDL/schema compiler")
+if(NOT TURBORAFT_IDLC)
   message(
-    FATAL_ERROR "tbe_compiler is required to generate the TurboRaft wire codec")
+    FATAL_ERROR "salts-idlc is required to generate the TurboRaft wire codec")
 endif()
-file(REAL_PATH "${TURBORAFT_TBE_COMPILER}" _turboraft_tbe_compiler_real)
+file(REAL_PATH "${TURBORAFT_IDLC}" _turboraft_tbe_compiler_real)
 cmake_path(IS_PREFIX _turboraft_tbe_root_real
            "${_turboraft_tbe_compiler_real}" NORMALIZE
            _turboraft_tbe_compiler_in_root)
@@ -123,7 +123,7 @@ if(NOT _turboraft_tbe_compiler_in_root)
   message(FATAL_ERROR
           "tbe_compiler resolved outside ${_turboraft_tbe_root_name}: ${_turboraft_tbe_compiler_real}")
 endif()
-set(TURBORAFT_TBE_COMPILER "${_turboraft_tbe_compiler_real}")
+set(TURBORAFT_IDLC "${_turboraft_tbe_compiler_real}")
 
 set(TURBORAFT_WIRE_SCHEMA
     "${CMAKE_CURRENT_SOURCE_DIR}/schema/turboraft_wire.schema")
@@ -137,10 +137,10 @@ add_custom_command(
   OUTPUT "${TURBORAFT_WIRE_GENERATED_HEADER}"
          "${TURBORAFT_WIRE_GENERATED_SOURCE}"
   COMMAND
-    "${TURBORAFT_TBE_COMPILER}" "${TURBORAFT_WIRE_SCHEMA}" --lang c --output
+    "${TURBORAFT_IDLC}" "${TURBORAFT_WIRE_SCHEMA}" --lang c --output
     "${TURBORAFT_WIRE_GENERATED_HEADER}" --source-output
     "${TURBORAFT_WIRE_GENERATED_SOURCE}"
-  DEPENDS "${TURBORAFT_WIRE_SCHEMA}" "${TURBORAFT_TBE_COMPILER}"
+  DEPENDS "${TURBORAFT_WIRE_SCHEMA}" "${TURBORAFT_IDLC}"
   COMMENT "Generating TurboRaft wire codec from schema"
   VERBATIM)
 
@@ -154,10 +154,10 @@ add_custom_command(
   OUTPUT "${TURBORAFT_WIRE_V3_GENERATED_HEADER}"
          "${TURBORAFT_WIRE_V3_GENERATED_SOURCE}"
   COMMAND
-    "${TURBORAFT_TBE_COMPILER}" "${TURBORAFT_WIRE_V3_SCHEMA}" --lang c --output
+    "${TURBORAFT_IDLC}" "${TURBORAFT_WIRE_V3_SCHEMA}" --lang c --output
     "${TURBORAFT_WIRE_V3_GENERATED_HEADER}" --source-output
     "${TURBORAFT_WIRE_V3_GENERATED_SOURCE}"
-  DEPENDS "${TURBORAFT_WIRE_V3_SCHEMA}" "${TURBORAFT_TBE_COMPILER}"
+  DEPENDS "${TURBORAFT_WIRE_V3_SCHEMA}" "${TURBORAFT_IDLC}"
   COMMENT "Generating TurboRaft v3 batch wire codec from schema"
   VERBATIM)
 
