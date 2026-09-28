@@ -1,4 +1,5 @@
 #include <orm.h>
+#include <orm_runtime.h>
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -46,23 +47,53 @@ static orm_status_t app_execute(
     return ORM_STATUS_OK;
 }
 
-static orm_connection_t *app_open(const char *path)
+static orm_connection_t *app_open(const char *path,
+                                  orm_runtime_t **out_runtime)
 {
+    const char *plugin = getenv("ORM_SQLITE_PLUGIN");
+    orm_runtime_config_t runtime_config;
+    orm_driver_load_config_t load;
     orm_config_t config;
     orm_option_t option;
+    orm_runtime_t *runtime = NULL;
     orm_connection_t *connection = NULL;
     orm_error_t error;
 
+    if (path == NULL || out_runtime == NULL || plugin == NULL ||
+        plugin[0] == '\0') {
+        return NULL;
+    }
+    *out_runtime = NULL;
     orm_error_init(&error);
+    orm_runtime_config_init(&runtime_config);
+    if (orm_runtime_create(&runtime_config, &runtime, &error) !=
+        ORM_STATUS_OK) {
+        return NULL;
+    }
+    memset(&load, 0, sizeof(load));
+    load.struct_size = (uint32_t)sizeof(load);
+    load.abi_version = ORM_RUNTIME_ABI_VERSION;
+    load.module_path = orm_view(plugin);
+    load.expected_driver_id = orm_view("sqlite");
+    if (orm_runtime_load_driver(runtime, &load, &error) != ORM_STATUS_OK) {
+        (void)orm_runtime_close(runtime, &error);
+        orm_runtime_release(runtime);
+        return NULL;
+    }
+
     orm_config(&config);
     option.keyword = orm_view("filename");
     option.value = orm_view(path);
     config.driver = orm_view("sqlite");
     config.options = &option;
     config.option_count = 1U;
-    if (orm_connect(&config, &connection, &error) != ORM_STATUS_OK) {
+    if (orm_runtime_connect(runtime, &config, &connection, &error) !=
+        ORM_STATUS_OK) {
+        (void)orm_runtime_close(runtime, &error);
+        orm_runtime_release(runtime);
         return NULL;
     }
+    *out_runtime = runtime;
     return connection;
 }
 
@@ -191,13 +222,15 @@ static int app_verify(orm_connection_t *connection, int applied_expected)
 
 int main(int argc, char **argv)
 {
+    orm_runtime_t *runtime = NULL;
     orm_connection_t *connection;
+    orm_error_t error;
     int result = EXIT_FAILURE;
 
     if (argc != 3 || argv[1] == NULL || argv[2] == NULL) {
         return EXIT_FAILURE;
     }
-    connection = app_open(argv[2]);
+    connection = app_open(argv[2], &runtime);
     if (connection == NULL) {
         return EXIT_FAILURE;
     }
@@ -213,5 +246,10 @@ int main(int argc, char **argv)
         result = app_verify(connection, 1);
     }
     orm_disconnect(connection);
+    orm_error_init(&error);
+    if (orm_runtime_close(runtime, &error) != ORM_STATUS_OK) {
+        result = EXIT_FAILURE;
+    }
+    orm_runtime_release(runtime);
     return result;
 }
