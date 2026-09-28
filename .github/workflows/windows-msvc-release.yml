@@ -102,7 +102,7 @@ jobs:
           foreach ($path in @(
             (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
             (Join-Path $saltsUtilsRoot "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"),
-            (Join-Path $saltsUtilsRoot "bin\tbe_compiler.exe"))) {
+            (Join-Path $saltsUtilsRoot "bin\salts-idlc.exe"))) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
               throw "missing restored SDK file: $path"
             }
