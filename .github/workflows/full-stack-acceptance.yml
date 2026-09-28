@@ -137,7 +137,7 @@ jobs:
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
             -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
           cmake --build .ci/build/salts-utils --target install --parallel 2
-          test -x "$SALTS_UTILS_ROOT/bin/tbe_compiler"
+          test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
 
       - name: Build and install FlowMQ main
         shell: bash
@@ -159,7 +159,7 @@ jobs:
           set -euo pipefail
           test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
           test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
-          test -x "$SALTS_UTILS_ROOT/bin/tbe_compiler"
+          test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
           test -f "$FLOWMQ_ROOT/lib/cmake/FlowMQ/FlowMQConfig.cmake"
 
       - name: Configure TurboRaft Release with tests
