@@ -187,7 +187,7 @@ target_include_directories(
 target_link_libraries(
   turboraft_core
   PUBLIC Salts::Core
-  PRIVATE Salts::CSTL Salts::Databind)
+  PRIVATE Salts::CSTL Salts::DataBind)
 
 add_library(turboraft_cflow_state_machine STATIC
             src/integrations/raft_cflow_state_machine.c)
