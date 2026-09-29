@@ -391,6 +391,61 @@ spec("raft wire codec")
         tr_raft_wire_codec_destroy(codec);
     }
 
+    it("preserves SNAPSHOT_CHUNK bytes when chunk data is a second SG span")
+    {
+        tr_raft_wire_codec_t *codec = NULL;
+        tr_raft_wire_metadata_t metadata = metadata_for(71U, 170U);
+        tr_raft_snapshot_chunk_t chunk;
+        uint8_t data[4096];
+        static uint8_t contiguous[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+        uint8_t prefix[TR_RAFT_WIRE_HEADER_SIZE + 512U];
+        size_t contiguous_length = 0U;
+        size_t prefix_length = 0U;
+        size_t sg_frame_length = 0U;
+        size_t index;
+
+        memset(data, 0x73, sizeof(data));
+        memset(&chunk, 0, sizeof(chunk));
+        chunk.from = 1U;
+        chunk.to = 2U;
+        chunk.term = 12U;
+        chunk.snapshot_index = 41U;
+        chunk.snapshot_term = 11U;
+        chunk.snapshot_size = sizeof(data);
+        chunk.data = data;
+        chunk.data_length = sizeof(data);
+        chunk.done = true;
+        chunk.has_configuration = true;
+        chunk.configuration.phase = TR_RAFT_CONF_FINAL;
+        chunk.configuration.member_count = 1U;
+        chunk.configuration.members[0].node_id = 2U;
+        chunk.configuration.members[0].roles =
+            TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+        for (index = 0U; index < sizeof(chunk.snapshot_digest); ++index) {
+            chunk.snapshot_digest[index] = (uint8_t)(0x40U + index);
+        }
+
+        check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
+        check_equal(tr_raft_wire_encode_snapshot_chunk(
+                         codec, &metadata, &chunk,
+                         contiguous, sizeof(contiguous),
+                         &contiguous_length),
+                    SALTS_OK);
+        check_equal(tr_raft_wire_encode_snapshot_chunk_prefix(
+                         codec, &metadata, &chunk,
+                         prefix, sizeof(prefix),
+                         &prefix_length, &sg_frame_length),
+                    SALTS_OK);
+        check_equal(sg_frame_length, contiguous_length);
+        check_true(prefix_length < sg_frame_length);
+        check_equal(prefix_length + sizeof(data), sg_frame_length);
+        check_equal(memcmp(contiguous, prefix, prefix_length), 0);
+        check_equal(memcmp(contiguous + prefix_length,
+                           data, sizeof(data)), 0);
+
+        tr_raft_wire_codec_destroy(codec);
+    }
+
     it("preserves DATA_CHUNK bytes when payload is emitted as a second SG span")
     {
         tr_raft_wire_codec_t *codec = NULL;
