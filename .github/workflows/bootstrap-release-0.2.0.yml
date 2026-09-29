@@ -1,0 +1,33 @@
+name: Bootstrap TurboRaft 0.2.0 release
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/bootstrap-release-0.2.0.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create v0.2.0 tag once
+        env:
+          TAG: v0.2.0
+          TARGET_SHA: 159fe94de151c8aeb830623582f510a4022b1186
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags origin
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists; nothing to do."
+            exit 0
+          fi
+          git tag "$TAG" "$TARGET_SHA"
+          git push origin "refs/tags/$TAG"
