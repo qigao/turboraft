@@ -260,6 +260,100 @@ spec("Raft transport framing")
         check_equal(tr_raft_transport_session_destroy(sender), SALTS_OK);
     }
 
+    it("keeps SNAPSHOT_CHUNK SG framing and message-id progression identical")
+    {
+        transport_capture_t left_capture;
+        transport_capture_t right_capture;
+        tr_raft_transport_session_t *contiguous_session;
+        tr_raft_transport_session_t *sg_session;
+        tr_raft_transport_payload_t payload;
+        tr_raft_transport_status_t contiguous_status;
+        tr_raft_transport_status_t sg_status;
+        tr_raft_message_t heartbeat = make_heartbeat(1U, 2U);
+        uint8_t data[4096];
+        static uint8_t contiguous[TR_RAFT_TRANSPORT_MAX_PACKET_SIZE];
+        uint8_t prefix[1024];
+        static uint8_t contiguous_next[TR_RAFT_TRANSPORT_MAX_PACKET_SIZE];
+        static uint8_t sg_next[TR_RAFT_TRANSPORT_MAX_PACKET_SIZE];
+        size_t contiguous_size = 0U;
+        size_t prefix_size = 0U;
+        size_t sg_packet_size = 0U;
+        size_t contiguous_next_size = 0U;
+        size_t sg_next_size = 0U;
+        size_t index;
+
+        memset(&left_capture, 0, sizeof(left_capture));
+        memset(&right_capture, 0, sizeof(right_capture));
+        memset(&payload, 0, sizeof(payload));
+        memset(data, 0x67, sizeof(data));
+        contiguous_session = make_session(1U, 2U, &left_capture);
+        sg_session = make_session(1U, 2U, &right_capture);
+
+        payload.group_id = 76U;
+        payload.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
+        payload.data.snapshot_chunk.from = 1U;
+        payload.data.snapshot_chunk.to = 2U;
+        payload.data.snapshot_chunk.term = 7U;
+        payload.data.snapshot_chunk.snapshot_index = 19U;
+        payload.data.snapshot_chunk.snapshot_term = 6U;
+        payload.data.snapshot_chunk.snapshot_size = sizeof(data);
+        payload.data.snapshot_chunk.data = data;
+        payload.data.snapshot_chunk.data_length = sizeof(data);
+        payload.data.snapshot_chunk.done = true;
+        payload.data.snapshot_chunk.has_configuration = true;
+        payload.data.snapshot_chunk.configuration.phase = TR_RAFT_CONF_FINAL;
+        payload.data.snapshot_chunk.configuration.member_count = 1U;
+        payload.data.snapshot_chunk.configuration.members[0].node_id = 2U;
+        payload.data.snapshot_chunk.configuration.members[0].roles =
+            TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+        for (index = 0U;
+             index < sizeof(payload.data.snapshot_chunk.snapshot_digest);
+             ++index) {
+            payload.data.snapshot_chunk.snapshot_digest[index] =
+                (uint8_t)(0x50U + index);
+        }
+
+        check_equal(tr_raft_transport_encode_payload(
+                        contiguous_session, &payload,
+                        contiguous, sizeof(contiguous), &contiguous_size),
+                    SALTS_OK);
+        check_equal(tr_raft_transport_encode_snapshot_chunk_prefix(
+                        sg_session, &payload, prefix, sizeof(prefix),
+                        &prefix_size, &sg_packet_size),
+                    SALTS_OK);
+        check_equal(sg_packet_size, contiguous_size);
+        check_equal(prefix_size + sizeof(data), sg_packet_size);
+        check_equal(memcmp(contiguous, prefix, prefix_size), 0);
+        check_equal(memcmp(contiguous + prefix_size, data, sizeof(data)), 0);
+
+        check_equal(tr_raft_transport_get_status(
+                        contiguous_session, &contiguous_status),
+                    SALTS_OK);
+        check_equal(tr_raft_transport_get_status(sg_session, &sg_status),
+                    SALTS_OK);
+        check_equal(contiguous_status.last_outbound_message_id, 1U);
+        check_equal(sg_status.last_outbound_message_id, 1U);
+        check_equal(contiguous_status.frames_encoded, 1U);
+        check_equal(sg_status.frames_encoded, 1U);
+        check_equal(contiguous_status.bytes_encoded, sg_status.bytes_encoded);
+
+        check_equal(tr_raft_transport_encode(
+                        contiguous_session, 79U, &heartbeat,
+                        contiguous_next, sizeof(contiguous_next),
+                        &contiguous_next_size),
+                    SALTS_OK);
+        check_equal(tr_raft_transport_encode(
+                        sg_session, 79U, &heartbeat,
+                        sg_next, sizeof(sg_next), &sg_next_size),
+                    SALTS_OK);
+        check_equal(contiguous_next_size, sg_next_size);
+        check_equal(memcmp(contiguous_next, sg_next, sg_next_size), 0);
+
+        check_equal(tr_raft_transport_session_destroy(sg_session), SALTS_OK);
+        check_equal(tr_raft_transport_session_destroy(contiguous_session),
+                    SALTS_OK);
+    }
+
     it("keeps DATA_CHUNK SG framing and message-id progression identical")
     {
         transport_capture_t left_capture;

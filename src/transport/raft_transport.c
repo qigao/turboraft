@@ -466,6 +466,69 @@ int tr_raft_transport_encode_data_chunk_prefix(
     return SALTS_OK;
 }
 
+
+int tr_raft_transport_encode_snapshot_chunk_prefix(
+    tr_raft_transport_session_t *session,
+    const tr_raft_transport_payload_t *payload,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *out_prefix_size,
+    size_t *out_packet_size)
+{
+    tr_raft_wire_metadata_t metadata;
+    size_t frame_prefix_size = 0U;
+    size_t frame_size = 0U;
+    int result;
+
+    if (out_prefix_size != NULL) {
+        *out_prefix_size = 0U;
+    }
+    if (out_packet_size != NULL) {
+        *out_packet_size = 0U;
+    }
+    if (payload == NULL ||
+        payload->kind != TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK ||
+        output == NULL || out_prefix_size == NULL ||
+        out_packet_size == NULL ||
+        output_capacity < TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE) {
+        return SALTS_EINVAL;
+    }
+    if (session == NULL ||
+        payload->data.snapshot_chunk.data_length >
+            session->snapshot_chunk_size) {
+        return session == NULL ? SALTS_EINVAL : SALTS_EPROTONOSUPPORT;
+    }
+
+    result = tr_raft_transport_prepare_outbound(
+        session, payload, &metadata);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    result = tr_raft_wire_encode_snapshot_chunk_prefix(
+        session->codec, &metadata, &payload->data.snapshot_chunk,
+        output + TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE,
+        output_capacity - TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE,
+        &frame_prefix_size, &frame_size);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    if (frame_size > UINT32_MAX ||
+        frame_prefix_size >
+            SIZE_MAX - TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE ||
+        frame_size >
+            SIZE_MAX - TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE) {
+        return SALTS_EPROTO;
+    }
+
+    tr_raft_transport_write_u32_be(output, (uint32_t)frame_size);
+    *out_prefix_size =
+        frame_prefix_size + TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE;
+    *out_packet_size =
+        frame_size + TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE;
+    tr_raft_transport_commit_outbound(session, *out_packet_size);
+    return SALTS_OK;
+}
+
 int tr_raft_transport_encode(
     tr_raft_transport_session_t *session,
     tr_raft_group_id_t group_id,
