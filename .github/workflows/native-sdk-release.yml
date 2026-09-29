@@ -1,0 +1,22 @@
+name: TurboRaft native SDK release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: turboraft-native-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    uses: ./.github/workflows/native-sdk-pipeline.yml
+    with:
+      publish: true
+      source_sha: ${{ github.sha }}
+    secrets: inherit
