@@ -25,7 +25,7 @@ struct tr_raft_cnet_peer {
     uint64_t completed_writes;
     int packet_token_valid;
     int packet_ready;
-    int packet_data_sg;
+    int packet_payload_sg;
     int write_pending;
     int stopping;
     int last_error;
@@ -45,6 +45,40 @@ static size_t tr_raft_cnet_payload_bytes(
     }
     return 0U;
 }
+
+static int tr_raft_cnet_owned_payload_view(
+    const tr_raft_owned_transport_payload_t *owned,
+    const uint8_t **out_data,
+    size_t *out_size)
+{
+    const uint8_t *data;
+    size_t size;
+
+    if (owned == NULL || out_data == NULL || out_size == NULL) {
+        return SALTS_EINVAL;
+    }
+    switch (owned->payload.kind) {
+    case TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK:
+        data = owned->payload.data.snapshot_chunk.data;
+        size = owned->payload.data.snapshot_chunk.data_length;
+        break;
+    case TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK:
+        data = owned->payload.data.data_chunk.data;
+        size = owned->payload.data.data_chunk.data_length;
+        break;
+    default:
+        return SALTS_ENOTSUP;
+    }
+    if (size == 0U || data == NULL || owned->payload_data == NULL ||
+        mem_buffer_used(owned->payload_data) != size ||
+        (const uint8_t *)mem_buffer_const_data(owned->payload_data) != data) {
+        return SALTS_EPROTO;
+    }
+    *out_data = data;
+    *out_size = size;
+    return SALTS_OK;
+}
+
 
 static void tr_raft_cnet_release_owned(
     tr_raft_owned_transport_payload_t *owned)
@@ -242,6 +276,8 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
     const tr_raft_owned_transport_payload_t *owned;
     tr_raft_owned_transport_payload_t discard;
     tr_raft_group_queue_token_t next_token;
+    const uint8_t *payload_data = NULL;
+    size_t payload_size = 0U;
     mem_slice_t segments[2] = {{0}};
     size_t segment_count = 1U;
     int result;
@@ -270,20 +306,35 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
         }
     } else {
         peer->packet_token = next_token;
-        peer->packet_data_sg = 0;
+        peer->packet_payload_sg = 0;
         peer->packet_prefix_size = 0U;
         peer->packet_size = 0U;
 
-        if (owned->payload.kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
-            owned->payload.data.data_chunk.data_length != 0U &&
-            owned->payload_data != NULL) {
-            result = tr_raft_transport_encode_data_chunk_prefix(
-                peer->transport, &owned->payload,
-                (uint8_t *)mem_buffer_data(peer->packet),
-                mem_buffer_capacity(peer->packet),
-                &peer->packet_prefix_size, &peer->packet_size);
+        if ((owned->payload.kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
+             owned->payload.data.data_chunk.data_length != 0U) ||
+            (owned->payload.kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK &&
+             owned->payload.data.snapshot_chunk.data_length != 0U)) {
+            result = tr_raft_cnet_owned_payload_view(
+                owned, &payload_data, &payload_size);
+            if (result != SALTS_OK) {
+                peer->last_error = result;
+                return result;
+            }
+            if (owned->payload.kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK) {
+                result = tr_raft_transport_encode_data_chunk_prefix(
+                    peer->transport, &owned->payload,
+                    (uint8_t *)mem_buffer_data(peer->packet),
+                    mem_buffer_capacity(peer->packet),
+                    &peer->packet_prefix_size, &peer->packet_size);
+            } else {
+                result = tr_raft_transport_encode_snapshot_chunk_prefix(
+                    peer->transport, &owned->payload,
+                    (uint8_t *)mem_buffer_data(peer->packet),
+                    mem_buffer_capacity(peer->packet),
+                    &peer->packet_prefix_size, &peer->packet_size);
+            }
             if (result == SALTS_OK) {
-                peer->packet_data_sg = 1;
+                peer->packet_payload_sg = 1;
             }
         } else {
             result = tr_raft_transport_encode_payload(
@@ -312,23 +363,17 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
         return SALTS_EPROTO;
     }
 
-    if (peer->packet_data_sg) {
-        const size_t data_length =
-            owned->payload.data.data_chunk.data_length;
-        const uint8_t *data =
-            owned->payload.data.data_chunk.data;
-
-        if (owned->payload_data == NULL ||
-            data_length == 0U ||
-            mem_buffer_used(owned->payload_data) != data_length ||
-            (const uint8_t *)mem_buffer_const_data(owned->payload_data) != data) {
-            peer->last_error = SALTS_EPROTO;
+    if (peer->packet_payload_sg) {
+        result = tr_raft_cnet_owned_payload_view(
+            owned, &payload_data, &payload_size);
+        if (result != SALTS_OK) {
+            peer->last_error = result;
             mem_slice_release(&segments[0]);
-            return SALTS_EPROTO;
+            return result;
         }
-        segments[1] = mem_slice(owned->payload_data, 0U, data_length);
+        segments[1] = mem_slice(owned->payload_data, 0U, payload_size);
         if (segments[1].buffer == NULL ||
-            segments[1].length != data_length) {
+            segments[1].length != payload_size) {
             peer->last_error = SALTS_EPROTO;
             mem_slice_release(&segments[1]);
             mem_slice_release(&segments[0]);
@@ -360,7 +405,7 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
     tr_raft_owned_transport_payload_release(&discard);
     peer->packet_token_valid = 0;
     peer->packet_ready = 0;
-    peer->packet_data_sg = 0;
+    peer->packet_payload_sg = 0;
     peer->packet_prefix_size = 0U;
     peer->write_pending = 1;
     ++peer->frames_admitted;
