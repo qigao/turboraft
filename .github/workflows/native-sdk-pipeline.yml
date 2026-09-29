@@ -37,8 +37,13 @@ jobs:
           test "$manifest_version" = "$source_version"
           tag="v$source_version"
           if [[ "${{ inputs.publish }}" == "true" ]]; then
-            test "$GITHUB_REF_TYPE" = "tag"
-            test "$GITHUB_REF_NAME" = "$tag"
+            if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+              test "$GITHUB_REF_NAME" = "$tag"
+            else
+              remote_sha="$(git ls-remote origin "refs/tags/$tag" | awk '{print $1}')"
+              test -n "$remote_sha"
+              test "$remote_sha" = "${{ inputs.source_sha }}"
+            fi
             package_version="$source_version"
           else
             package_version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
