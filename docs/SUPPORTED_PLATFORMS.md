@@ -48,7 +48,7 @@ The first-party dependency policy is:
 | --- | --- | --- | --- |
 | Salts | v1.8.3 source tag, built in the workflow | Salts.Native 1.8.3 Windows SDK | `find_package(Salts 1.8.3 EXACT CONFIG REQUIRED)` |
 | SaltsUtils | v4.1.3 source tag, built in the workflow | SaltsUtils.Native 4.1.3 Windows SDK | `find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED)`; supplies `salts-idlc` |
-| FlowMQ | current `main`, built in the workflow | current `main`, built in the workflow | FlowMQ >= 1.1.0; TLS certificate/HELLO identity contract is required |
+| FlowMQ | current `main` in integration gates; FlowMQ.Native 1.1.0 in package qualification | current `main` in integration gates; FlowMQ.Native 1.1.0 in package qualification | FlowMQ >= 1.1.0; TLS certificate/HELLO identity contract is required |
 | TurboDB | not a Core dependency | not a Core dependency | only opt-in Redis/SQLite application qualification workflows |
 
 TurboRaft qualifies Salts and SaltsUtils against one published dependency epoch across platforms: Linux builds the released source tags and Windows restores the matching released SDK packages. FlowMQ remains a current-source integration dependency and is built against those exact roots. This prevents an ambient or moving Salts mainline from changing TurboRaft qualification semantics.
@@ -67,10 +67,17 @@ TurboRaft qualifies Salts and SaltsUtils against one published dependency epoch 
   instrumented.
 
 The hosted workflows consume the shared `qigao/vcpkg-cache` and shared re2c
-tooling. A cache miss may rebuild a dependency, but it must not change the
-dependency version or qualification semantics.
+tooling. Native release and package-qualification dependency restores are
+`--only-binarycaching`; a cache miss is an infrastructure failure and must not
+silently rebuild a third-party dependency inside a consumer workflow.
 
 ## Package qualification
+
+TurboRaft 0.2.x publishes `TurboRaft.Native` for the release-qualified
+`linux-x64` and `windows-x64` SDKs only. The package has exact NuGet
+dependencies on Salts.Native 1.8.3, SaltsUtils.Native 4.1.3, and
+FlowMQ.Native 1.1.0. macOS and Android remain intentionally absent until they
+gain hosted release qualification.
 
 A build is not qualified merely because the repository itself compiles.
 
