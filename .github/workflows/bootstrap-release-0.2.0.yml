@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   tag:
@@ -17,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Create v0.2.0 tag once
+      - name: Ensure v0.2.0 tag exists
         env:
           TAG: v0.2.0
           TARGET_SHA: 159fe94de151c8aeb830623582f510a4022b1186
@@ -25,9 +26,19 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --tags origin
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "$TAG already exists; nothing to do."
+          remote_sha="$(git ls-remote origin "refs/tags/$TAG" | awk '{print $1}')"
+          if [[ -n "$remote_sha" ]]; then
+            test "$remote_sha" = "$TARGET_SHA"
+            echo "$TAG already points to $TARGET_SHA."
             exit 0
           fi
           git tag "$TAG" "$TARGET_SHA"
           git push origin "refs/tags/$TAG"
+
+  publish:
+    needs: tag
+    uses: ./.github/workflows/native-sdk-pipeline.yml
+    with:
+      publish: true
+      source_sha: 159fe94de151c8aeb830623582f510a4022b1186
+    secrets: inherit
