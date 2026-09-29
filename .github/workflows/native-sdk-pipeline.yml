@@ -1,0 +1,440 @@
+name: TurboRaft native SDK pipeline
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        required: true
+        type: boolean
+      source_sha:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  SALTS_SDK_VERSION: "1.8.3"
+  SALTS_UTILS_SDK_VERSION: "4.1.3"
+  FLOWMQ_SDK_VERSION: "1.1.0"
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    outputs:
+      source_version: ${{ steps.meta.outputs.source_version }}
+      package_version: ${{ steps.meta.outputs.package_version }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_version="$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{print $2; exit}' CMakeLists.txt)"
+          [[ "$source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          manifest_version="$(python3 -c 'import json; print(json.load(open("vcpkg.json", encoding="utf-8"))["version-semver"])')"
+          test "$manifest_version" = "$source_version"
+          tag="v$source_version"
+          if [[ "${{ inputs.publish }}" == "true" ]]; then
+            test "$GITHUB_REF_TYPE" = "tag"
+            test "$GITHUB_REF_NAME" = "$tag"
+            package_version="$source_version"
+          else
+            package_version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+          fi
+          echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
+          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux x64 SDK
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Prepare toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+      - name: Restore released native SDK dependencies
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/turboraft-linux-nuget.config"
+          packages="$RUNNER_TEMP/turboraft-linux-dependencies"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json             --name github --username qigao --password "$GITHUB_TOKEN"             --store-password-in-clear-text --configfile "$config"
+          dotnet restore packaging/nuget/TurboRaft.Native.csproj             --configfile "$config" --packages "$packages"
+          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "FLOWMQ_ROOT=$packages/flowmq.native/$FLOWMQ_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+      - name: Restore vcpkg dependencies cache-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install             --x-manifest-root=.             --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed"             --triplet x64-linux             --only-binarycaching
+      - name: Configure, build and install SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          prefix="$GITHUB_WORKSPACE/stage/sdk/linux-x64"
+          cmake -S . -B build/native-sdk -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=OFF             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             -DCMAKE_INSTALL_PREFIX="$prefix"             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF             -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF             -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=OFF             -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
+          cmake --build build/native-sdk --parallel 2
+          cmake --install build/native-sdk
+          test -f "$prefix/lib/cmake/TurboRaft/TurboRaftConfig.cmake"
+          test -f "$prefix/include/turboraft/raft_core.h"
+          cat > "$prefix/turboraft-sdk-manifest.txt" <<EOF
+          version=${{ needs.metadata.outputs.source_version }}
+          package_version=${{ needs.metadata.outputs.package_version }}
+          commit=${{ inputs.source_sha }}
+          rid=linux-x64
+          salts=$SALTS_SDK_VERSION
+          salts_utils=$SALTS_UTILS_SDK_VERSION
+          flowmq=$FLOWMQ_SDK_VERSION
+          profile=Release
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turboraft-sdk-linux-x64
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
+  windows:
+    name: Windows x64 SDK
+    needs: metadata
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Prepare MSVC toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install nasm ninja -y --no-progress
+          $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+          $vswhere = Join-Path $programFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain not found" }
+          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+      - name: Restore released native SDK dependencies
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $config = Join-Path $env:RUNNER_TEMP "turboraft-windows-nuget.config"
+          $packages = Join-Path $env:RUNNER_TEMP "turboraft-windows-dependencies"
+          '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
+          dotnet restore packaging/nuget/TurboRaft.Native.csproj --configfile $config --packages $packages
+          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          "FLOWMQ_ROOT=$packages\flowmq.native\$env:FLOWMQ_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+      - name: Restore vcpkg dependencies cache-only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE "vcpkg_installed"
+          if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
+          & "$env:VCPKG_ROOT\vcpkg.exe" install "--x-manifest-root=." "--x-install-root=$installRoot" "--triplet=x64-windows" --only-binarycaching
+          if ($LASTEXITCODE -ne 0) { throw "x64-windows cache-only restore failed" }
+      - name: Configure, build and install SDK
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%FLOWMQ_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
+          cmake -S . -B build\native-sdk -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\stage\sdk\windows-x64" -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=OFF -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
+          if errorlevel 1 exit /b 1
+          cmake --build build\native-sdk --parallel 2
+          if errorlevel 1 exit /b 1
+          cmake --install build\native-sdk
+          if errorlevel 1 exit /b 1
+      - name: Verify and record Windows SDK
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
+          foreach ($path in @(
+            (Join-Path $prefix "lib\cmake\TurboRaft\TurboRaftConfig.cmake"),
+            (Join-Path $prefix "include\turboraft\raft_core.h"))) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing $path" }
+          }
+          @(
+            "version=${{ needs.metadata.outputs.source_version }}"
+            "package_version=${{ needs.metadata.outputs.package_version }}"
+            "commit=${{ inputs.source_sha }}"
+            "rid=windows-x64"
+            "salts=$env:SALTS_SDK_VERSION"
+            "salts_utils=$env:SALTS_UTILS_SDK_VERSION"
+            "flowmq=$env:FLOWMQ_SDK_VERSION"
+            "profile=Release"
+          ) | Set-Content -LiteralPath (Join-Path $prefix "turboraft-sdk-manifest.txt")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turboraft-sdk-windows-x64
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
+  pack:
+    name: Pack TurboRaft.Native
+    needs: [metadata, linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: turboraft-sdk-*
+          path: package/sdk
+          merge-multiple: true
+      - name: Verify combined SDK payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          for rid in linux-x64 windows-x64; do
+            test -f "package/sdk/$rid/lib/cmake/TurboRaft/TurboRaftConfig.cmake"
+            test -f "package/sdk/$rid/include/turboraft/raft_core.h"
+            test -f "package/sdk/$rid/turboraft-sdk-manifest.txt"
+          done
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Pack NuGet
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/turboraft-pack-nuget.config"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json             --name github --username qigao --password "$GITHUB_TOKEN"             --store-password-in-clear-text --configfile "$config"
+          packages="$RUNNER_TEMP/turboraft-pack-dependencies"
+          dotnet restore packaging/nuget/TurboRaft.Native.csproj --configfile "$config" --packages "$packages"
+          dotnet pack packaging/nuget/TurboRaft.Native.csproj --no-restore             --configuration Release --output dist             -p:PackageVersion="${{ needs.metadata.outputs.package_version }}"             -p:PackageRoot="$GITHUB_WORKSPACE/package"             -p:RestorePackagesPath="$packages"
+          nupkg="dist/TurboRaft.Native.${{ needs.metadata.outputs.package_version }}.nupkg"
+          test -f "$nupkg"
+          unzip -Z1 "$nupkg" > "$RUNNER_TEMP/turboraft-files.txt"
+          for rid in linux-x64 windows-x64; do
+            grep -Fx "sdk/$rid/lib/cmake/TurboRaft/TurboRaftConfig.cmake" "$RUNNER_TEMP/turboraft-files.txt"
+            grep -Fx "sdk/$rid/turboraft-sdk-manifest.txt" "$RUNNER_TEMP/turboraft-files.txt"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turboraft-native-nuget
+          path: dist/*.nupkg
+          if-no-files-found: error
+
+  qualify:
+    name: Qualify ${{ matrix.name }}
+    needs: [metadata, pack]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: Linux x64, os: linux, runner: ubuntu-24.04, rid: linux-x64, triplet: x64-linux}
+          - {name: Windows x64, os: windows, runner: windows-2022, rid: windows-x64, triplet: x64-windows}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          name: turboraft-native-nuget
+          path: dist
+      - name: Prepare Linux qualification host
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+      - name: Prepare Windows qualification host
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install nasm ninja -y --no-progress
+          $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+          $vswhere = Join-Path $programFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain not found" }
+          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+      - name: Restore packed SDK on Linux
+        if: matrix.os == 'linux'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/turboraft-qualify.config"
+          project="$RUNNER_TEMP/turboraft-qualify.csproj"
+          packages="$RUNNER_TEMP/turboraft-qualify-packages"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source "$GITHUB_WORKSPACE/dist" --name local --configfile "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github             --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<EOF
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup><PackageReference Include="TurboRaft.Native" Version="[${{ needs.metadata.outputs.package_version }}]" /></ItemGroup>
+          </Project>
+          EOF
+          dotnet restore "$project" --configfile "$config" --packages "$packages"
+          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "FLOWMQ_ROOT=$packages/flowmq.native/$FLOWMQ_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "TURBORAFT_ROOT=$packages/turboraft.native/${{ needs.metadata.outputs.package_version }}/sdk/linux-x64" >> "$GITHUB_ENV"
+      - name: Restore packed SDK on Windows
+        if: matrix.os == 'windows'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $config = Join-Path $env:RUNNER_TEMP "turboraft-qualify.config"
+          $project = Join-Path $env:RUNNER_TEMP "turboraft-qualify.csproj"
+          $packages = Join-Path $env:RUNNER_TEMP "turboraft-qualify-packages"
+          '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
+          dotnet nuget add source (Join-Path $env:GITHUB_WORKSPACE "dist") --name local --configfile $config
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
+          @"
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup><PackageReference Include="TurboRaft.Native" Version="[${{ needs.metadata.outputs.package_version }}]" /></ItemGroup>
+          </Project>
+          "@ | Set-Content -LiteralPath $project
+          dotnet restore $project --configfile $config --packages $packages
+          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          "FLOWMQ_ROOT=$packages\flowmq.native\$env:FLOWMQ_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          "TURBORAFT_ROOT=$packages\turboraft.native\${{ needs.metadata.outputs.package_version }}\sdk\windows-x64" >> $env:GITHUB_ENV
+      - name: Restore qualification vcpkg dependencies
+        shell: bash
+        if: matrix.os == 'linux'
+        run: |
+          set -euo pipefail
+          rm -rf vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=.             --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed"             --triplet x64-linux --only-binarycaching
+      - name: Restore qualification vcpkg dependencies on Windows
+        shell: pwsh
+        if: matrix.os == 'windows'
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE "vcpkg_installed"
+          if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
+          & "$env:VCPKG_ROOT\vcpkg.exe" install "--x-manifest-root=." "--x-install-root=$installRoot" "--triplet=x64-windows" --only-binarycaching
+          if ($LASTEXITCODE -ne 0) { throw "qualification cache-only restore failed" }
+      - name: Verify restored package consumers on Linux
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export LD_LIBRARY_PATH="$FLOWMQ_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib"
+          for consumer in package_core_consumer package_cflow_consumer package_flowmq_consumer; do
+            cmake -S "tests/$consumer" -B "build/$consumer" -G Ninja               -DCMAKE_BUILD_TYPE=Release               -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"               -DVCPKG_TARGET_TRIPLET=x64-linux               -DVCPKG_MANIFEST_MODE=OFF               -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"               -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+            cmake --build "build/$consumer" --parallel 2
+          done
+          build/package_core_consumer/turboraft_core_package_consumer
+          build/package_cflow_consumer/turboraft_cflow_package_consumer
+          build/package_flowmq_consumer/turboraft_flowmq_package_consumer
+      - name: Verify restored package consumers on Windows
+        if: matrix.os == 'windows'
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "PATH=%TURBORAFT_ROOT%\bin;%FLOWMQ_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
+          for %%C in (package_core_consumer package_cflow_consumer package_flowmq_consumer) do (
+            cmake -S "tests\%%C" -B "build\%%C" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+            if errorlevel 1 exit /b 1
+            cmake --build "build\%%C" --parallel 2
+            if errorlevel 1 exit /b 1
+          )
+          build\package_core_consumer\turboraft_core_package_consumer.exe
+          if errorlevel 1 exit /b 1
+          build\package_cflow_consumer\turboraft_cflow_package_consumer.exe
+          if errorlevel 1 exit /b 1
+          build\package_flowmq_consumer\turboraft_flowmq_package_consumer.exe
+          if errorlevel 1 exit /b 1
+
+  publish:
+    name: Publish package and GitHub Release
+    needs: [metadata, qualify]
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: turboraft-native-nuget
+          path: dist
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Publish to GitHub Packages
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json             --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text
+          dotnet nuget push "dist/TurboRaft.Native.${{ needs.metadata.outputs.package_version }}.nupkg"             --source github --api-key "$GITHUB_TOKEN" --skip-duplicate
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.source_version }}
+        run: |
+          set -euo pipefail
+          pkg="dist/TurboRaft.Native.${{ needs.metadata.outputs.package_version }}.nupkg"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY"               --target "${{ inputs.source_sha }}" --title "TurboRaft $VERSION" --generate-notes
+          fi
