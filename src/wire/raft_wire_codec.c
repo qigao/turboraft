@@ -611,34 +611,38 @@ int tr_raft_wire_decode(tr_raft_wire_codec_t *codec,
         frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length, message);
 }
 
-int tr_raft_wire_encode_snapshot_chunk(
+int tr_raft_wire_encode_snapshot_chunk_prefix(
     tr_raft_wire_codec_t *codec,
     const tr_raft_wire_metadata_t *metadata,
     const tr_raft_snapshot_chunk_t *chunk,
     uint8_t *output,
     size_t output_capacity,
-    size_t *output_length)
+    size_t *out_prefix_length,
+    size_t *out_frame_length)
 {
     InstallSnapshotChunk_builder_t builder;
     InstallSnapshotChunk_view_t view;
-    tbe_var_data_t encoded_data;
-    size_t payload_length = 0U;
+    tbe_var_data_t digest;
     uint8_t encoded_configuration[TR_RAFT_CONF_MAX_ENCODED_SIZE];
     size_t encoded_configuration_size = 0U;
+    size_t expected_prefix_payload_length;
+    size_t prefix_payload_length;
+    size_t payload_length;
+    uint8_t *payload;
+    uint8_t *chunk_length_prefix;
     int result;
 
-    if (output_length != NULL) {
-        *output_length = 0U;
+    if (out_prefix_length != NULL) {
+        *out_prefix_length = 0U;
+    }
+    if (out_frame_length != NULL) {
+        *out_frame_length = 0U;
     }
     if (codec == NULL || codec->binding == NULL ||
         !tr_wire_metadata_valid(metadata) ||
         !tr_snapshot_chunk_valid(chunk) || output == NULL ||
-        output_length == NULL) {
+        out_prefix_length == NULL || out_frame_length == NULL) {
         return SALTS_EINVAL;
-    }
-    if (output_capacity < TR_RAFT_WIRE_HEADER_SIZE) {
-        *output_length = TR_RAFT_WIRE_HEADER_SIZE;
-        return SALTS_ENOSPC;
     }
 
     result = chunk->has_configuration
@@ -651,8 +655,27 @@ int tr_raft_wire_encode_snapshot_chunk(
         return result;
     }
 
+    expected_prefix_payload_length =
+        InstallSnapshotChunk_BLOCK_LENGTH + 12U +
+        encoded_configuration_size +
+        TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE;
+    if (expected_prefix_payload_length >
+            SIZE_MAX - TR_RAFT_WIRE_HEADER_SIZE ||
+        chunk->data_length >
+            SIZE_MAX - TR_RAFT_WIRE_HEADER_SIZE -
+                expected_prefix_payload_length) {
+        return SALTS_EPROTO;
+    }
+    *out_prefix_length =
+        TR_RAFT_WIRE_HEADER_SIZE + expected_prefix_payload_length;
+    *out_frame_length = *out_prefix_length + chunk->data_length;
+    if (output_capacity < *out_prefix_length) {
+        return SALTS_ENOSPC;
+    }
+
+    payload = output + TR_RAFT_WIRE_HEADER_SIZE;
     if (!InstallSnapshotChunk_builder_bind(
-            &builder, output + TR_RAFT_WIRE_HEADER_SIZE,
+            &builder, payload,
             output_capacity - TR_RAFT_WIRE_HEADER_SIZE) ||
         !InstallSnapshotChunk_from_node_set(&builder, chunk->from) ||
         !InstallSnapshotChunk_to_node_set(&builder, chunk->to) ||
@@ -671,31 +694,73 @@ int tr_raft_wire_encode_snapshot_chunk(
         !InstallSnapshotChunk_snapshot_digest_set(
             &builder, chunk->snapshot_digest,
             TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) ||
-        !InstallSnapshotChunk_chunk_data_set(
-            &builder, chunk->data, chunk->data_length)) {
-        *output_length = TR_RAFT_WIRE_HEADER_SIZE +
-                         InstallSnapshotChunk_BLOCK_LENGTH + 12U +
-                         encoded_configuration_size +
-                         TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE +
-                         chunk->data_length;
-        return SALTS_ENOSPC;
-    }
-    if (!InstallSnapshotChunk_view_bind(
-            &view, output + TR_RAFT_WIRE_HEADER_SIZE,
+        !InstallSnapshotChunk_view_bind(
+            &view, payload,
             output_capacity - TR_RAFT_WIRE_HEADER_SIZE) ||
-        !InstallSnapshotChunk_chunk_data(&view, &encoded_data)) {
+        !InstallSnapshotChunk_snapshot_digest(&view, &digest)) {
         return SALTS_EPROTO;
     }
 
-    payload_length = (size_t)(tbe_wire_var_data_end(&encoded_data) -
-                              (output + TR_RAFT_WIRE_HEADER_SIZE));
-    if (payload_length >
-        tr_wire_payload_limit(TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK)) {
+    chunk_length_prefix = (uint8_t *)tbe_wire_var_data_end(&digest);
+    if (chunk_length_prefix < payload ||
+        (size_t)(chunk_length_prefix - payload) >
+            output_capacity - TR_RAFT_WIRE_HEADER_SIZE ||
+        (size_t)(chunk_length_prefix - payload) >
+            SIZE_MAX - sizeof(uint32_t)) {
         return SALTS_EPROTO;
     }
-    *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
+    prefix_payload_length =
+        (size_t)(chunk_length_prefix - payload) + sizeof(uint32_t);
+    if (prefix_payload_length != expected_prefix_payload_length ||
+        prefix_payload_length >
+            tr_wire_payload_limit(TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) ||
+        chunk->data_length >
+            tr_wire_payload_limit(TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) -
+                prefix_payload_length) {
+        return SALTS_EPROTO;
+    }
+    payload_length = prefix_payload_length + chunk->data_length;
+    tr_put_u32(chunk_length_prefix, (uint32_t)chunk->data_length);
     tr_wire_write_envelope(output, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK,
                            payload_length, metadata);
+    return SALTS_OK;
+}
+
+int tr_raft_wire_encode_snapshot_chunk(
+    tr_raft_wire_codec_t *codec,
+    const tr_raft_wire_metadata_t *metadata,
+    const tr_raft_snapshot_chunk_t *chunk,
+    uint8_t *output,
+    size_t output_capacity,
+    size_t *output_length)
+{
+    size_t prefix_length = 0U;
+    size_t frame_length = 0U;
+    int result;
+
+    if (output_length != NULL) {
+        *output_length = 0U;
+    }
+    if (codec == NULL || codec->binding == NULL ||
+        !tr_wire_metadata_valid(metadata) ||
+        !tr_snapshot_chunk_valid(chunk) || output == NULL ||
+        output_length == NULL) {
+        return SALTS_EINVAL;
+    }
+
+    result = tr_raft_wire_encode_snapshot_chunk_prefix(
+        codec, metadata, chunk, output, output_capacity,
+        &prefix_length, &frame_length);
+    *output_length = frame_length;
+    if (result != SALTS_OK) {
+        return result;
+    }
+    if (output_capacity < frame_length) {
+        return SALTS_ENOSPC;
+    }
+    if (chunk->data_length != 0U) {
+        memcpy(output + prefix_length, chunk->data, chunk->data_length);
+    }
     return SALTS_OK;
 }
 
