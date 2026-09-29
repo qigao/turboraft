@@ -747,6 +747,10 @@ int tr_raft_wire_encode_snapshot_chunk(
         output_length == NULL) {
         return SALTS_EINVAL;
     }
+    if (output_capacity < TR_RAFT_WIRE_HEADER_SIZE) {
+        *output_length = TR_RAFT_WIRE_HEADER_SIZE;
+        return SALTS_ENOSPC;
+    }
 
     result = tr_raft_wire_encode_snapshot_chunk_prefix(
         codec, metadata, chunk, output, output_capacity,
