@@ -426,6 +426,16 @@ spec("raft wire codec")
         }
 
         check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
+        {
+            size_t short_length = 0U;
+
+            check_equal(tr_raft_wire_encode_snapshot_chunk(
+                             codec, &metadata, &chunk,
+                             prefix, TR_RAFT_WIRE_HEADER_SIZE - 1U,
+                             &short_length),
+                        SALTS_ENOSPC);
+            check_equal(short_length, TR_RAFT_WIRE_HEADER_SIZE);
+        }
         check_equal(tr_raft_wire_encode_snapshot_chunk(
                          codec, &metadata, &chunk,
                          contiguous, sizeof(contiguous),
