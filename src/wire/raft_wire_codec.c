@@ -720,7 +720,9 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
         return SALTS_EPROTO;
     }
     payload_length = prefix_payload_length + chunk->data_length;
-    tr_put_u32(chunk_length_prefix, (uint32_t)chunk->data_length);
+    tbe_wire_write_u32(chunk_length_prefix,
+                       TurboRaftWire_WIRE_BIG_ENDIAN,
+                       (uint32_t)chunk->data_length);
     tr_wire_write_envelope(output, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK,
                            payload_length, metadata);
     return SALTS_OK;
