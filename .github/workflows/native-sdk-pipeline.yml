@@ -94,6 +94,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/bin:$FLOWMQ_ROOT/bin:$PATH"
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           prefix="$GITHUB_WORKSPACE/stage/sdk/linux-x64"
           cmake -S . -B build/native-sdk -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=OFF             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             -DCMAKE_INSTALL_PREFIX="$prefix"             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF             -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF             -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=OFF             -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
           cmake --build build/native-sdk --parallel 2
