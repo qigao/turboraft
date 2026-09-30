@@ -1074,6 +1074,40 @@ static int tr_wal_create_segment(tr_raft_wal_storage_t *storage,
     return SALTS_OK;
 }
 
+static int tr_wal_rotate_live_segment(tr_raft_wal_storage_t *storage)
+{
+    uint64_t next_sequence;
+    uint64_t first_sequence;
+    int result;
+
+    if (storage == NULL || storage->current_segment == 0U ||
+        storage->current_segment != storage->manifest_last_segment ||
+        storage->first_live_segment == 0U) {
+        return SALTS_EPROTO;
+    }
+    if (storage->current_segment == UINT64_MAX ||
+        tr_wal_live_segment_count(storage) >=
+            (uint64_t)storage->max_live_segments) {
+        return SALTS_ENOSPC;
+    }
+
+    first_sequence = storage->first_live_segment;
+    next_sequence = storage->current_segment + 1U;
+    result = salts_fs_close(storage->current_file);
+    storage->current_file = SALTS_INVALID_FILE;
+    if (result == SALTS_OK) {
+        result = tr_wal_create_segment(storage, next_sequence);
+    }
+    if (result == SALTS_OK) {
+        result = tr_wal_publish_manifest(
+            storage, first_sequence, next_sequence);
+    }
+    if (result != SALTS_OK) {
+        storage->faulted = 1;
+    }
+    return result;
+}
+
 static int tr_wal_append_operation(tr_raft_wal_storage_t *storage,
                                    uint8_t type, const uint8_t *payload,
                                    size_t payload_size)
@@ -1230,17 +1264,8 @@ static int tr_wal_commit(void *context)
         return SALTS_ENOSPC;
     }
     if (frame_size > storage->segment_bytes - storage->current_offset) {
-        if (storage->current_segment >= storage->max_segments) {
-            return SALTS_ENOSPC;
-        }
-        result = salts_fs_close(storage->current_file);
-        storage->current_file = SALTS_INVALID_FILE;
-        if (result == SALTS_OK) {
-            result = tr_wal_create_segment(storage,
-                                           storage->current_segment + 1U);
-        }
+        result = tr_wal_rotate_live_segment(storage);
         if (result != SALTS_OK) {
-            storage->faulted = 1;
             return result;
         }
     }
@@ -1528,50 +1553,57 @@ static int tr_wal_replay_segment(tr_raft_wal_storage_t *storage,
 
 static int tr_wal_replay(tr_raft_wal_storage_t *storage,
                          tr_raft_wal_recovery_t *recovery,
-                         size_t *out_last_segment, uint64_t *out_valid_size,
+                         uint64_t *out_last_segment,
+                         uint64_t *out_valid_size,
                          uint64_t *out_last_transaction_id)
 {
-    size_t first_segment = 0U;
-    size_t last_segment = 0U;
-    size_t sequence;
-    char path[SALTS_FS_MAX_PATH];
+    uint64_t first_segment;
+    uint64_t last_segment;
+    uint64_t sequence;
     int result;
+
+    if (storage == NULL || recovery == NULL ||
+        out_last_segment == NULL || out_valid_size == NULL ||
+        out_last_transaction_id == NULL) {
+        return SALTS_EINVAL;
+    }
+    first_segment = storage->first_live_segment;
+    last_segment = storage->manifest_last_segment;
     memset(recovery, 0, sizeof(*recovery));
     recovery->entries = (tr_raft_entry_t *)calloc(
         storage->max_log_entries, sizeof(*recovery->entries));
-    if (recovery->entries == NULL) return SALTS_ENOMEM;
-    for (sequence = 1U; sequence <= storage->max_segments; ++sequence) {
-        result = tr_wal_segment_path(storage, sequence, path, sizeof(path));
-        if (result != SALTS_OK) goto fail;
-        if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
-            first_segment = sequence;
-            break;
-        }
+    if (recovery->entries == NULL) {
+        return SALTS_ENOMEM;
     }
-    if (first_segment == 0U) {
+
+    if (first_segment == 0U && last_segment == 0U) {
         *out_last_segment = 0U;
         *out_valid_size = 0U;
         *out_last_transaction_id = 0U;
         return SALTS_OK;
     }
-    last_segment = first_segment;
-    for (sequence = first_segment + 1U; sequence <= storage->max_segments;
-         ++sequence) {
-        result = tr_wal_segment_path(storage, sequence, path, sizeof(path));
-        if (result != SALTS_OK) goto fail;
-        if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK) break;
-        last_segment = sequence;
+    result = tr_wal_manifest_validate_range(
+        storage, first_segment, last_segment);
+    if (result != SALTS_OK) {
+        goto fail;
     }
+
     for (sequence = first_segment; sequence <= last_segment; ++sequence) {
-        result = tr_wal_replay_segment(storage, sequence,
-                                       sequence == first_segment,
-                                       sequence == last_segment, recovery,
-                                       out_last_transaction_id,
-                                       out_valid_size);
-        if (result != SALTS_OK) goto fail;
+        result = tr_wal_replay_segment(
+            storage, sequence,
+            sequence == first_segment,
+            sequence == last_segment,
+            recovery, out_last_transaction_id, out_valid_size);
+        if (result != SALTS_OK) {
+            goto fail;
+        }
+        if (sequence == UINT64_MAX) {
+            break;
+        }
     }
     *out_last_segment = last_segment;
     return SALTS_OK;
+
 fail:
     tr_raft_wal_recovery_destroy(recovery);
     return result;
@@ -1588,7 +1620,7 @@ static int tr_raft_wal_storage_open_impl(
     size_t prefix_length;
     size_t segment_bytes;
     size_t transaction_bytes;
-    size_t last_segment = 0U;
+    uint64_t last_segment = 0U;
     uint64_t valid_size = 0U;
     uint64_t last_transaction_id = 0U;
     int result;
@@ -1596,8 +1628,9 @@ static int tr_raft_wal_storage_open_impl(
     *out_storage = NULL;
     if (config == NULL || config->path_prefix == NULL ||
         config->path_prefix[0] == '\0' || config->max_log_entries == 0U ||
-        config->max_segments == 0U ||
-        config->max_segments > TR_RAFT_WAL_MAX_SEGMENTS) return SALTS_EINVAL;
+        config->max_live_segments == 0U ||
+        config->max_live_segments > TR_RAFT_WAL_MAX_LIVE_SEGMENTS)
+        return SALTS_EINVAL;
     segment_bytes = config->segment_bytes == 0U
                         ? TR_RAFT_WAL_DEFAULT_SEGMENT_BYTES
                         : config->segment_bytes;
@@ -1624,7 +1657,7 @@ static int tr_raft_wal_storage_open_impl(
         provider != NULL ? provider->context : NULL;
     storage->segment_bytes = segment_bytes;
     storage->transaction_capacity = transaction_bytes;
-    storage->max_segments = config->max_segments;
+    storage->max_live_segments = config->max_live_segments;
     storage->max_log_entries = config->max_log_entries;
     storage->max_snapshot_bytes = config->max_snapshot_bytes == 0U
                                       ? TR_RAFT_WAL_DEFAULT_MAX_SNAPSHOT_BYTES
@@ -1652,8 +1685,13 @@ static int tr_raft_wal_storage_open_impl(
         tr_raft_wal_storage_close(storage);
         return SALTS_EBUSY;
     }
-    result = tr_wal_replay(storage, &recovery, &last_segment, &valid_size,
-                           &last_transaction_id);
+    result = tr_wal_load_or_initialize_manifest(
+        storage, config->create_if_missing);
+    if (result == SALTS_OK) {
+        result = tr_wal_replay(
+            storage, &recovery, &last_segment, &valid_size,
+            &last_transaction_id);
+    }
     if (result != SALTS_OK) {
         tr_raft_wal_storage_close(storage);
         return result;
@@ -1672,6 +1710,9 @@ static int tr_raft_wal_storage_open_impl(
             return SALTS_ENOENT;
         }
         result = tr_wal_create_segment(storage, 1U);
+        if (result == SALTS_OK) {
+            result = tr_wal_publish_manifest(storage, 1U, 1U);
+        }
     } else {
         result = tr_wal_segment_path(storage, last_segment,
                                      storage->current_path,
@@ -1769,7 +1810,7 @@ int tr_raft_wal_storage_bind(tr_raft_wal_storage_t *storage,
 int tr_raft_wal_storage_load(tr_raft_wal_storage_t *storage,
                              tr_raft_wal_recovery_t *out_recovery)
 {
-    size_t last_segment = 0U;
+    uint64_t last_segment = 0U;
     uint64_t valid_size = 0U;
     uint64_t last_transaction_id = 0U;
     if (storage == NULL || out_recovery == NULL) return SALTS_EINVAL;
