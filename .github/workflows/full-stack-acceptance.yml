@@ -153,6 +153,19 @@ jobs:
           cmake --build .ci/build/salts-utils --target install --parallel 2
           test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
 
+      - name: Smoke focused source build profiles
+        shell: bash
+        env:
+          FLOWMQ_ROOT: ""
+          CHTTP_ROOT: ""
+        run: |
+          set -euo pipefail
+          for profile in core-dev storage-dev; do
+            build_dir=".ci/build/profile-$profile"
+            cmake -S . -B "$build_dir" -G Ninja               -DCMAKE_BUILD_TYPE=Release               -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"               -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR"               -DVCPKG_TARGET_TRIPLET=x64-linux               -DVCPKG_MANIFEST_MODE=OFF               -DTURBORAFT_BUILD_PROFILE="$profile"               -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF               -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF
+            cmake --build "$build_dir" --parallel 2
+          done
+
       - name: Build and install CHttp master
         shell: bash
         run: |
