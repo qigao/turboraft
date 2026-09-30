@@ -69,6 +69,10 @@ The production-qualified OS/compiler/dependency boundary is documented in
 is not in that matrix may still compile, but it is not a TurboRaft 0.2.x
 release gate until hosted CI proves the same runtime and package contracts.
 
+The pre-1.0 source/API policy and the objective criteria for a stable 1.0 C
+ABI are documented in
+[`docs/PRE_1_0_COMPATIBILITY.md`](docs/PRE_1_0_COMPATIBILITY.md).
+
 ```powershell
 cmake --preset win-dev-user
 cmake --build --preset win-dev-user
