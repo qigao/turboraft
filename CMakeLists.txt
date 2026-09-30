@@ -238,6 +238,7 @@ target_link_libraries(
   PUBLIC Salts::Core
   PRIVATE Salts::CSTL Salts::DataBind)
 
+if(TURBORAFT_PROFILE_FULL)
 add_library(turboraft_cflow_state_machine STATIC
             src/integrations/raft_cflow_state_machine.c)
 add_library(TurboRaft::CFlowStateMachine ALIAS turboraft_cflow_state_machine)
@@ -250,6 +251,8 @@ target_include_directories(
 target_link_libraries(turboraft_cflow_state_machine
                       PUBLIC TurboRaft::Core Salts::CFlow)
 
+endif()
+
 add_library(turboraft_service STATIC src/service/raft_service.c)
 add_library(TurboRaft::Service ALIAS turboraft_service)
 set_target_properties(turboraft_service PROPERTIES EXPORT_NAME Service)
@@ -259,6 +262,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(turboraft_service PUBLIC TurboRaft::Core)
 
+if(TURBORAFT_PROFILE_STORAGE)
 add_library(turboraft_snapshot_receiver STATIC
             src/snapshot/raft_snapshot_receiver.c)
 add_library(TurboRaft::SnapshotReceiver ALIAS turboraft_snapshot_receiver)
@@ -318,6 +322,8 @@ target_link_libraries(turboraft_wal_storage
                       PUBLIC TurboRaft::Core
                       PRIVATE Salts::Core xxHash::xxhash OpenSSL::Crypto)
 
+endif()
+
 if(TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE)
   if(NOT DEFINED ENV{TURBODB_ROOT} OR
      "$ENV{TURBODB_ROOT}" STREQUAL "" OR
@@ -342,6 +348,7 @@ if(TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE)
                         PUBLIC TurboRaft::Core TurboDB::Redis)
 endif()
 
+if(TURBORAFT_PROFILE_STORAGE)
 add_library(turboraft_snapshot_coordinator STATIC
             src/service/raft_snapshot_coordinator.c)
 target_include_directories(turboraft_snapshot_coordinator
@@ -363,6 +370,9 @@ target_include_directories(turboraft_service_wal_reload
 target_link_libraries(turboraft_service_wal_reload
                       PUBLIC TurboRaft::Service TurboRaft::WalStorage)
 
+endif()
+
+if(TURBORAFT_PROFILE_FULL)
 find_package(Threads REQUIRED)
 
 if(TARGET Salts::CNet)
@@ -457,6 +467,9 @@ else()
           "TurboRaft ControlPlane disabled: set CHTTP_ROOT to a standalone CHttp SDK")
 endif()
 
+endif()
+
+if(TURBORAFT_PROFILE_FULL)
 set(TURBORAFT_TEXT_SYNTAX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/text_syntax")
 
 cmake_add_grammar(
@@ -579,12 +592,28 @@ cmake_config_target(turboraft_repl
                     NO_INSTALL
                     FOLDER "TurboRaft/tools")
 
-add_subdirectory(tests)
+endif()
 
-set(TURBORAFT_INSTALL_TARGETS
-    turboraft_core turboraft_service turboraft_snapshot_receiver
-    turboraft_data_stream turboraft_wal_storage
-    turboraft_cflow_state_machine turboraft_snapshot_sender)
+if(TURBORAFT_PROFILE_FULL)
+  add_subdirectory(tests)
+endif()
+
+set(TURBORAFT_INSTALL_TARGETS turboraft_core turboraft_service)
+foreach(_turboraft_install_candidate IN ITEMS
+        turboraft_snapshot_receiver
+        turboraft_snapshot_sender
+        turboraft_data_stream
+        turboraft_wal_storage
+        turboraft_cflow_state_machine
+        turboraft_text_syntax
+        turboraft_text_query_service
+        turboraft_text_protocol_debug
+        turboraft_replay_driver)
+  if(TARGET ${_turboraft_install_candidate})
+    list(APPEND TURBORAFT_INSTALL_TARGETS ${_turboraft_install_candidate})
+  endif()
+endforeach()
+unset(_turboraft_install_candidate)
 if(TARGET turboraft_cnet)
   list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_cnet)
 endif()
@@ -600,10 +629,6 @@ endif()
 if(TARGET turboraft_turbodb_redis_state_machine)
   list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_turbodb_redis_state_machine)
 endif()
-list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_text_syntax
-     turboraft_text_query_service turboraft_text_protocol_debug
-     turboraft_replay_driver)
-
 set(TURBORAFT_HAVE_CNET OFF)
 if(TARGET turboraft_cnet)
   set(TURBORAFT_HAVE_CNET ON)
