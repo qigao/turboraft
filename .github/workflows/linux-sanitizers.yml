@@ -17,8 +17,8 @@ permissions:
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_REF: v1.8.3
-  SALTS_UTILS_REF: v4.1.3
+  SALTS_REF: master
+  SALTS_UTILS_REF: master
   FLOWMQ_REF: main
   ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
@@ -54,7 +54,7 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout Salts 1.8.3
+      - name: Checkout Salts master
         uses: actions/checkout@v4
         with:
           repository: qigao/salts
@@ -62,7 +62,7 @@ jobs:
           path: .ci/src-${{ matrix.name }}/salts
           persist-credentials: false
 
-      - name: Checkout SaltsUtils 4.1.3
+      - name: Checkout SaltsUtils master
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
