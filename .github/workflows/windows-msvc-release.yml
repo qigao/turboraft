@@ -16,8 +16,6 @@ permissions:
   packages: read
 
 env:
-  SALTS_SDK_VERSION: "1.8.3"
-  SALTS_UTILS_SDK_VERSION: "4.1.3"
   FLOWMQ_REF: main
 
 jobs:
@@ -90,15 +88,23 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[$env:SALTS_SDK_VERSION]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[$env:SALTS_UTILS_SDK_VERSION]" />
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
             </ItemGroup>
           </Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages --no-cache
           if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
-          $saltsRoot = Join-Path $packages "salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64"
-          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64"
+          function Resolve-Sdk([string]$PackageId, [string]$Rid) {
+            $selected = Get-ChildItem -LiteralPath (Join-Path $packages $PackageId) -Directory |
+              Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "sdk\$Rid") -PathType Container } |
+              Sort-Object { [version]$_.Name } -Descending |
+              Select-Object -First 1
+            if ($null -eq $selected) { throw "no restored SDK for $PackageId/$Rid" }
+            return Join-Path $selected.FullName "sdk\$Rid"
+          }
+          $saltsRoot = Resolve-Sdk "salts.native" "windows-x64"
+          $saltsUtilsRoot = Resolve-Sdk "saltsutils.native" "windows-x64"
           foreach ($path in @(
             (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
             (Join-Path $saltsUtilsRoot "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"),
