@@ -332,6 +332,19 @@ cmake_config_target(turboraft_wal_storage_tests
                     FOLDER "tests/core")
 add_test(NAME turboraft.wal_storage COMMAND turboraft_wal_storage_tests)
 
+add_executable(turboraft_wal_io_fault_tests
+               test_raft_wal_io_fault.c)
+target_include_directories(
+  turboraft_wal_io_fault_tests
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/storage)
+target_link_libraries(turboraft_wal_io_fault_tests
+                      PRIVATE TurboRaft::WalStorage)
+cmake_config_target(turboraft_wal_io_fault_tests
+                    NO_INSTALL
+                    FOLDER "tests/core")
+add_test(NAME turboraft.wal_io_fault
+         COMMAND turboraft_wal_io_fault_tests)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_executable(turboraft_wal_publish_fault_tests
                  test_raft_wal_publish_fault.c)
