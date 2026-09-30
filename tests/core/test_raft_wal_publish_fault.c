@@ -26,17 +26,17 @@ static void cleanup_prefix(const char *prefix)
     for (sequence = 1U; sequence <= 4U; ++sequence) {
         (void)snprintf(path, sizeof(path), "%s.%08zu.wal",
                        prefix, sequence);
-        (void)salts_fs_unlink(path);
+        (void)unlink(path);
         (void)snprintf(path, sizeof(path), "%s.%08zu.wal.tmp",
                        prefix, sequence);
-        (void)salts_fs_unlink(path);
+        (void)unlink(path);
     }
     (void)snprintf(path, sizeof(path), "%s.snapshot.1.1", prefix);
-    (void)salts_fs_unlink(path);
+    (void)unlink(path);
     (void)snprintf(path, sizeof(path), "%s.snapshot.1.1.tmp", prefix);
-    (void)salts_fs_unlink(path);
+    (void)unlink(path);
     (void)snprintf(path, sizeof(path), "%s.lock", prefix);
-    (void)salts_fs_unlink(path);
+    (void)unlink(path);
 }
 
 static int commit_one_entry(tr_raft_wal_storage_t *storage)
@@ -66,9 +66,11 @@ static int commit_one_entry(tr_raft_wal_storage_t *storage)
 
 int main(void)
 {
-    const char *requested =
-        getenv("TURBORAFT_FS_TEST_FAIL_FSYNC_CALL");
-    const int fail_call = requested != NULL ? atoi(requested) : 0;
+    const char *phase = getenv("TURBORAFT_FS_TEST_FAIL_PHASE");
+    const int pre_publish =
+        phase != NULL && strcmp(phase, "pre_publish") == 0;
+    const int post_publish =
+        phase != NULL && strcmp(phase, "post_publish") == 0;
     const tr_raft_conf_t configuration = {
         TR_RAFT_CONF_FINAL,
         1U,
@@ -120,7 +122,7 @@ int main(void)
     failed |= expect(result == SALTS_EIO,
                      "injected snapshot publication fault must surface EIO");
 
-    if (fail_call == 4) {
+    if (pre_publish) {
         failed |= expect(
             salts_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
             "pre-publication fault must not publish snapshot");
@@ -193,7 +195,7 @@ int main(void)
     if (failed != 0) {
         return 1;
     }
-    puts(fail_call == 4
+    puts(pre_publish
              ? "PASS: snapshot pre-publication failure remains retryable"
              : "PASS: uncertain snapshot publication faults until reopen");
     return 0;
