@@ -13,12 +13,13 @@ Exact first-party package dependencies:
 - SaltsUtils.Native 4.1.3
 - FlowMQ.Native 1.1.1
 
-Installed CMake consumers require `SALTS_ROOT` and `TURBORAFT_ROOT`.
+Installed CMake consumers require `SALTS_ROOT`, `SALTS_UTILS_ROOT`, and
+`TURBORAFT_ROOT`. Core links `Salts::DataBind`, which is supplied by the
+SaltsUtils package, while source builds also use SaltsUtils to locate
+`salts-idlc`.
+
 `FLOWMQ_ROOT`, `CHTTP_ROOT`, and `TURBODB_ROOT` are required only when the
 selected component uses those optional integrations.
-
-`SALTS_UTILS_ROOT` is a **source-build/tooling** dependency used to locate
-`salts-idlc`; it is not required by installed TurboRaft targets.
 
 macOS and Android are intentionally not shipped in TurboRaft 0.2.x because
 they are not release-qualified platforms in `docs/SUPPORTED_PLATFORMS.md`.
