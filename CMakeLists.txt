@@ -39,16 +39,28 @@ set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "cmake")
 include(CMakeOptions.cmake)
 include(cmake/Sanitizers.cmake)
 include(cmake/CmakeUtils.cmake)
-add_subdirectory(tools)
-include(cmake/FindTools.cmake)
 
-if(NOT RE2C_EXECUTABLE)
-  message(FATAL_ERROR
-          "TurboRaft text syntax requires a runnable re2c executable")
+set(TURBORAFT_PROFILE_FULL OFF)
+set(TURBORAFT_PROFILE_STORAGE OFF)
+if(TURBORAFT_BUILD_PROFILE STREQUAL "full")
+  set(TURBORAFT_PROFILE_FULL ON)
+  set(TURBORAFT_PROFILE_STORAGE ON)
+elseif(TURBORAFT_BUILD_PROFILE STREQUAL "storage-dev")
+  set(TURBORAFT_PROFILE_STORAGE ON)
 endif()
 
-if(NOT EXISTS "${LEMPAR}")
-  message(FATAL_ERROR "TurboRaft text syntax requires the Lemon parser template")
+if(TURBORAFT_PROFILE_FULL)
+  add_subdirectory(tools)
+  include(cmake/FindTools.cmake)
+
+  if(NOT RE2C_EXECUTABLE)
+    message(FATAL_ERROR
+            "TurboRaft full profile requires a runnable re2c executable")
+  endif()
+  if(NOT EXISTS "${LEMPAR}")
+    message(FATAL_ERROR
+            "TurboRaft full profile requires the Lemon parser template")
+  endif()
 endif()
 
 if(ENABLE_MSVC_ANALYZE)
@@ -61,32 +73,56 @@ endif()
 
 include(CTest)
 
-foreach(_turboraft_required_root IN ITEMS SALTS_ROOT SALTS_UTILS_ROOT
-                                           FLOWMQ_ROOT)
+if(NOT TURBORAFT_PROFILE_FULL)
+  if(BUILD_TESTING OR BUILD_TESTS OR BUILD_BENCHMARKS OR BUILD_EXAMPLES OR
+     TURBORAFT_BUILD_FUZZERS OR
+     TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE OR
+     TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
+    message(FATAL_ERROR
+            "TURBORAFT_BUILD_PROFILE=${TURBORAFT_BUILD_PROFILE} is a focused library profile; disable tests/benchmarks/examples/fuzzers/fixtures or use the full profile")
+  endif()
+endif()
+
+set(_turboraft_required_roots SALTS_ROOT SALTS_UTILS_ROOT)
+if(TURBORAFT_PROFILE_FULL)
+  list(APPEND _turboraft_required_roots FLOWMQ_ROOT)
+endif()
+foreach(_turboraft_required_root IN LISTS _turboraft_required_roots)
   if(NOT DEFINED ENV{${_turboraft_required_root}} OR
      "$ENV{${_turboraft_required_root}}" STREQUAL "")
     message(FATAL_ERROR
-            "Required dependency root is not defined: ${_turboraft_required_root}")
+            "Required dependency root is not defined for ${TURBORAFT_BUILD_PROFILE}: ${_turboraft_required_root}")
   endif()
   if(NOT IS_DIRECTORY "$ENV{${_turboraft_required_root}}")
     message(FATAL_ERROR
             "${_turboraft_required_root} is not a directory: $ENV{${_turboraft_required_root}}")
   endif()
 endforeach()
+unset(_turboraft_required_roots)
 
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" TURBORAFT_SALTS_ROOT_PATH)
 file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" TURBORAFT_SALTS_UTILS_ROOT_PATH)
-file(TO_CMAKE_PATH "$ENV{FLOWMQ_ROOT}" TURBORAFT_FLOWMQ_ROOT_PATH)
 
 find_package(Salts 1.8.3 EXACT CONFIG REQUIRED
              PATHS "${TURBORAFT_SALTS_ROOT_PATH}" NO_DEFAULT_PATH)
 find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED
              PATHS "${TURBORAFT_SALTS_UTILS_ROOT_PATH}" NO_DEFAULT_PATH)
-find_package(FlowMQ 1.1.0 CONFIG REQUIRED
-             PATHS "${TURBORAFT_FLOWMQ_ROOT_PATH}" NO_DEFAULT_PATH)
+
+if(TURBORAFT_PROFILE_FULL)
+  file(TO_CMAKE_PATH "$ENV{FLOWMQ_ROOT}" TURBORAFT_FLOWMQ_ROOT_PATH)
+  find_package(FlowMQ 1.1.0 CONFIG REQUIRED
+               PATHS "${TURBORAFT_FLOWMQ_ROOT_PATH}" NO_DEFAULT_PATH)
+  if(NOT TARGET Salts::CNet)
+    message(FATAL_ERROR "TurboRaft full profile requires Salts::CNet")
+  endif()
+  if(NOT TARGET FlowMQ::FlowMQ)
+    message(FATAL_ERROR "TurboRaft full profile requires FlowMQ::FlowMQ")
+  endif()
+endif()
 
 set(TURBORAFT_HAVE_STANDALONE_CHTTP OFF)
-if(DEFINED ENV{CHTTP_ROOT} AND NOT "$ENV{CHTTP_ROOT}" STREQUAL "")
+if(TURBORAFT_PROFILE_FULL AND
+   DEFINED ENV{CHTTP_ROOT} AND NOT "$ENV{CHTTP_ROOT}" STREQUAL "")
   if(NOT IS_DIRECTORY "$ENV{CHTTP_ROOT}")
     message(FATAL_ERROR "CHTTP_ROOT is not a directory: $ENV{CHTTP_ROOT}")
   endif()
@@ -102,15 +138,10 @@ if(DEFINED ENV{CHTTP_ROOT} AND NOT "$ENV{CHTTP_ROOT}" STREQUAL "")
   set(TURBORAFT_HAVE_STANDALONE_CHTTP ON)
 endif()
 
-find_package(OpenSSL REQUIRED)
-find_package(xxHash CONFIG REQUIRED)
-
-foreach(_turboraft_required_target IN ITEMS Salts::CNet FlowMQ::FlowMQ)
-  if(NOT TARGET ${_turboraft_required_target})
-    message(FATAL_ERROR
-            "Required target is unavailable: ${_turboraft_required_target}")
-  endif()
-endforeach()
+if(TURBORAFT_PROFILE_STORAGE)
+  find_package(OpenSSL REQUIRED)
+  find_package(xxHash CONFIG REQUIRED)
+endif()
 
 if(CMAKE_CROSSCOMPILING)
   set(_turboraft_tbe_root_name SALTS_UTILS_HOST_ROOT)
