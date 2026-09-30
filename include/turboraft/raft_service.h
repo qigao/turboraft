@@ -101,14 +101,27 @@ typedef struct tr_raft_service_status {
     tr_raft_status_t core;
 } tr_raft_service_status_t;
 
+typedef struct tr_raft_service_peer_delivery_status {
+    tr_raft_node_id_t peer_id;
+    bool paused;
+    size_t staged_message_count;
+    size_t staged_message_bytes;
+    bool snapshot_staged;
+    uint64_t capacity_rejection_count;
+    uint64_t paused_ticks;
+    int last_error;
+} tr_raft_service_peer_delivery_status_t;
+
 /*
  * Service is single-owner; callers must serialize every operation.
  *
- * When transport enqueue first returns SALTS_ENOSPC, Service retains the
- * unsent suffix of that Ready in bounded local storage and returns success for
- * the accepted operation. Before consuming a later operation it retries that
- * suffix; if the transport is still full, the later operation returns
- * SALTS_ENOSPC without being consumed. Other transport errors fault Service.
+ * When transport enqueue returns SALTS_ENOSPC for one target, Service pauses
+ * new Core output for that peer and retains only that peer's exact unsent
+ * Ready suffix in bounded local storage. Other peers continue normally and a
+ * later owner-thread operation retries every paused peer without allowing one
+ * saturated target to block unrelated quorum progress. Per-peer FIFO and
+ * accepted-prefix ownership are preserved. Other transport errors fault
+ * Service.
  */
 int tr_raft_service_create(
     const tr_raft_service_config_t *config,
@@ -218,6 +231,12 @@ int tr_raft_service_reload(
 int tr_raft_service_status(
     const tr_raft_service_t *service,
     tr_raft_service_status_t *out_status);
+
+/* Copies bounded delivery/backpressure diagnostics for one known peer. */
+int tr_raft_service_get_peer_delivery_status(
+    const tr_raft_service_t *service,
+    tr_raft_node_id_t peer_id,
+    tr_raft_service_peer_delivery_status_t *out_status);
 
 int tr_raft_service_configuration(
     const tr_raft_service_t *service,

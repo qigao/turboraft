@@ -189,5 +189,31 @@ spec("raft leadership transfer")
         ready = transfer_ready(messages);
         check_equal(tr_raft_core_propose(core, &second, &ready), SALTS_OK);
         tr_raft_core_destroy(core);
+    }    it("rejects leadership transfer while the target peer is transport-paused")
+    {
+        tr_raft_core_t *core = transfer_core(1U);
+        tr_raft_message_t messages[4];
+        tr_raft_ready_t ready;
+        tr_raft_status_t status;
+
+        transfer_elect(core);
+        check_equal(tr_raft_core_set_peer_paused(core, 2U, true), SALTS_OK);
+        ready = transfer_ready(messages);
+        check_equal(tr_raft_core_transfer_leadership(core, 2U, &ready),
+                    SALTS_EBUSY);
+        check_equal(ready.message_count, 0U);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.leadership_transfer_target, 0U);
+        check_equal(tr_raft_core_set_peer_paused(core, 2U, false), SALTS_OK);
+
+        ready = transfer_ready(messages);
+        check_equal(tr_raft_core_transfer_leadership(core, 2U, &ready),
+                    SALTS_OK);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_TIMEOUT_NOW);
+        check_equal(ready.messages[0].to, 2U);
+        tr_raft_core_destroy(core);
     }
+
+
 }
