@@ -101,14 +101,33 @@ typedef struct tr_raft_service_status {
     tr_raft_status_t core;
 } tr_raft_service_status_t;
 
+typedef struct tr_raft_service_peer_transport_status {
+    tr_raft_node_id_t node_id;
+    bool paused;
+    size_t staged_message_count;
+    bool snapshot_staged;
+    uint64_t capacity_rejections;
+    int last_error;
+} tr_raft_service_peer_transport_status_t;
+
+typedef struct tr_raft_service_transport_status {
+    size_t peer_count;
+    size_t paused_peer_count;
+    size_t total_staged_message_count;
+    size_t staged_snapshot_count;
+    tr_raft_service_peer_transport_status_t peers[TR_RAFT_MAX_MEMBERS];
+} tr_raft_service_transport_status_t;
+
 /*
  * Service is single-owner; callers must serialize every operation.
  *
- * When transport enqueue first returns SALTS_ENOSPC, Service retains the
- * unsent suffix of that Ready in bounded local storage and returns success for
- * the accepted operation. Before consuming a later operation it retries that
- * suffix; if the transport is still full, the later operation returns
- * SALTS_ENOSPC without being consumed. Other transport errors fault Service.
+ * A target-specific SALTS_ENOSPC retains only that peer's exact unsent Ready
+ * suffix in bounded local storage and pauses future Core output for that peer.
+ * Other peers continue normal Raft progress. Before each later operation
+ * Service opportunistically drains every paused peer; successful drain resumes
+ * Core output for that peer. An inbound message from a still-paused peer
+ * returns SALTS_ENOSPC without being consumed, while unrelated peers and local
+ * proposals remain available. Other transport errors fault Service.
  */
 int tr_raft_service_create(
     const tr_raft_service_config_t *config,
@@ -218,6 +237,11 @@ int tr_raft_service_reload(
 int tr_raft_service_status(
     const tr_raft_service_t *service,
     tr_raft_service_status_t *out_status);
+
+/** Copies bounded per-peer transport pause/backpressure diagnostics. */
+int tr_raft_service_transport_status(
+    const tr_raft_service_t *service,
+    tr_raft_service_transport_status_t *out_status);
 
 int tr_raft_service_configuration(
     const tr_raft_service_t *service,
