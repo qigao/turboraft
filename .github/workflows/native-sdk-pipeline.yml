@@ -10,11 +10,6 @@ on:
         required: true
         type: string
 
-env:
-  SALTS_SDK_VERSION: "1.8.3"
-  SALTS_UTILS_SDK_VERSION: "4.1.3"
-  FLOWMQ_SDK_VERSION: "1.1.1"
-
 jobs:
   metadata:
     runs-on: ubuntu-24.04
@@ -86,9 +81,21 @@ jobs:
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json             --name github --username qigao --password "$GITHUB_TOKEN"             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/TurboRaft.Native.csproj             --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "FLOWMQ_ROOT=$packages/flowmq.native/$FLOWMQ_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          resolve_single_package() {
+            local root="$1"
+            mapfile -t dirs < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print)
+            test "${#dirs[@]}" -eq 1
+            printf '%s\n' "${dirs[0]}"
+          }
+          salts_pkg="$(resolve_single_package "$packages/salts.native")"
+          salts_utils_pkg="$(resolve_single_package "$packages/saltsutils.native")"
+          flowmq_pkg="$(resolve_single_package "$packages/flowmq.native")"
+          echo "SALTS_ROOT=$salts_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "FLOWMQ_ROOT=$flowmq_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "TURBORAFT_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
+          echo "TURBORAFT_SALTS_UTILS_RESOLVED_VERSION=$(basename "$salts_utils_pkg")" >> "$GITHUB_ENV"
+          echo "TURBORAFT_FLOWMQ_RESOLVED_VERSION=$(basename "$flowmq_pkg")" >> "$GITHUB_ENV"
       - name: Restore vcpkg dependencies cache-only
         shell: bash
         run: |
@@ -112,9 +119,9 @@ jobs:
           package_version=${{ needs.metadata.outputs.package_version }}
           commit=${{ inputs.source_sha }}
           rid=linux-x64
-          salts=$SALTS_SDK_VERSION
-          salts_utils=$SALTS_UTILS_SDK_VERSION
-          flowmq=$FLOWMQ_SDK_VERSION
+          salts=$TURBORAFT_SALTS_RESOLVED_VERSION
+          salts_utils=$TURBORAFT_SALTS_UTILS_RESOLVED_VERSION
+          flowmq=$TURBORAFT_FLOWMQ_RESOLVED_VERSION
           profile=Release
           EOF
       - uses: actions/upload-artifact@v4
@@ -162,9 +169,22 @@ jobs:
           '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
           dotnet restore packaging/nuget/TurboRaft.Native.csproj --configfile $config --packages $packages
-          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "FLOWMQ_ROOT=$packages\flowmq.native\$env:FLOWMQ_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          function Get-SinglePackageDirectory([string]$Root) {
+            $dirs = @(Get-ChildItem -LiteralPath $Root -Directory)
+            if ($dirs.Count -ne 1) {
+              throw "expected exactly one resolved package version under $Root, found $($dirs.Count)"
+            }
+            return $dirs[0]
+          }
+          $saltsPackage = Get-SinglePackageDirectory (Join-Path $packages "salts.native")
+          $saltsUtilsPackage = Get-SinglePackageDirectory (Join-Path $packages "saltsutils.native")
+          $flowmqPackage = Get-SinglePackageDirectory (Join-Path $packages "flowmq.native")
+          "SALTS_ROOT=$($saltsPackage.FullName)\sdk\windows-x64" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$($saltsUtilsPackage.FullName)\sdk\windows-x64" >> $env:GITHUB_ENV
+          "FLOWMQ_ROOT=$($flowmqPackage.FullName)\sdk\windows-x64" >> $env:GITHUB_ENV
+          "TURBORAFT_SALTS_RESOLVED_VERSION=$($saltsPackage.Name)" >> $env:GITHUB_ENV
+          "TURBORAFT_SALTS_UTILS_RESOLVED_VERSION=$($saltsUtilsPackage.Name)" >> $env:GITHUB_ENV
+          "TURBORAFT_FLOWMQ_RESOLVED_VERSION=$($flowmqPackage.Name)" >> $env:GITHUB_ENV
       - name: Restore vcpkg dependencies cache-only
         shell: pwsh
         run: |
@@ -199,9 +219,9 @@ jobs:
             "package_version=${{ needs.metadata.outputs.package_version }}"
             "commit=${{ inputs.source_sha }}"
             "rid=windows-x64"
-            "salts=$env:SALTS_SDK_VERSION"
-            "salts_utils=$env:SALTS_UTILS_SDK_VERSION"
-            "flowmq=$env:FLOWMQ_SDK_VERSION"
+            "salts=$env:TURBORAFT_SALTS_RESOLVED_VERSION"
+            "salts_utils=$env:TURBORAFT_SALTS_UTILS_RESOLVED_VERSION"
+            "flowmq=$env:TURBORAFT_FLOWMQ_RESOLVED_VERSION"
             "profile=Release"
           ) | Set-Content -LiteralPath (Join-Path $prefix "turboraft-sdk-manifest.txt")
       - uses: actions/upload-artifact@v4
@@ -326,9 +346,21 @@ jobs:
           </Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "FLOWMQ_ROOT=$packages/flowmq.native/$FLOWMQ_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          resolve_single_package() {
+            local root="$1"
+            mapfile -t dirs < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print)
+            test "${#dirs[@]}" -eq 1
+            printf '%s\n' "${dirs[0]}"
+          }
+          salts_pkg="$(resolve_single_package "$packages/salts.native")"
+          salts_utils_pkg="$(resolve_single_package "$packages/saltsutils.native")"
+          flowmq_pkg="$(resolve_single_package "$packages/flowmq.native")"
+          echo "SALTS_ROOT=$salts_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$salts_utils_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "FLOWMQ_ROOT=$flowmq_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "TURBORAFT_SALTS_RESOLVED_VERSION=$(basename "$salts_pkg")" >> "$GITHUB_ENV"
+          echo "TURBORAFT_SALTS_UTILS_RESOLVED_VERSION=$(basename "$salts_utils_pkg")" >> "$GITHUB_ENV"
+          echo "TURBORAFT_FLOWMQ_RESOLVED_VERSION=$(basename "$flowmq_pkg")" >> "$GITHUB_ENV"
           echo "TURBORAFT_ROOT=$packages/turboraft.native/${{ needs.metadata.outputs.package_version }}/sdk/linux-x64" >> "$GITHUB_ENV"
       - name: Restore packed SDK on Windows
         if: matrix.os == 'windows'
@@ -350,9 +382,22 @@ jobs:
           </Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages
-          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "FLOWMQ_ROOT=$packages\flowmq.native\$env:FLOWMQ_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          function Get-SinglePackageDirectory([string]$Root) {
+            $dirs = @(Get-ChildItem -LiteralPath $Root -Directory)
+            if ($dirs.Count -ne 1) {
+              throw "expected exactly one resolved package version under $Root, found $($dirs.Count)"
+            }
+            return $dirs[0]
+          }
+          $saltsPackage = Get-SinglePackageDirectory (Join-Path $packages "salts.native")
+          $saltsUtilsPackage = Get-SinglePackageDirectory (Join-Path $packages "saltsutils.native")
+          $flowmqPackage = Get-SinglePackageDirectory (Join-Path $packages "flowmq.native")
+          "SALTS_ROOT=$($saltsPackage.FullName)\sdk\windows-x64" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$($saltsUtilsPackage.FullName)\sdk\windows-x64" >> $env:GITHUB_ENV
+          "FLOWMQ_ROOT=$($flowmqPackage.FullName)\sdk\windows-x64" >> $env:GITHUB_ENV
+          "TURBORAFT_SALTS_RESOLVED_VERSION=$($saltsPackage.Name)" >> $env:GITHUB_ENV
+          "TURBORAFT_SALTS_UTILS_RESOLVED_VERSION=$($saltsUtilsPackage.Name)" >> $env:GITHUB_ENV
+          "TURBORAFT_FLOWMQ_RESOLVED_VERSION=$($flowmqPackage.Name)" >> $env:GITHUB_ENV
           "TURBORAFT_ROOT=$packages\turboraft.native\${{ needs.metadata.outputs.package_version }}\sdk\windows-x64" >> $env:GITHUB_ENV
       - name: Restore qualification vcpkg dependencies
         shell: bash
