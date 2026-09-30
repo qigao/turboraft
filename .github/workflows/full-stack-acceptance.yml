@@ -223,7 +223,7 @@ jobs:
           TURBORAFT_ROOT: ${{ github.workspace }}/.ci/pkgs/turboraft
         run: |
           set -euo pipefail
-          cmake -S tests/package_core_consumer \
+          env -u SALTS_UTILS_ROOT cmake -S tests/package_core_consumer \
             -B .ci/build/package-core-consumer -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
