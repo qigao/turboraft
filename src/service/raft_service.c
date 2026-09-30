@@ -2,8 +2,23 @@
 
 #include <salts_error.h>
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define TR_SERVICE_MAX_STAGED_MESSAGES_PER_PEER TR_RAFT_MAX_VOTERS
+
+typedef struct tr_service_peer_delivery {
+    tr_raft_node_id_t peer_id;
+    tr_raft_message_t *messages;
+    size_t message_offset;
+    size_t message_count;
+    tr_raft_snapshot_request_t snapshot_request;
+    bool snapshot_pending;
+    bool core_paused;
+    uint64_t capacity_rejections;
+    int last_error;
+} tr_service_peer_delivery_t;
 
 struct tr_raft_service {
     tr_raft_core_t *core;
@@ -17,12 +32,8 @@ struct tr_raft_service {
     bool journal_compaction_pending;
     bool backup_prepared;
     tr_raft_message_t messages[TR_RAFT_MAX_VOTERS];
-    size_t pending_message_offset;
-    size_t pending_message_count;
-    tr_raft_snapshot_request_t pending_snapshot_requests[TR_RAFT_MAX_MEMBERS];
-    size_t pending_snapshot_request_offset;
-    size_t pending_snapshot_request_count;
-    bool transport_backpressured;
+    tr_service_peer_delivery_t peer_deliveries[TR_RAFT_MAX_MEMBERS];
+    size_t peer_delivery_count;
     tr_raft_runtime_result_t last_runtime_result;
     tr_raft_read_state_t read_states[TR_RAFT_MAX_PENDING_READS];
     size_t read_state_head;
@@ -58,13 +69,114 @@ static int tr_service_fault(tr_raft_service_t *service, int cause)
     return cause;
 }
 
+static bool tr_service_delivery_has_pending(
+    const tr_service_peer_delivery_t *delivery)
+{
+    return delivery->message_offset < delivery->message_count ||
+           delivery->snapshot_pending;
+}
+
+static tr_service_peer_delivery_t *tr_service_delivery(
+    tr_raft_service_t *service,
+    tr_raft_node_id_t peer_id,
+    bool create)
+{
+    size_t index;
+
+    for (index = 0U; index < service->peer_delivery_count; ++index) {
+        if (service->peer_deliveries[index].peer_id == peer_id) {
+            return &service->peer_deliveries[index];
+        }
+    }
+    if (!create || peer_id == 0U ||
+        service->peer_delivery_count == TR_RAFT_MAX_MEMBERS) {
+        return NULL;
+    }
+    service->peer_deliveries[service->peer_delivery_count].peer_id = peer_id;
+    return &service->peer_deliveries[service->peer_delivery_count++];
+}
+
+static void tr_service_note_capacity_rejection(
+    tr_service_peer_delivery_t *delivery)
+{
+    if (delivery->capacity_rejections != UINT64_MAX) {
+        ++delivery->capacity_rejections;
+    }
+    delivery->last_error = SALTS_ENOSPC;
+}
+
+static int tr_service_stage_message(
+    tr_service_peer_delivery_t *delivery,
+    const tr_raft_message_t *message)
+{
+    if (delivery->messages == NULL) {
+        delivery->messages = (tr_raft_message_t *) calloc(
+            TR_SERVICE_MAX_STAGED_MESSAGES_PER_PEER,
+            sizeof(*delivery->messages));
+        if (delivery->messages == NULL) {
+            return SALTS_ENOMEM;
+        }
+    }
+    if (delivery->message_count ==
+        TR_SERVICE_MAX_STAGED_MESSAGES_PER_PEER) {
+        return SALTS_ENOSPC;
+    }
+    delivery->messages[delivery->message_count++] = *message;
+    return SALTS_OK;
+}
+
+static int tr_service_stage_snapshot(
+    tr_service_peer_delivery_t *delivery,
+    const tr_raft_snapshot_request_t *request)
+{
+    if (delivery->snapshot_pending) {
+        return SALTS_ENOSPC;
+    }
+    delivery->snapshot_request = *request;
+    delivery->snapshot_pending = true;
+    return SALTS_OK;
+}
+
+static bool tr_service_peer_transport_pending(
+    const tr_raft_service_t *service,
+    tr_raft_node_id_t peer_id)
+{
+    size_t index;
+
+    for (index = 0U; index < service->peer_delivery_count; ++index) {
+        const tr_service_peer_delivery_t *delivery =
+            &service->peer_deliveries[index];
+
+        if (delivery->peer_id == peer_id) {
+            return tr_service_delivery_has_pending(delivery);
+        }
+    }
+    return false;
+}
+
+static bool tr_service_has_pending_transport(
+    const tr_raft_service_t *service)
+{
+    size_t index;
+
+    for (index = 0U; index < service->peer_delivery_count; ++index) {
+        if (tr_service_delivery_has_pending(
+                &service->peer_deliveries[index])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void tr_service_clear_pending_transport(tr_raft_service_t *service)
 {
-    service->pending_message_offset = 0U;
-    service->pending_message_count = 0U;
-    service->pending_snapshot_request_offset = 0U;
-    service->pending_snapshot_request_count = 0U;
-    service->transport_backpressured = false;
+    size_t index;
+
+    for (index = 0U; index < service->peer_delivery_count; ++index) {
+        free(service->peer_deliveries[index].messages);
+    }
+    memset(service->peer_deliveries, 0, sizeof(service->peer_deliveries));
+    service->peer_delivery_count = 0U;
 }
 
 static int tr_service_enqueue_message(
@@ -72,26 +184,28 @@ static int tr_service_enqueue_message(
     const tr_raft_message_t *message)
 {
     tr_raft_service_t *service = (tr_raft_service_t *) context;
+    tr_service_peer_delivery_t *delivery;
     int result;
 
     if (service == NULL || message == NULL ||
         service->transport.enqueue == NULL) {
         return SALTS_EINVAL;
     }
-    if (!service->transport_backpressured) {
-        result = service->transport.enqueue(service->transport.context,
-                                            message);
-        if (result != SALTS_ENOSPC) {
-            return result;
-        }
-        service->transport_backpressured = true;
+    delivery = tr_service_delivery(service, message->to, false);
+    if (delivery != NULL && tr_service_delivery_has_pending(delivery)) {
+        return tr_service_stage_message(delivery, message);
     }
-    if (service->pending_message_count == TR_RAFT_MAX_VOTERS) {
-        return SALTS_EPROTO;
+
+    result = service->transport.enqueue(service->transport.context, message);
+    if (result != SALTS_ENOSPC) {
+        return result;
     }
-    /* Core cannot reuse this Ready buffer until the pending suffix drains. */
-    service->messages[service->pending_message_count++] = *message;
-    return SALTS_OK;
+    delivery = tr_service_delivery(service, message->to, true);
+    if (delivery == NULL) {
+        return SALTS_ENOSPC;
+    }
+    tr_service_note_capacity_rejection(delivery);
+    return tr_service_stage_message(delivery, message);
 }
 
 static int tr_service_enqueue_snapshot(
@@ -99,60 +213,116 @@ static int tr_service_enqueue_snapshot(
     const tr_raft_snapshot_request_t *request)
 {
     tr_raft_service_t *service = (tr_raft_service_t *) context;
+    tr_service_peer_delivery_t *delivery;
     int result;
 
     if (service == NULL || request == NULL ||
         service->transport.enqueue_snapshot == NULL) {
         return SALTS_EINVAL;
     }
-    if (!service->transport_backpressured) {
-        result = service->transport.enqueue_snapshot(
-            service->transport.snapshot_context, request);
-        if (result != SALTS_ENOSPC) {
+    delivery = tr_service_delivery(service, request->peer_id, false);
+    if (delivery != NULL && tr_service_delivery_has_pending(delivery)) {
+        return tr_service_stage_snapshot(delivery, request);
+    }
+
+    result = service->transport.enqueue_snapshot(
+        service->transport.snapshot_context, request);
+    if (result != SALTS_ENOSPC) {
+        return result;
+    }
+    delivery = tr_service_delivery(service, request->peer_id, true);
+    if (delivery == NULL) {
+        return SALTS_ENOSPC;
+    }
+    tr_service_note_capacity_rejection(delivery);
+    return tr_service_stage_snapshot(delivery, request);
+}
+
+static int tr_service_pause_staged_peers(tr_raft_service_t *service)
+{
+    size_t index;
+
+    for (index = 0U; index < service->peer_delivery_count; ++index) {
+        tr_service_peer_delivery_t *delivery =
+            &service->peer_deliveries[index];
+        int result;
+
+        if (!tr_service_delivery_has_pending(delivery) ||
+            delivery->core_paused) {
+            continue;
+        }
+        result = tr_raft_core_set_peer_transport_paused(
+            service->core, delivery->peer_id, true);
+        if (result == SALTS_ENOENT) {
+            continue;
+        }
+        if (result != SALTS_OK) {
             return result;
         }
-        service->transport_backpressured = true;
+        delivery->core_paused = true;
     }
-    if (service->pending_snapshot_request_count == TR_RAFT_MAX_MEMBERS) {
-        return SALTS_EPROTO;
-    }
-    service->pending_snapshot_requests[
-        service->pending_snapshot_request_count++] = *request;
     return SALTS_OK;
 }
 
 static int tr_service_drain_transport(tr_raft_service_t *service)
 {
-    int result;
+    size_t index;
 
-    while (service->pending_message_offset <
-           service->pending_message_count) {
-        result = service->transport.enqueue(
-            service->transport.context,
-            &service->messages[service->pending_message_offset]);
-        if (result == SALTS_ENOSPC) {
-            return result;
+    for (index = 0U; index < service->peer_delivery_count; ++index) {
+        tr_service_peer_delivery_t *delivery =
+            &service->peer_deliveries[index];
+        bool blocked = false;
+        int result;
+
+        while (delivery->message_offset < delivery->message_count) {
+            result = service->transport.enqueue(
+                service->transport.context,
+                &delivery->messages[delivery->message_offset]);
+            if (result == SALTS_ENOSPC) {
+                tr_service_note_capacity_rejection(delivery);
+                blocked = true;
+                break;
+            }
+            if (result != SALTS_OK) {
+                delivery->last_error = result;
+                return tr_service_fault(service, result);
+            }
+            ++delivery->message_offset;
         }
-        if (result != SALTS_OK) {
-            return tr_service_fault(service, result);
+        if (blocked) {
+            continue;
         }
-        ++service->pending_message_offset;
+        if (delivery->snapshot_pending) {
+            result = service->transport.enqueue_snapshot(
+                service->transport.snapshot_context,
+                &delivery->snapshot_request);
+            if (result == SALTS_ENOSPC) {
+                tr_service_note_capacity_rejection(delivery);
+                continue;
+            }
+            if (result != SALTS_OK) {
+                delivery->last_error = result;
+                return tr_service_fault(service, result);
+            }
+            delivery->snapshot_pending = false;
+        }
+        if (delivery->message_offset == delivery->message_count &&
+            !delivery->snapshot_pending) {
+            delivery->message_offset = 0U;
+            delivery->message_count = 0U;
+            free(delivery->messages);
+            delivery->messages = NULL;
+            delivery->last_error = SALTS_OK;
+            if (delivery->core_paused) {
+                result = tr_raft_core_set_peer_transport_paused(
+                    service->core, delivery->peer_id, false);
+                if (result != SALTS_OK && result != SALTS_ENOENT) {
+                    return tr_service_fault(service, result);
+                }
+                delivery->core_paused = false;
+            }
+        }
     }
-    while (service->pending_snapshot_request_offset <
-           service->pending_snapshot_request_count) {
-        result = service->transport.enqueue_snapshot(
-            service->transport.snapshot_context,
-            &service->pending_snapshot_requests[
-                service->pending_snapshot_request_offset]);
-        if (result == SALTS_ENOSPC) {
-            return result;
-        }
-        if (result != SALTS_OK) {
-            return tr_service_fault(service, result);
-        }
-        ++service->pending_snapshot_request_offset;
-    }
-    tr_service_clear_pending_transport(service);
     return SALTS_OK;
 }
 
@@ -166,11 +336,9 @@ static int tr_service_mutation_guard(tr_raft_service_t *service)
     if (service->backup_prepared) {
         return SALTS_EBUSY;
     }
-    if (service->transport_backpressured) {
-        result = tr_service_drain_transport(service);
-        if (result != SALTS_OK) {
-            return result;
-        }
+    result = tr_service_drain_transport(service);
+    if (result != SALTS_OK) {
+        return result;
     }
     return tr_raft_runtime_apply_blocked(&service->runtime)
                ? SALTS_EBUSY
@@ -431,6 +599,15 @@ static int tr_service_process_ready(
     }
     result = tr_raft_runtime_process(
         &service->runtime, ready, &service->last_runtime_result);
+    if (result == SALTS_OK ||
+        (result == SALTS_EBUSY &&
+         tr_raft_runtime_apply_blocked(&service->runtime))) {
+        int pause_result = tr_service_pause_staged_peers(service);
+
+        if (pause_result != SALTS_OK) {
+            return tr_service_fault(service, pause_result);
+        }
+    }
     if (result == SALTS_EBUSY &&
         tr_raft_runtime_apply_blocked(&service->runtime)) {
         result = tr_service_enqueue_read_states(service, ready);
@@ -526,6 +703,7 @@ void tr_raft_service_destroy(tr_raft_service_t *service)
     if (service == NULL) {
         return;
     }
+    tr_service_clear_pending_transport(service);
     tr_raft_core_destroy(service->core);
     free(service->snapshot_buffer);
     free(service);
@@ -543,7 +721,8 @@ int tr_raft_service_prepare_backup(tr_raft_service_t *service)
     if (result != SALTS_OK) {
         return result;
     }
-    if (service->journal_compaction_pending ||
+    if (tr_service_has_pending_transport(service) ||
+        service->journal_compaction_pending ||
         !tr_service_read_queue_empty(service)) {
         return SALTS_EBUSY;
     }
@@ -616,6 +795,9 @@ int tr_raft_service_step(
     result = tr_service_mutation_guard(service);
     if (result != SALTS_OK) {
         return result;
+    }
+    if (tr_service_peer_transport_pending(service, message->from)) {
+        return SALTS_ENOSPC;
     }
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_step(service->core, message, &ready);
@@ -870,11 +1052,9 @@ int tr_raft_service_poll(tr_raft_service_t *service)
     if (service->backup_prepared) {
         return SALTS_EBUSY;
     }
-    if (service->transport_backpressured) {
-        result = tr_service_drain_transport(service);
-        if (result != SALTS_OK) {
-            return result;
-        }
+    result = tr_service_drain_transport(service);
+    if (result != SALTS_OK) {
+        return result;
     }
     if (tr_raft_runtime_apply_blocked(&service->runtime)) {
         result = tr_raft_runtime_retry_apply(
@@ -923,6 +1103,9 @@ int tr_raft_service_snapshot_completed(tr_raft_service_t *service,
     result = tr_service_mutation_guard(service);
     if (result != SALTS_OK) {
         return result;
+    }
+    if (tr_service_peer_transport_pending(service, peer_id)) {
+        return SALTS_ENOSPC;
     }
     tr_service_prepare_ready(service, &ready);
     result = tr_raft_core_snapshot_completed(service->core, peer_id,
