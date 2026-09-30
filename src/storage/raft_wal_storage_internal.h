@@ -20,6 +20,7 @@ typedef int (*tr_raft_wal_replace_durable_fn)(
 
 typedef enum tr_raft_wal_io_phase {
     TR_RAFT_WAL_IO_SEGMENT_WRITE = 0,
+    TR_RAFT_WAL_IO_MANIFEST_WRITE,
     TR_RAFT_WAL_IO_TRANSACTION_WRITE,
     TR_RAFT_WAL_IO_TRANSACTION_FSYNC,
     TR_RAFT_WAL_IO_SNAPSHOT_WRITE,
@@ -66,6 +67,11 @@ int tr_raft_wal_storage_open_with_io_fault_provider_for_test(
     const tr_raft_wal_storage_config_t *config,
     const tr_raft_wal_io_fault_provider_t *provider,
     tr_raft_wal_storage_t **out_storage);
+
+/* Seeds an otherwise-empty WAL near a high sequence for lifetime tests. */
+int tr_raft_wal_storage_rebase_empty_sequence_for_test(
+    tr_raft_wal_storage_t *storage,
+    uint64_t sequence);
 
 #ifdef __cplusplus
 }
