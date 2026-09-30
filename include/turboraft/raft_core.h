@@ -426,6 +426,27 @@ int tr_raft_core_configuration(const tr_raft_core_t *core,
 int tr_raft_core_progress(const tr_raft_core_t *core,
                           tr_raft_progress_view_t *out_progress);
 
+/**
+ * Pauses or resumes outbound work generation for one remote peer.
+ *
+ * This is a transport-scheduling seam only: membership and quorum rules are
+ * unchanged, already-produced Ready effects are not rewritten, and existing
+ * replication-window state is retained. While paused, the peer's replication
+ * timeout clock is frozen so an unsent staged suffix cannot expire inside Core.
+ *
+ * The call is permitted while a Ready is outstanding so Service can pause a
+ * target immediately after transport admission fails. It must not be called
+ * recursively while Core itself is executing.
+ */
+int tr_raft_core_set_peer_paused(tr_raft_core_t *core,
+                                 tr_raft_node_id_t peer_id,
+                                 bool paused);
+
+/** Reads the current transport-scheduling pause state for one remote peer. */
+int tr_raft_core_peer_paused(const tr_raft_core_t *core,
+                             tr_raft_node_id_t peer_id,
+                             bool *out_paused);
+
 /** Derives receipt progress without mutating or retaining operation state. */
 int tr_raft_core_operation_status(const tr_raft_core_t *core,
                                   tr_raft_term_t term,

@@ -461,4 +461,182 @@ spec("native raft replication")
         check_equal(progress.peers[1].next_index, 10U);
         tr_raft_core_destroy(core);
     }
+    it("preserves joint quorum rules when one voter is transport-paused")
+    {
+        const tr_raft_node_id_t target_voters[] = {1U, 3U, 4U};
+        tr_raft_core_t *core = replication_core();
+        tr_raft_membership_change_t change;
+        tr_raft_message_t messages[3];
+        tr_raft_ready_t ready;
+        tr_raft_message_t response;
+        tr_raft_status_t status;
+        size_t index;
+
+        replication_elect(core);
+        check_equal(tr_raft_core_set_peer_paused(core, 3U, true), SALTS_OK);
+
+        memset(&change, 0, sizeof(change));
+        change.transition_id = 701U;
+        change.voters = target_voters;
+        change.voter_count = 3U;
+        ready = replication_ready_capacity(messages, 2U);
+        check_equal(tr_raft_core_change_membership(core, &change, &ready),
+                    SALTS_OK);
+        check(ready.log_changed);
+        check_false(ready.commit_changed);
+        check_equal(ready.message_count, 2U);
+        for (index = 0U; index < ready.message_count; ++index) {
+            check_not_equal(ready.messages[index].to, 3U);
+        }
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_APPEND_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.term = 1U;
+        response.granted = true;
+        response.previous_log_index = 0U;
+        response.match_index = 1U;
+        ready = replication_ready_capacity(messages, 2U);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check_false(ready.commit_changed);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.commit_index, 0U);
+        check(status.joint_configuration);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        response.from = 4U;
+        ready = replication_ready_capacity(messages, 2U);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check(ready.commit_changed);
+        check_equal(ready.commit_index, 1U);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.commit_index, 1U);
+        check(status.joint_configuration);
+
+        tr_raft_core_destroy(core);
+    }
+
+    it("sizes Ready capacity only for unpaused election targets")
+    {
+        tr_raft_core_t *core = replication_core();
+        tr_raft_message_t messages[1];
+        tr_raft_ready_t ready = replication_ready_capacity(messages, 1U);
+        tr_raft_tick_t tick = {5U, 7U};
+        tr_raft_message_t response;
+
+        check_equal(tr_raft_core_set_peer_paused(core, 3U, true), SALTS_OK);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_PRE_VOTE_REQUEST);
+        check_equal(ready.messages[0].to, 2U);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_PRE_VOTE_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.campaign_term = 1U;
+        response.granted = true;
+        ready = replication_ready_capacity(messages, 1U);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_VOTE_REQUEST);
+        check_equal(ready.messages[0].to, 2U);
+
+        tr_raft_core_destroy(core);
+    }
+
+    it("pauses one follower without blocking healthy quorum progress")
+    {
+        tr_raft_core_t *core = replication_core();
+        tr_raft_message_t messages[4];
+        tr_raft_ready_t ready;
+        tr_raft_proposal_t proposal = {91U, "x", 1U};
+        tr_raft_message_t response;
+        tr_raft_status_t status;
+        bool paused = false;
+
+        replication_elect(core);
+        check_equal(tr_raft_core_set_peer_paused(core, 3U, true), SALTS_OK);
+        check_equal(tr_raft_core_peer_paused(core, 3U, &paused), SALTS_OK);
+        check_true(paused);
+
+        ready = replication_ready_capacity(messages, 4U);
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].to, 2U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_APPEND_REQUEST);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_APPEND_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.term = 1U;
+        response.granted = true;
+        response.match_index = 1U;
+        ready = replication_ready_capacity(messages, 4U);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check_true(ready.commit_changed);
+        check_equal(ready.commit_index, 1U);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.commit_index, 1U);
+
+        check_equal(tr_raft_core_set_peer_paused(core, 3U, false), SALTS_OK);
+        check_equal(tr_raft_core_peer_paused(core, 3U, &paused), SALTS_OK);
+        check_false(paused);
+        ready = replication_ready_capacity(messages, 4U);
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].to, 3U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_APPEND_REQUEST);
+        check_equal(ready.messages[0].entries[0].index, 1U);
+
+        tr_raft_core_destroy(core);
+    }
+
+    it("freezes staged append timeout while the target peer is paused")
+    {
+        tr_raft_core_t *core = replication_core_with_window(4U);
+        tr_raft_message_t messages[8];
+        tr_raft_ready_t ready;
+        tr_raft_proposal_t proposal = {92U, "y", 1U};
+        tr_raft_tick_t tick = {2U, 7U};
+        tr_raft_progress_view_t before;
+        tr_raft_progress_view_t after;
+
+        replication_elect(core);
+        ready = replication_ready_capacity(messages, 8U);
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
+        check_equal(ready.message_count, 2U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_APPEND_REQUEST);
+        check_equal(ready.messages[1].type, TR_RAFT_MSG_APPEND_REQUEST);
+        check_equal(tr_raft_core_set_peer_paused(core, 3U, true), SALTS_OK);
+        check_equal(tr_raft_core_progress(core, &before), SALTS_OK);
+        check_equal(before.peers[2].node_id, 3U);
+        check_equal(before.peers[2].inflight_append_count, 1U);
+        check_equal(before.peers[2].next_index, 2U);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        ready = replication_ready_capacity(messages, 8U);
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
+        check_equal(tr_raft_core_progress(core, &after), SALTS_OK);
+        check_equal(after.peers[2].node_id, 3U);
+        check_equal(after.peers[2].inflight_append_count,
+                    before.peers[2].inflight_append_count);
+        check_equal(after.peers[2].next_index, before.peers[2].next_index);
+        check_equal(after.peers[2].append_probe, before.peers[2].append_probe);
+        {
+            size_t index;
+            for (index = 0U; index < ready.message_count; ++index) {
+                check_not_equal(ready.messages[index].to, 3U);
+            }
+        }
+
+        tr_raft_core_destroy(core);
+    }
+
 }

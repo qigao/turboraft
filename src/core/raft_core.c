@@ -47,6 +47,7 @@ struct tr_raft_core {
     uint32_t heartbeat_elapsed_ticks;
     uint32_t check_quorum_elapsed_ticks;
     uint32_t recent_active;
+    uint32_t paused_peers;
     tr_raft_node_id_t leadership_transfer_target;
     uint32_t leadership_transfer_elapsed_ticks;
     bool leadership_transfer_sent;
@@ -210,6 +211,70 @@ static int tr_peer_index(const tr_raft_core_t *core,
     return tr_raft_peer_set_index(&core->peers, node_id);
 }
 
+static bool tr_peer_index_paused(const tr_raft_core_t *core,
+                                 size_t peer_index)
+{
+    return peer_index < tr_peer_count(core) &&
+           (core->paused_peers &
+            (UINT32_C(1) << (uint32_t)peer_index)) != 0U;
+}
+
+static bool tr_peer_paused(const tr_raft_core_t *core,
+                           tr_raft_node_id_t node_id)
+{
+    int peer_index = tr_peer_index(core, node_id);
+
+    return peer_index >= 0 &&
+           tr_peer_index_paused(core, (size_t)peer_index);
+}
+
+static size_t tr_unpaused_remote_peer_count(const tr_raft_core_t *core)
+{
+    size_t count = 0U;
+    size_t index;
+
+    for (index = 0U; index < tr_peer_count(core); ++index) {
+        tr_raft_node_id_t node_id = tr_peer_id(core, index);
+        if (node_id != core->self_id &&
+            !tr_peer_index_paused(core, index)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+static size_t tr_unpaused_remote_voter_count(const tr_raft_core_t *core)
+{
+    size_t count = 0U;
+    size_t index;
+
+    for (index = 0U; index < tr_peer_count(core); ++index) {
+        tr_raft_node_id_t node_id = tr_peer_id(core, index);
+        if (node_id != core->self_id &&
+            tr_raft_membership_is_voter(tr_core_membership(core), node_id) &&
+            !tr_peer_index_paused(core, index)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+static size_t tr_peer_set_unpaused_remote_count(
+    const tr_raft_core_t *core,
+    const tr_raft_peer_set_t *peers)
+{
+    size_t count = 0U;
+    size_t index;
+
+    for (index = 0U; index < peers->count; ++index) {
+        tr_raft_node_id_t node_id = peers->node_ids[index];
+        if (node_id != core->self_id && !tr_peer_paused(core, node_id)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 static size_t tr_core_voter_count(const tr_raft_core_t *core)
 {
     const tr_raft_membership_t *membership = tr_core_membership(core);
@@ -300,6 +365,7 @@ static void tr_core_refresh_peers(tr_raft_core_t *core,
     tr_raft_peer_set_t old_peers = core->peers;
     tr_raft_index_t old_match[TR_RAFT_MAX_MEMBERS];
     uint32_t old_recent_active = core->recent_active;
+    uint32_t old_paused_peers = core->paused_peers;
     tr_raft_index_t last_index = tr_raft_log_last_index(&core->log);
     size_t index;
 
@@ -313,6 +379,7 @@ static void tr_core_refresh_peers(tr_raft_core_t *core,
     memset(core->match_index, 0, sizeof(core->match_index));
     memset(core->append_windows, 0, sizeof(core->append_windows));
     core->recent_active = 0U;
+    core->paused_peers = 0U;
     core->peers = *next_peers;
 
     for (index = 0U; index < core->peers.count; ++index) {
@@ -329,6 +396,10 @@ static void tr_core_refresh_peers(tr_raft_core_t *core,
         if ((old_recent_active &
              (UINT32_C(1) << (uint32_t) old_index)) != 0U) {
             core->recent_active |= UINT32_C(1) << (uint32_t) index;
+        }
+        if ((old_paused_peers &
+             (UINT32_C(1) << (uint32_t) old_index)) != 0U) {
+            core->paused_peers |= UINT32_C(1) << (uint32_t) index;
         }
     }
     if (core->role == TR_RAFT_LEADER) {
@@ -517,13 +588,18 @@ static int tr_finish(tr_raft_core_t *core,
     return SALTS_OK;
 }
 
-static void tr_emit(tr_raft_core_t *core,
+static bool tr_emit(tr_raft_core_t *core,
                     tr_raft_ready_t *ready,
                     tr_raft_message_type_t type,
                     tr_raft_node_id_t to,
                     bool granted)
 {
-    tr_raft_message_t *message = &ready->messages[ready->message_count++];
+    tr_raft_message_t *message;
+
+    if (tr_peer_paused(core, to)) {
+        return false;
+    }
+    message = &ready->messages[ready->message_count++];
 
     memset(message, 0, sizeof(*message));
     message->type = type;
@@ -534,6 +610,7 @@ static void tr_emit(tr_raft_core_t *core,
     message->last_log_index = tr_raft_log_last_index(&core->log);
     message->last_log_term = tr_raft_log_last_term(&core->log);
     message->granted = granted;
+    return true;
 }
 
 static void tr_emit_snapshot_request(tr_raft_core_t *core,
@@ -543,6 +620,9 @@ static void tr_emit_snapshot_request(tr_raft_core_t *core,
     tr_raft_node_id_t peer_id = tr_peer_id(core, peer_index);
     size_t index;
 
+    if (tr_peer_index_paused(core, peer_index)) {
+        return;
+    }
     for (index = 0U; index < ready->snapshot_request_count; ++index) {
         if (ready->snapshot_requests[index].peer_id == peer_id) {
             return;
@@ -585,9 +665,11 @@ static void tr_broadcast_read_index(tr_raft_core_t *core,
 
         if (node_id != core->self_id &&
             tr_raft_membership_is_voter(tr_core_membership(core), node_id)) {
-            tr_emit(core, ready, TR_RAFT_MSG_READ_INDEX_REQUEST,
-                    node_id, false);
-            ready->messages[ready->message_count - 1U].context_id = context_id;
+            if (tr_emit(core, ready, TR_RAFT_MSG_READ_INDEX_REQUEST,
+                        node_id, false)) {
+                ready->messages[ready->message_count - 1U].context_id =
+                    context_id;
+            }
         }
     }
 }
@@ -607,6 +689,9 @@ static bool tr_emit_replication(tr_raft_core_t *core,
     size_t index;
     tr_raft_message_type_t type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
 
+    if (tr_peer_index_paused(core, peer_index)) {
+        return false;
+    }
     if (next_index <= core->log.base_index) {
         tr_append_window_reset(window, true);
         tr_emit_snapshot_request(core, ready, peer_index);
@@ -627,7 +712,9 @@ static bool tr_emit_replication(tr_raft_core_t *core,
                ready->message_count >= ready->message_capacity) {
         return false;
     }
-    tr_emit(core, ready, type, tr_peer_id(core, peer_index), false);
+    if (!tr_emit(core, ready, type, tr_peer_id(core, peer_index), false)) {
+        return false;
+    }
     ready->messages[ready->message_count - 1U].previous_log_index =
         next_index - 1U;
     if (next_index - 1U == core->log.base_index) {
@@ -1029,9 +1116,10 @@ static int tr_step_heartbeat_request(tr_raft_core_t *core,
     int result;
 
     if (request->term < core->term) {
-        tr_emit(core, ready, response_type, request->from, false);
-        ready->messages[ready->message_count - 1U].reject_hint =
-            tr_raft_log_last_index(&core->log) + 1U;
+        if (tr_emit(core, ready, response_type, request->from, false)) {
+            ready->messages[ready->message_count - 1U].reject_hint =
+                tr_raft_log_last_index(&core->log) + 1U;
+        }
         return SALTS_OK;
     }
 
@@ -1101,15 +1189,17 @@ static int tr_step_heartbeat_request(tr_raft_core_t *core,
         ready->commit_index = core->commit_index;
     }
 
-    tr_emit(core, ready, response_type, request->from, reconcile.matched);
-    ready->messages[ready->message_count - 1U].match_index =
-        reconcile.matched
-            ? request->previous_log_index + request->entry_count
-            : 0U;
-    ready->messages[ready->message_count - 1U].reject_hint =
-        reconcile.reject_hint;
-    ready->messages[ready->message_count - 1U].previous_log_index =
-        request->previous_log_index;
+    if (tr_emit(core, ready, response_type, request->from,
+                reconcile.matched)) {
+        ready->messages[ready->message_count - 1U].match_index =
+            reconcile.matched
+                ? request->previous_log_index + request->entry_count
+                : 0U;
+        ready->messages[ready->message_count - 1U].reject_hint =
+            reconcile.reject_hint;
+        ready->messages[ready->message_count - 1U].previous_log_index =
+            request->previous_log_index;
+    }
     return SALTS_OK;
 }
 
@@ -1169,7 +1259,8 @@ static int tr_core_append_configuration(
     if (result != SALTS_OK) {
         return result;
     }
-    result = tr_require_capacity(core, ready, peers.count - 1U);
+    result = tr_require_capacity(
+        core, ready, tr_peer_set_unpaused_remote_count(core, &peers));
     if (result != SALTS_OK) {
         return result;
     }
@@ -1269,8 +1360,9 @@ static int tr_step_heartbeat_response(tr_raft_core_t *core,
     if (response->granted && !core->leadership_transfer_sent &&
         core->leadership_transfer_target == response->from &&
         core->match_index[peer_index] >= last_index) {
-        tr_emit(core, ready, TR_RAFT_MSG_TIMEOUT_NOW, response->from, false);
-        core->leadership_transfer_sent = true;
+        core->leadership_transfer_sent =
+            tr_emit(core, ready, TR_RAFT_MSG_TIMEOUT_NOW,
+                    response->from, false);
     } else if (core->next_index[peer_index] <= last_index ||
                !response->granted) {
         tr_fill_peer_replication_window(core, ready, (size_t) peer_index);
@@ -1301,10 +1393,11 @@ static void tr_step_read_index_request(tr_raft_core_t *core,
         request->term != core->term || core->leader_id != request->from) {
         return;
     }
-    tr_emit(core, ready, TR_RAFT_MSG_READ_INDEX_RESPONSE, request->from,
-            false);
-    ready->messages[ready->message_count - 1U].context_id =
-        request->context_id;
+    if (tr_emit(core, ready, TR_RAFT_MSG_READ_INDEX_RESPONSE,
+                request->from, false)) {
+        ready->messages[ready->message_count - 1U].context_id =
+            request->context_id;
+    }
 }
 
 static void tr_step_read_index_response(tr_raft_core_t *core,
@@ -1327,7 +1420,7 @@ static void tr_step_read_index_response(tr_raft_core_t *core,
     }
     core->pending_read_acks |= bit;
     if (tr_core_has_quorum(core, core->pending_read_acks)) {
-        size_t required = tr_core_voter_count(core) - 1U;
+        size_t required = tr_unpaused_remote_voter_count(core);
 
         tr_read_emit_active(core, ready);
         if (core->waiting_read_count != 0U &&
@@ -1623,7 +1716,7 @@ int tr_raft_core_tick(tr_raft_core_t *core,
         return tr_finish(core, ready, &before);
     }
 
-    peer_count = tr_peer_count(core) - 1U;
+    peer_count = tr_unpaused_remote_peer_count(core);
     if (core->role == TR_RAFT_LEADER) {
         if (UINT32_MAX - core->check_quorum_elapsed_ticks <
                 tick->elapsed_ticks ||
@@ -1659,7 +1752,8 @@ int tr_raft_core_tick(tr_raft_core_t *core,
             bool timed_out = false;
             size_t inflight_index;
 
-            if (window->count == 0U) {
+            if (window->count == 0U ||
+                tr_peer_index_paused(core, index)) {
                 continue;
             }
             for (inflight_index = 0U;
@@ -1762,16 +1856,16 @@ int tr_raft_core_step(tr_raft_core_t *core,
     case TR_RAFT_MSG_VOTE_REQUEST:
     case TR_RAFT_MSG_HEARTBEAT_REQUEST:
     case TR_RAFT_MSG_APPEND_REQUEST:
-        required = 1U;
+        required = tr_peer_paused(core, message->from) ? 0U : 1U;
         break;
     case TR_RAFT_MSG_PRE_VOTE_RESPONSE:
         if (tr_will_pre_vote_win(core, message, voter_index)) {
-            required = tr_peer_count(core) - 1U;
+            required = tr_unpaused_remote_peer_count(core);
         }
         break;
     case TR_RAFT_MSG_VOTE_RESPONSE:
         if (tr_will_vote_win(core, message, voter_index)) {
-            required = tr_peer_count(core) - 1U;
+            required = tr_unpaused_remote_peer_count(core);
         }
         break;
     case TR_RAFT_MSG_HEARTBEAT_RESPONSE:
@@ -1787,14 +1881,14 @@ int tr_raft_core_step(tr_raft_core_t *core,
         if (core->self_is_voter && core->role == TR_RAFT_FOLLOWER &&
             message->term == core->term &&
             core->leader_id == message->from && core->term != UINT64_MAX) {
-            required = tr_core_voter_count(core) - 1U;
+            required = tr_unpaused_remote_voter_count(core);
         }
         break;
     case TR_RAFT_MSG_READ_INDEX_REQUEST:
         if (core->self_is_voter && message->context_id != 0U &&
             core->role == TR_RAFT_FOLLOWER && message->term == core->term &&
             core->leader_id == message->from) {
-            required = 1U;
+            required = tr_peer_paused(core, message->from) ? 0U : 1U;
         }
         break;
     case TR_RAFT_MSG_READ_INDEX_RESPONSE:
@@ -1901,7 +1995,7 @@ int tr_raft_core_propose_batch(
         return SALTS_EBUSY;
     }
 
-    peer_count = tr_peer_count(core) - 1U;
+    peer_count = tr_unpaused_remote_peer_count(core);
     result = tr_require_capacity(core, ready, peer_count);
     if (result != SALTS_OK) {
         return result;
@@ -2008,7 +2102,8 @@ int tr_raft_core_transfer_leadership(tr_raft_core_t *core,
         return SALTS_EPROTO;
     }
     if (core->leadership_transfer_target != 0U ||
-        tr_read_total_count(core) != 0U) {
+        tr_read_total_count(core) != 0U ||
+        tr_peer_index_paused(core, (size_t)transferee_index)) {
         core->in_call = false;
         return SALTS_EBUSY;
     }
@@ -2021,8 +2116,9 @@ int tr_raft_core_transfer_leadership(tr_raft_core_t *core,
     core->leadership_transfer_elapsed_ticks = 0U;
     last_index = tr_raft_log_last_index(&core->log);
     if (core->match_index[transferee_index] >= last_index) {
-        tr_emit(core, ready, TR_RAFT_MSG_TIMEOUT_NOW, transferee_id, false);
-        core->leadership_transfer_sent = true;
+        core->leadership_transfer_sent =
+            tr_emit(core, ready, TR_RAFT_MSG_TIMEOUT_NOW,
+                    transferee_id, false);
     } else {
         (void) tr_emit_replication(core, ready,
                                    (size_t) transferee_index, false);
@@ -2075,7 +2171,7 @@ int tr_raft_core_read_index(tr_raft_core_t *core,
     }
 
     result = tr_require_capacity(
-        core, ready, tr_core_voter_count(core) - 1U);
+        core, ready, tr_unpaused_remote_voter_count(core));
     if (result != SALTS_OK) {
         return result;
     }
@@ -2098,7 +2194,7 @@ int tr_raft_core_poll(tr_raft_core_t *core, tr_raft_ready_t *ready)
         core->pending_read_count == 0U &&
         core->waiting_read_count != 0U) {
         result = tr_require_capacity(
-            core, ready, tr_core_voter_count(core) - 1U);
+            core, ready, tr_unpaused_remote_voter_count(core));
         if (result != SALTS_OK) {
             return result;
         }
@@ -2273,7 +2369,9 @@ int tr_raft_core_snapshot_completed(tr_raft_core_t *core,
         core->in_call = false;
         return SALTS_EBUSY;
     }
-    result = tr_require_capacity(core, ready, 1U);
+    result = tr_require_capacity(
+        core, ready,
+        tr_peer_index_paused(core, (size_t)peer_index) ? 0U : 1U);
     if (result != SALTS_OK) {
         return result;
     }
@@ -2381,6 +2479,51 @@ int tr_raft_core_progress(const tr_raft_core_t *core,
             peer->node_id != core->self_id &&
             peer->next_index <= core->log.base_index;
     }
+    return SALTS_OK;
+}
+
+int tr_raft_core_set_peer_paused(tr_raft_core_t *core,
+                                 tr_raft_node_id_t peer_id,
+                                 bool paused)
+{
+    int peer_index;
+    uint32_t bit;
+
+    if (core == NULL || peer_id == 0U || peer_id == core->self_id) {
+        return SALTS_EINVAL;
+    }
+    if (core->in_call) {
+        return SALTS_EBUSY;
+    }
+    peer_index = tr_peer_index(core, peer_id);
+    if (peer_index < 0) {
+        return SALTS_ENOENT;
+    }
+    bit = UINT32_C(1) << (uint32_t)peer_index;
+    if (paused) {
+        core->paused_peers |= bit;
+    } else {
+        core->paused_peers &= ~bit;
+    }
+    return SALTS_OK;
+}
+
+int tr_raft_core_peer_paused(const tr_raft_core_t *core,
+                             tr_raft_node_id_t peer_id,
+                             bool *out_paused)
+{
+    int peer_index;
+
+    if (core == NULL || peer_id == 0U || peer_id == core->self_id ||
+        out_paused == NULL) {
+        return SALTS_EINVAL;
+    }
+    peer_index = tr_peer_index(core, peer_id);
+    if (peer_index < 0) {
+        return SALTS_ENOENT;
+    }
+    *out_paused =
+        tr_peer_index_paused(core, (size_t)peer_index);
     return SALTS_OK;
 }
 
