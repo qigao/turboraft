@@ -191,8 +191,8 @@ int main(int argc, char **argv)
                 storage, 1U, 1U, &configuration,
                 snapshot, sizeof(snapshot)) == SALTS_OK,
             "pre-publication failure must remain retryable");
-        failed |= expect(provider.calls == 2U,
-                         "retry must publish exactly once");
+        failed |= expect(provider.calls == 3U,
+                         "retry must publish snapshot and checkpoint segment exactly once");
     } else {
         failed |= expect(
             salts_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK,
