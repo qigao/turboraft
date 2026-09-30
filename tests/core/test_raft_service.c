@@ -14,6 +14,10 @@ typedef struct service_test_state {
     size_t max_successful_messages;
     bool limit_successful_messages;
     int enqueue_result;
+    bool block_peer;
+    tr_raft_node_id_t blocked_peer_id;
+    size_t peer_message_count[4];
+    size_t peer_successful_message_count[4];
     size_t snapshot_request_count;
     size_t successful_snapshot_request_count;
     int snapshot_enqueue_result;
@@ -83,6 +87,12 @@ static int service_transport_enqueue(
         return SALTS_EINVAL;
     }
     ++state->message_count;
+    if (message->to < 4U) {
+        ++state->peer_message_count[message->to];
+    }
+    if (state->block_peer && message->to == state->blocked_peer_id) {
+        return SALTS_ENOSPC;
+    }
     if (state->enqueue_result != SALTS_OK) {
         return state->enqueue_result;
     }
@@ -91,6 +101,9 @@ static int service_transport_enqueue(
         return SALTS_ENOSPC;
     }
     ++state->successful_message_count;
+    if (message->to < 4U) {
+        ++state->peer_successful_message_count[message->to];
+    }
     return SALTS_OK;
 }
 
@@ -267,24 +280,147 @@ spec("raft service")
         check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
 
         check_equal(tr_raft_service_tick(service, &tick), SALTS_OK);
-        check_equal(state.message_count, 1U);
+        check_equal(state.message_count, 2U);
         check_equal(state.successful_message_count, 0U);
         check_equal(tr_raft_service_status(service, &status), SALTS_OK);
         check(!status.faulted);
 
-        check_equal(tr_raft_service_tick(service, &tick), SALTS_ENOSPC);
-        check_equal(state.message_count, 2U);
+        check_equal(tr_raft_service_tick(service, &tick), SALTS_OK);
+        check_equal(state.message_count, 4U);
         check_equal(state.successful_message_count, 0U);
         check_equal(tr_raft_service_status(service, &status), SALTS_OK);
         check(!status.faulted);
 
         state.enqueue_result = SALTS_OK;
         check_equal(tr_raft_service_poll(service), SALTS_OK);
-        check_equal(state.message_count, 4U);
+        check_equal(state.message_count, 6U);
         check_equal(state.successful_message_count, 2U);
         check_equal(tr_raft_service_status(service, &status), SALTS_OK);
         check(!status.faulted);
         check(!status.core.ready_outstanding);
+
+        tr_raft_service_destroy(service);
+    }
+
+    it("isolates one saturated follower while healthy quorum commits and reads")
+    {
+        const tr_raft_node_id_t voters[] = {1U, 2U, 3U};
+        static const char first_payload[] = "one";
+        static const char second_payload[] = "two";
+        tr_raft_service_config_t config;
+        tr_raft_service_t *service = NULL;
+        tr_raft_service_transport_status_t transport_status;
+        tr_raft_service_status_t status;
+        tr_raft_read_state_t read_state;
+        tr_raft_tick_t tick = {3U, 4U};
+        tr_raft_message_t response;
+        tr_raft_proposal_t proposal;
+        service_test_state_t state;
+        size_t index;
+        bool saw_paused_three = false;
+
+        memset(&state, 0, sizeof(state));
+        service_configure(&config, &state, voters, 3U);
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+
+        check_equal(tr_raft_service_tick(service, &tick), SALTS_OK);
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_PRE_VOTE_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.campaign_term = 1U;
+        response.granted = true;
+        check_equal(tr_raft_service_step(service, &response), SALTS_OK);
+
+        response.type = TR_RAFT_MSG_VOTE_RESPONSE;
+        response.term = 1U;
+        check_equal(tr_raft_service_step(service, &response), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check_equal(status.core.role, TR_RAFT_LEADER);
+
+        state.block_peer = true;
+        state.blocked_peer_id = 3U;
+        memset(&proposal, 0, sizeof(proposal));
+        proposal.command_id = 1U;
+        proposal.data = first_payload;
+        proposal.data_length = sizeof(first_payload) - 1U;
+        check_equal(tr_raft_service_propose(service, &proposal), SALTS_OK);
+
+        check_equal(tr_raft_service_transport_status(
+                        service, &transport_status),
+                    SALTS_OK);
+        check_equal(transport_status.paused_peer_count, 1U);
+        check_equal(transport_status.total_staged_message_count, 1U);
+        for (index = 0U; index < transport_status.peer_count; ++index) {
+            if (transport_status.peers[index].node_id == 3U) {
+                check(transport_status.peers[index].paused);
+                check_equal(
+                    transport_status.peers[index].staged_message_count, 1U);
+                saw_paused_three = true;
+            }
+        }
+        check(saw_paused_three);
+
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_APPEND_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.term = 1U;
+        response.granted = true;
+        response.previous_log_index = 0U;
+        response.match_index = 1U;
+        check_equal(tr_raft_service_step(service, &response), SALTS_OK);
+        check_equal(state.apply_count, 1U);
+
+        proposal.command_id = 2U;
+        proposal.data = second_payload;
+        proposal.data_length = sizeof(second_payload) - 1U;
+        check_equal(tr_raft_service_propose(service, &proposal), SALTS_OK);
+        check_equal(tr_raft_service_transport_status(
+                        service, &transport_status),
+                    SALTS_OK);
+        check_equal(transport_status.paused_peer_count, 1U);
+        check_equal(transport_status.total_staged_message_count, 1U);
+
+        response.previous_log_index = 1U;
+        response.match_index = 2U;
+        check_equal(tr_raft_service_step(service, &response), SALTS_OK);
+        check_equal(state.apply_count, 2U);
+
+        check_equal(tr_raft_service_read_index(service, 77U), SALTS_OK);
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_READ_INDEX_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.term = 1U;
+        response.context_id = 77U;
+        check_equal(tr_raft_service_step(service, &response), SALTS_OK);
+        check_equal(tr_raft_service_take_read_state(service, &read_state),
+                    SALTS_OK);
+        check_equal(read_state.context_id, 77U);
+        check_equal(read_state.index, 2U);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check(!status.faulted);
+
+        state.block_peer = false;
+        check_equal(tr_raft_service_poll(service), SALTS_OK);
+        check_equal(state.peer_successful_message_count[3U], 1U);
+        check_equal(tr_raft_service_transport_status(
+                        service, &transport_status),
+                    SALTS_OK);
+        check_equal(transport_status.paused_peer_count, 0U);
+        check_equal(transport_status.total_staged_message_count, 0U);
+
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_APPEND_RESPONSE;
+        response.from = 3U;
+        response.to = 1U;
+        response.term = 1U;
+        response.granted = true;
+        response.previous_log_index = 0U;
+        response.match_index = 1U;
+        check_equal(tr_raft_service_step(service, &response), SALTS_OK);
+        check_equal(state.peer_successful_message_count[3U], 2U);
 
         tr_raft_service_destroy(service);
     }
@@ -401,7 +537,7 @@ spec("raft service")
         check(!status.faulted);
 
         check_equal(tr_raft_service_take_read_state(service, &read_state),
-                    SALTS_ENOSPC);
+                    SALTS_ENOENT);
         state.snapshot_enqueue_result = SALTS_OK;
         check_equal(tr_raft_service_take_read_state(service, &read_state),
                     SALTS_ENOENT);
