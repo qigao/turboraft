@@ -216,6 +216,7 @@ jobs:
             -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$TURBORAFT_ROOT" \
             -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
             -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
             -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=ON
@@ -242,7 +243,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake --install .ci/build-redis/turboraft --prefix "$TURBORAFT_ROOT"
+          cmake --build .ci/build-redis/turboraft --target install --parallel 2
           cmake -S tests/package_component_consumer \
             -B .ci/build-redis/package-turbodb-redis -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
