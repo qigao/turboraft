@@ -12,8 +12,8 @@
 #include <unistd.h>
 
 typedef enum publish_fault_mode {
-    PUBLISH_FAULT_PRE = 1,
-    PUBLISH_FAULT_UNKNOWN = 2
+    PUBLISH_FAULT_STAGING_FSYNC = 1,
+    PUBLISH_FAULT_DIRECTORY_FSYNC_UNKNOWN = 2
 } publish_fault_mode_t;
 
 typedef struct publish_fault_provider {
@@ -77,10 +77,15 @@ static int injected_replace_durable(
     }
 
     *state = SALTS_FS_REPLACE_NOT_PUBLISHED;
-    if (provider->mode == PUBLISH_FAULT_PRE) {
+    if (provider->mode == PUBLISH_FAULT_STAGING_FSYNC) {
+        /*
+         * Model salts_fs_replace_durable() failing its staging-file fsync:
+         * no namespace publication occurred and the staging path remains
+         * caller-owned.
+         */
         return SALTS_EIO;
     }
-    if (provider->mode == PUBLISH_FAULT_UNKNOWN) {
+    if (provider->mode == PUBLISH_FAULT_DIRECTORY_FSYNC_UNKNOWN) {
         int result = salts_fs_rename(staging_path, destination_path);
         if (result != SALTS_OK) {
             return result;
@@ -135,15 +140,16 @@ int main(int argc, char **argv)
     int failed = 0;
 
     if (argc != 2 ||
-        (strcmp(argv[1], "pre") != 0 &&
-         strcmp(argv[1], "unknown") != 0)) {
-        fprintf(stderr, "usage: %s pre|unknown\n", argv[0]);
+        (strcmp(argv[1], "staging-fsync") != 0 &&
+         strcmp(argv[1], "directory-fsync") != 0)) {
+        fprintf(stderr, "usage: %s staging-fsync|directory-fsync\n",
+                argv[0]);
         return 2;
     }
     memset(&provider, 0, sizeof(provider));
-    provider.mode = strcmp(argv[1], "pre") == 0
-                        ? PUBLISH_FAULT_PRE
-                        : PUBLISH_FAULT_UNKNOWN;
+    provider.mode = strcmp(argv[1], "staging-fsync") == 0
+                        ? PUBLISH_FAULT_STAGING_FSYNC
+                        : PUBLISH_FAULT_DIRECTORY_FSYNC_UNKNOWN;
 
     (void)snprintf(prefix, sizeof(prefix),
                    "/tmp/turboraft-durable-publish-%ld",
@@ -182,7 +188,7 @@ int main(int argc, char **argv)
     failed |= expect(provider.calls == 1U,
                      "exactly one publication call must be injected");
 
-    if (provider.mode == PUBLISH_FAULT_PRE) {
+    if (provider.mode == PUBLISH_FAULT_STAGING_FSYNC) {
         failed |= expect(
             salts_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
             "pre-publication fault must not publish snapshot");
@@ -257,8 +263,8 @@ int main(int argc, char **argv)
     if (failed != 0) {
         return 1;
     }
-    puts(provider.mode == PUBLISH_FAULT_PRE
-             ? "PASS: pre-publication failure remains retryable"
-             : "PASS: uncertain publication faults until reopen");
+    puts(provider.mode == PUBLISH_FAULT_STAGING_FSYNC
+             ? "PASS: staging fsync failure remains retryable"
+             : "PASS: parent-directory fsync uncertainty faults until reopen");
     return 0;
 }
