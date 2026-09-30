@@ -24,6 +24,7 @@ env:
   SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/salts-utils
   FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/flowmq
   TURBODB_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/turbodb
+  TURBORAFT_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/turboraft
   LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-redis/turbodb/lib:${{ github.workspace }}/.ci/pkgs-redis/flowmq/lib:${{ github.workspace }}/.ci/pkgs-redis/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-redis/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_redis/x64-linux/lib
 
 jobs:
@@ -234,8 +235,38 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir .ci/build-redis/turboraft \
-            -R 'turboraft\.(turbodb_redis_state_machine|cflow_redis_recovery)$' \
+            -R 'turboraft\.(turbodb_redis_state_machine|cflow_redis_recovery)
+      - name: Stop isolated Redis
+        if: always()
+        shell: bash
+        run: |
+          redis-cli -p 6399 shutdown nosave || true
+
+      - name: Upload Redis diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cflow-redis-lua-diagnostics
+          path: .ci/build-redis/turboraft/Testing/Temporary
+          if-no-files-found: ignore
+ \
             --output-on-failure
+
+      - name: Verify installed TurboDbRedisStateMachine component
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --install .ci/build-redis/turboraft --prefix "$TURBORAFT_ROOT"
+          cmake -S tests/package_component_consumer \
+            -B .ci/build-redis/package-turbodb-redis -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DTURBORAFT_COMPONENT=TurboDbRedisStateMachine
+          cmake --build .ci/build-redis/package-turbodb-redis --parallel 2
+          .ci/build-redis/package-turbodb-redis/turboraft_component_package_consumer
 
       - name: Stop isolated Redis
         if: always()
