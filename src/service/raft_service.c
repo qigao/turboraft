@@ -1194,6 +1194,65 @@ int tr_raft_service_status(
     return result;
 }
 
+int tr_raft_service_transport_status(
+    const tr_raft_service_t *service,
+    tr_raft_service_transport_status_t *out_status)
+{
+    tr_raft_progress_view_t progress;
+    tr_raft_status_t core_status;
+    size_t index;
+    int result;
+
+    if (service == NULL || out_status == NULL) {
+        return SALTS_EINVAL;
+    }
+    memset(out_status, 0, sizeof(*out_status));
+    result = tr_raft_core_status(service->core, &core_status);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    result = tr_raft_core_progress(service->core, &progress);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    for (index = 0U; index < progress.peer_count; ++index) {
+        const tr_raft_node_id_t node_id = progress.peers[index].node_id;
+        const tr_service_peer_delivery_t *delivery = NULL;
+        tr_raft_service_peer_transport_status_t *peer;
+        size_t delivery_index;
+
+        if (node_id == core_status.self_id) {
+            continue;
+        }
+        if (out_status->peer_count == TR_RAFT_MAX_MEMBERS) {
+            return SALTS_EPROTO;
+        }
+        peer = &out_status->peers[out_status->peer_count++];
+        peer->node_id = node_id;
+        for (delivery_index = 0U;
+             delivery_index < service->peer_delivery_count;
+             ++delivery_index) {
+            if (service->peer_deliveries[delivery_index].peer_id == node_id) {
+                delivery = &service->peer_deliveries[delivery_index];
+                break;
+            }
+        }
+        if (delivery == NULL) {
+            continue;
+        }
+        peer->paused = delivery->core_paused;
+        peer->staged_message_count =
+            delivery->message_count - delivery->message_offset;
+        peer->snapshot_staged = delivery->snapshot_pending;
+        peer->capacity_rejections = delivery->capacity_rejections;
+        peer->last_error = delivery->last_error;
+        out_status->paused_peer_count += peer->paused ? 1U : 0U;
+        out_status->total_staged_message_count += peer->staged_message_count;
+        out_status->staged_snapshot_count += peer->snapshot_staged ? 1U : 0U;
+    }
+    return SALTS_OK;
+}
+
 int tr_raft_service_configuration(
     const tr_raft_service_t *service,
     tr_raft_conf_t *out_configuration)
