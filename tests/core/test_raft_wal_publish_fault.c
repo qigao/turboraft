@@ -1,5 +1,7 @@
 #include <turboraft/raft_wal_storage.h>
 
+#include "raft_wal_storage_internal.h"
+
 #include <salts_error.h>
 #include <salts_fs.h>
 
@@ -8,6 +10,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+typedef enum publish_fault_mode {
+    PUBLISH_FAULT_PRE = 1,
+    PUBLISH_FAULT_UNKNOWN = 2
+} publish_fault_mode_t;
+
+typedef struct publish_fault_provider {
+    publish_fault_mode_t mode;
+    size_t calls;
+} publish_fault_provider_t;
 
 static int expect(int condition, const char *message)
 {
@@ -18,6 +30,13 @@ static int expect(int condition, const char *message)
     return 1;
 }
 
+static void unlink_if_exists(const char *path)
+{
+    if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
+        (void)salts_fs_unlink(path);
+    }
+}
+
 static void cleanup_prefix(const char *prefix)
 {
     char path[SALTS_FS_MAX_PATH];
@@ -26,17 +45,50 @@ static void cleanup_prefix(const char *prefix)
     for (sequence = 1U; sequence <= 4U; ++sequence) {
         (void)snprintf(path, sizeof(path), "%s.%08zu.wal",
                        prefix, sequence);
-        (void)salts_fs_unlink(path);
+        unlink_if_exists(path);
         (void)snprintf(path, sizeof(path), "%s.%08zu.wal.tmp",
                        prefix, sequence);
-        (void)salts_fs_unlink(path);
+        unlink_if_exists(path);
     }
     (void)snprintf(path, sizeof(path), "%s.snapshot.1.1", prefix);
-    (void)salts_fs_unlink(path);
+    unlink_if_exists(path);
     (void)snprintf(path, sizeof(path), "%s.snapshot.1.1.tmp", prefix);
-    (void)salts_fs_unlink(path);
+    unlink_if_exists(path);
     (void)snprintf(path, sizeof(path), "%s.lock", prefix);
-    (void)salts_fs_unlink(path);
+    unlink_if_exists(path);
+}
+
+static int injected_replace_durable(
+    void *context,
+    const char *staging_path,
+    const char *destination_path,
+    salts_fs_replace_state_t *state)
+{
+    publish_fault_provider_t *provider =
+        (publish_fault_provider_t *)context;
+
+    if (provider == NULL || state == NULL) {
+        return SALTS_EINVAL;
+    }
+    ++provider->calls;
+    if (provider->calls != 1U) {
+        return salts_fs_replace_durable(
+            staging_path, destination_path, state);
+    }
+
+    *state = SALTS_FS_REPLACE_NOT_PUBLISHED;
+    if (provider->mode == PUBLISH_FAULT_PRE) {
+        return SALTS_EIO;
+    }
+    if (provider->mode == PUBLISH_FAULT_UNKNOWN) {
+        int result = salts_fs_rename(staging_path, destination_path);
+        if (result != SALTS_OK) {
+            return result;
+        }
+        *state = SALTS_FS_REPLACE_DURABILITY_UNKNOWN;
+        return SALTS_EIO;
+    }
+    return SALTS_EINVAL;
 }
 
 static int commit_one_entry(tr_raft_wal_storage_t *storage)
@@ -64,11 +116,8 @@ static int commit_one_entry(tr_raft_wal_storage_t *storage)
     return adapter.commit(adapter.context);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
-    const char *requested =
-        getenv("TURBORAFT_FS_TEST_FAIL_FSYNC_CALL");
-    const int fail_call = requested != NULL ? atoi(requested) : 0;
     const tr_raft_conf_t configuration = {
         TR_RAFT_CONF_FINAL,
         1U,
@@ -76,6 +125,7 @@ int main(void)
         {{1U, TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER}}
     };
     const uint8_t snapshot[] = {0x10U, 0x20U, 0x30U};
+    publish_fault_provider_t provider;
     tr_raft_wal_storage_config_t config;
     tr_raft_wal_storage_t *storage = NULL;
     tr_raft_wal_recovery_t recovery;
@@ -84,10 +134,16 @@ int main(void)
     int result;
     int failed = 0;
 
-    if (fail_call != 4 && fail_call != 5) {
-        fprintf(stderr, "FAIL: expected fsync fault ordinal 4 or 5\n");
+    if (argc != 2 ||
+        (strcmp(argv[1], "pre") != 0 &&
+         strcmp(argv[1], "unknown") != 0)) {
+        fprintf(stderr, "usage: %s pre|unknown\n", argv[0]);
         return 2;
     }
+    memset(&provider, 0, sizeof(provider));
+    provider.mode = strcmp(argv[1], "pre") == 0
+                        ? PUBLISH_FAULT_PRE
+                        : PUBLISH_FAULT_UNKNOWN;
 
     (void)snprintf(prefix, sizeof(prefix),
                    "/tmp/turboraft-durable-publish-%ld",
@@ -114,13 +170,19 @@ int main(void)
     }
     failed |= expect(commit_one_entry(storage) == SALTS_OK,
                      "commit initial durable entry");
+    failed |= expect(
+        tr_raft_wal_storage_set_replace_durable_for_test(
+            storage, injected_replace_durable, &provider) == SALTS_OK,
+        "install private durable-publish provider");
 
     result = tr_raft_wal_storage_store_snapshot(
         storage, 1U, 1U, &configuration, snapshot, sizeof(snapshot));
     failed |= expect(result == SALTS_EIO,
                      "injected snapshot publication fault must surface EIO");
+    failed |= expect(provider.calls == 1U,
+                     "exactly one publication call must be injected");
 
-    if (fail_call == 4) {
+    if (provider.mode == PUBLISH_FAULT_PRE) {
         failed |= expect(
             salts_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
             "pre-publication fault must not publish snapshot");
@@ -129,10 +191,12 @@ int main(void)
                 storage, 1U, 1U, &configuration,
                 snapshot, sizeof(snapshot)) == SALTS_OK,
             "pre-publication failure must remain retryable");
+        failed |= expect(provider.calls == 2U,
+                         "retry must publish exactly once");
     } else {
         failed |= expect(
             salts_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK,
-            "post-rename durability fault leaves published bytes visible");
+            "uncertain publication leaves complete snapshot bytes visible");
         failed |= expect(
             tr_raft_wal_storage_store_snapshot(
                 storage, 1U, 1U, &configuration,
@@ -152,7 +216,7 @@ int main(void)
             tr_raft_wal_storage_load(storage, &recovery) == SALTS_OK,
             "load authoritative WAL after uncertain publication");
         failed |= expect(recovery.snapshot_index == 0U,
-                         "orphan published snapshot is not authoritative");
+                         "orphan snapshot is not authoritative before WAL commit");
         failed |= expect(recovery.commit_index == 1U &&
                              recovery.entry_count == 1U,
                          "last durable WAL prefix remains authoritative");
@@ -162,7 +226,7 @@ int main(void)
             tr_raft_wal_storage_store_snapshot(
                 storage, 1U, 1U, &configuration,
                 snapshot, sizeof(snapshot)) == SALTS_OK,
-            "reopen may safely reuse identical orphan snapshot");
+            "reopen may reuse identical orphan snapshot safely");
     }
 
     if (storage != NULL) {
@@ -183,7 +247,7 @@ int main(void)
         failed |= expect(recovery.snapshot_index == 1U &&
                              recovery.snapshot_term == 1U &&
                              recovery.commit_index == 1U,
-                         "successful retry establishes snapshot boundary");
+                         "successful publication establishes snapshot boundary");
         tr_raft_wal_recovery_destroy(&recovery);
         failed |= expect(tr_raft_wal_storage_close(storage) == SALTS_OK,
                          "close final storage");
@@ -193,8 +257,8 @@ int main(void)
     if (failed != 0) {
         return 1;
     }
-    puts(fail_call == 4
-             ? "PASS: snapshot pre-publication failure remains retryable"
-             : "PASS: uncertain snapshot publication faults until reopen");
+    puts(provider.mode == PUBLISH_FAULT_PRE
+             ? "PASS: pre-publication failure remains retryable"
+             : "PASS: uncertain publication faults until reopen");
     return 0;
 }
