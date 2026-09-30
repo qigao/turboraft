@@ -350,13 +350,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_test(
     NAME turboraft.wal_snapshot_pre_publish_fault
     COMMAND ${CMAKE_COMMAND} -E env
-            "TURBORAFT_FS_TEST_FAIL_FSYNC_CALL=4"
+            "TURBORAFT_FS_TEST_FAIL_PHASE=pre_publish"
             "LD_PRELOAD=$<TARGET_FILE:turboraft_fs_fsync_fault>"
             $<TARGET_FILE:turboraft_wal_publish_fault_tests>)
   add_test(
     NAME turboraft.wal_snapshot_post_publish_fault
     COMMAND ${CMAKE_COMMAND} -E env
-            "TURBORAFT_FS_TEST_FAIL_FSYNC_CALL=5"
+            "TURBORAFT_FS_TEST_FAIL_PHASE=post_publish"
             "LD_PRELOAD=$<TARGET_FILE:turboraft_fs_fsync_fault>"
             $<TARGET_FILE:turboraft_wal_publish_fault_tests>)
 endif()
