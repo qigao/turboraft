@@ -47,6 +47,7 @@ struct tr_raft_core {
     uint32_t heartbeat_elapsed_ticks;
     uint32_t check_quorum_elapsed_ticks;
     uint32_t recent_active;
+    uint32_t transport_paused;
     tr_raft_node_id_t leadership_transfer_target;
     uint32_t leadership_transfer_elapsed_ticks;
     bool leadership_transfer_sent;
@@ -210,6 +211,13 @@ static int tr_peer_index(const tr_raft_core_t *core,
     return tr_raft_peer_set_index(&core->peers, node_id);
 }
 
+static bool tr_peer_transport_paused(const tr_raft_core_t *core,
+                                     size_t peer_index)
+{
+    return (core->transport_paused &
+            (UINT32_C(1) << (uint32_t) peer_index)) != 0U;
+}
+
 static size_t tr_core_voter_count(const tr_raft_core_t *core)
 {
     const tr_raft_membership_t *membership = tr_core_membership(core);
@@ -300,6 +308,7 @@ static void tr_core_refresh_peers(tr_raft_core_t *core,
     tr_raft_peer_set_t old_peers = core->peers;
     tr_raft_index_t old_match[TR_RAFT_MAX_MEMBERS];
     uint32_t old_recent_active = core->recent_active;
+    uint32_t old_transport_paused = core->transport_paused;
     tr_raft_index_t last_index = tr_raft_log_last_index(&core->log);
     size_t index;
 
@@ -313,6 +322,7 @@ static void tr_core_refresh_peers(tr_raft_core_t *core,
     memset(core->match_index, 0, sizeof(core->match_index));
     memset(core->append_windows, 0, sizeof(core->append_windows));
     core->recent_active = 0U;
+    core->transport_paused = 0U;
     core->peers = *next_peers;
 
     for (index = 0U; index < core->peers.count; ++index) {
@@ -329,6 +339,10 @@ static void tr_core_refresh_peers(tr_raft_core_t *core,
         if ((old_recent_active &
              (UINT32_C(1) << (uint32_t) old_index)) != 0U) {
             core->recent_active |= UINT32_C(1) << (uint32_t) index;
+        }
+        if ((old_transport_paused &
+             (UINT32_C(1) << (uint32_t) old_index)) != 0U) {
+            core->transport_paused |= UINT32_C(1) << (uint32_t) index;
         }
     }
     if (core->role == TR_RAFT_LEADER) {
@@ -568,6 +582,7 @@ static void tr_broadcast(tr_raft_core_t *core,
         tr_raft_node_id_t node_id = tr_peer_id(core, index);
 
         if (node_id != core->self_id &&
+            !tr_peer_transport_paused(core, index) &&
             tr_raft_membership_is_voter(tr_core_membership(core), node_id)) {
             tr_emit(core, ready, type, node_id, false);
         }
@@ -584,6 +599,7 @@ static void tr_broadcast_read_index(tr_raft_core_t *core,
         tr_raft_node_id_t node_id = tr_peer_id(core, index);
 
         if (node_id != core->self_id &&
+            !tr_peer_transport_paused(core, index) &&
             tr_raft_membership_is_voter(tr_core_membership(core), node_id)) {
             tr_emit(core, ready, TR_RAFT_MSG_READ_INDEX_REQUEST,
                     node_id, false);
@@ -607,6 +623,9 @@ static bool tr_emit_replication(tr_raft_core_t *core,
     size_t index;
     tr_raft_message_type_t type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
 
+    if (tr_peer_transport_paused(core, peer_index)) {
+        return false;
+    }
     if (next_index <= core->log.base_index) {
         tr_append_window_reset(window, true);
         tr_emit_snapshot_request(core, ready, peer_index);
@@ -1583,6 +1602,38 @@ void tr_raft_core_destroy(tr_raft_core_t *core)
     free(core);
 }
 
+int tr_raft_core_set_peer_transport_paused(
+    tr_raft_core_t *core,
+    tr_raft_node_id_t peer_id,
+    bool paused)
+{
+    uint32_t bit;
+    int peer_index;
+
+    if (core == NULL || peer_id == 0U || peer_id == core->self_id) {
+        return SALTS_EINVAL;
+    }
+    if (core->in_call || core->ready_outstanding) {
+        return SALTS_EPROTO;
+    }
+    peer_index = tr_peer_index(core, peer_id);
+    if (peer_index < 0) {
+        return SALTS_ENOENT;
+    }
+    bit = UINT32_C(1) << (uint32_t) peer_index;
+    if (paused) {
+        core->transport_paused |= bit;
+        if (core->leadership_transfer_target == peer_id) {
+            core->leadership_transfer_target = 0U;
+            core->leadership_transfer_elapsed_ticks = 0U;
+            core->leadership_transfer_sent = false;
+        }
+    } else {
+        core->transport_paused &= ~bit;
+    }
+    return SALTS_OK;
+}
+
 int tr_raft_core_tick(tr_raft_core_t *core,
                       const tr_raft_tick_t *tick,
                       tr_raft_ready_t *ready)
@@ -1659,7 +1710,8 @@ int tr_raft_core_tick(tr_raft_core_t *core,
             bool timed_out = false;
             size_t inflight_index;
 
-            if (window->count == 0U) {
+            if (window->count == 0U ||
+                tr_peer_transport_paused(core, index)) {
                 continue;
             }
             for (inflight_index = 0U;
@@ -1963,7 +2015,8 @@ int tr_raft_core_change_membership(
         return SALTS_EPERM;
     }
     if (core->leadership_transfer_target != 0U ||
-        tr_read_total_count(core) != 0U) {
+        tr_read_total_count(core) != 0U ||
+        tr_peer_transport_paused(core, (size_t) transferee_index)) {
         core->in_call = false;
         return SALTS_EBUSY;
     }
