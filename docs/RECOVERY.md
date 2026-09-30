@@ -1,16 +1,21 @@
 # WAL backup and recovery
 
-TurboRaft keeps one durable fact source per Raft group:
+TurboRaft keeps one durable fact source set per Raft group:
 
-- `<prefix>.NNNNNNNN.wal` contains ordered Raft transactions;
+- `<prefix>.manifest` names the authoritative bounded live WAL sequence range;
+- `<prefix>.NNNNNNNN.wal` contains ordered Raft transactions in that range;
 - `<prefix>.snapshot.<index>.<term>` contains an opaque FSM snapshot;
-- `<prefix>.lock` prevents concurrent writers.
+- `<prefix>.lock` prevents concurrent writers and is not part of a backup.
 
 ## Backup
 
-Quiesce and close the storage instance before copying files. Copy every WAL
-segment and every snapshot file sharing the prefix as one backup set. Record
-the TurboRaft version, node ID, cluster ID, and backup time beside that set.
+Quiesce and close the storage instance before copying files. Copy the durable
+`<prefix>.manifest`, every WAL segment in its authoritative live range, and
+every referenced snapshot file as one backup set. The manifest is mandatory:
+after the monotonic segment sequence grows beyond the live-retention bound,
+the high-sequence WAL cannot be rediscovered by the legacy compatibility scan.
+Record the TurboRaft version, node ID, cluster ID, and backup time beside that
+set.
 
 Copying an active prefix is unsupported: a snapshot file may have reached disk
 before its referencing WAL transaction, or the final WAL frame may still be in
@@ -19,8 +24,8 @@ flight. For online backup, at the single Service owner-loop boundary:
 1. Stop ingress and call `tr_raft_service_prepare_backup()`. It returns
    `SALTS_EBUSY` until no Ready, unread read state, or retrying journal
    compaction remains.
-2. Close the caller-owned WAL storage, then copy every WAL and snapshot file
-   sharing the prefix as one set.
+2. Close the caller-owned WAL storage, then copy the manifest, its live WAL
+   range, and referenced snapshot files as one set.
 3. Reopen the WAL and call `tr_raft_service_resume_backup()` with its fresh
    `tr_raft_storage_t` adapter before restarting ingress.
 
@@ -65,8 +70,10 @@ ownership, crash-cut, reconciliation, and shutdown protocol.
 
 ## Restore or rebuild
 
-Restore a complete matching backup set while the node is stopped. If no valid
-backup exists, remove the failed node's local files only after removing or
-isolating that node operationally, then let it rejoin from a healthy cluster
-member through snapshot installation. Never copy another live node's local WAL
+Restore a complete matching backup set while the node is stopped. Open a
+restored set with `create_if_missing=false`: a missing manifest/high-sequence
+WAL set must fail restore rather than being reinterpreted as a fresh empty
+store. If no valid backup exists, remove the failed node's local files only
+after removing or isolating that node operationally, then let it rejoin from a
+healthy cluster member through snapshot installation. Never copy another live node's local WAL
 as a substitute for the Raft snapshot protocol.

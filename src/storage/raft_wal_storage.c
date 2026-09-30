@@ -22,6 +22,8 @@
 #define TR_WAL_TRANSACTION_MAGIC "TRWAL001"
 #define TR_WAL_SNAPSHOT_MAGIC "TRSNP001"
 #define TR_WAL_SNAPSHOT_HEADER_SIZE 48U
+#define TR_WAL_MANIFEST_MAGIC "TRMAN001"
+#define TR_WAL_MANIFEST_HEADER_SIZE 40U
 
 enum tr_wal_operation_type {
     TR_WAL_OP_HARD_STATE = 1,
@@ -40,10 +42,11 @@ struct tr_raft_wal_storage {
     size_t transaction_capacity;
     size_t transaction_used;
     size_t segment_bytes;
-    size_t max_segments;
+    size_t max_live_segments;
     size_t max_log_entries;
     uint64_t max_snapshot_bytes;
-    size_t current_segment;
+    uint64_t first_live_segment;
+    uint64_t current_segment;
     uint64_t current_offset;
     uint64_t last_transaction_id;
     int process_lock_registered;
@@ -249,10 +252,21 @@ static uint64_t tr_wal_get_u64(const uint8_t *input)
 }
 
 static int tr_wal_segment_path(const tr_raft_wal_storage_t *storage,
-                               size_t sequence, char *path, size_t path_size)
+                               uint64_t sequence, char *path, size_t path_size)
 {
-    int length = snprintf(path, path_size, "%s.%08zu.wal",
-                          storage->path_prefix, sequence);
+    int length = snprintf(path, path_size, "%s.%08llu.wal",
+                          storage->path_prefix,
+                          (unsigned long long)sequence);
+    return length < 0 || (size_t)length >= path_size ? SALTS_ENAMETOOLONG
+                                                     : SALTS_OK;
+}
+
+static int tr_wal_manifest_path(const tr_raft_wal_storage_t *storage,
+                                const char *suffix,
+                                char *path, size_t path_size)
+{
+    int length = snprintf(path, path_size, "%s.manifest%s",
+                          storage->path_prefix, suffix);
     return length < 0 || (size_t)length >= path_size ? SALTS_ENAMETOOLONG
                                                      : SALTS_OK;
 }
@@ -346,6 +360,157 @@ static int tr_wal_read_exact(salts_file_t file, uint64_t offset,
         used += (size_t)count;
     }
     return SALTS_OK;
+}
+
+static uint64_t tr_wal_manifest_checksum(const uint8_t *header)
+{
+    return XXH3_64bits(header, 32U);
+}
+
+static int tr_wal_live_range_valid(
+    const tr_raft_wal_storage_t *storage,
+    uint64_t first_live,
+    uint64_t last_live)
+{
+    if (storage == NULL || first_live == 0U || last_live < first_live ||
+        storage->max_live_segments == 0U) {
+        return 0;
+    }
+    /*
+     * Avoid computing (last - first + 1), which can wrap for the full
+     * uint64_t range.  count <= max is equivalent to
+     * (last - first) < max once last >= first.
+     */
+    return last_live - first_live <
+           (uint64_t)storage->max_live_segments;
+}
+
+static int tr_wal_read_manifest(
+    tr_raft_wal_storage_t *storage,
+    uint64_t *out_first_live,
+    uint64_t *out_last_live,
+    int *out_present)
+{
+    uint8_t header[TR_WAL_MANIFEST_HEADER_SIZE];
+    char path[SALTS_FS_MAX_PATH];
+    salts_fs_stat_t stat;
+    salts_file_t file;
+    uint64_t first_live;
+    uint64_t last_live;
+    int result;
+
+    if (storage == NULL || out_first_live == NULL ||
+        out_last_live == NULL || out_present == NULL) {
+        return SALTS_EINVAL;
+    }
+    *out_first_live = 0U;
+    *out_last_live = 0U;
+    *out_present = 0;
+
+    result = tr_wal_manifest_path(storage, "", path, sizeof(path));
+    if (result != SALTS_OK) {
+        return result;
+    }
+    if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK) {
+        return SALTS_OK;
+    }
+    result = salts_fs_stat(path, &stat);
+    if (result != SALTS_OK || !stat.is_file ||
+        stat.size != TR_WAL_MANIFEST_HEADER_SIZE) {
+        return SALTS_EPROTO;
+    }
+    file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
+    if (file == SALTS_INVALID_FILE) {
+        return SALTS_EIO;
+    }
+    result = tr_wal_read_exact(file, 0U, header, sizeof(header));
+    {
+        int close_result = salts_fs_close(file);
+        if (result == SALTS_OK) {
+            result = close_result;
+        }
+    }
+    if (result != SALTS_OK) {
+        return result;
+    }
+    if (memcmp(header, TR_WAL_MANIFEST_MAGIC, 8U) != 0 ||
+        tr_wal_get_u32(header + 8U) != TR_WAL_FORMAT_VERSION ||
+        tr_wal_get_u32(header + 12U) != TR_WAL_MANIFEST_HEADER_SIZE ||
+        tr_wal_get_u64(header + 32U) !=
+            tr_wal_manifest_checksum(header)) {
+        return SALTS_EPROTO;
+    }
+    first_live = tr_wal_get_u64(header + 16U);
+    last_live = tr_wal_get_u64(header + 24U);
+    if (!tr_wal_live_range_valid(storage, first_live, last_live)) {
+        return SALTS_EPROTO;
+    }
+    *out_first_live = first_live;
+    *out_last_live = last_live;
+    *out_present = 1;
+    return SALTS_OK;
+}
+
+static int tr_wal_write_manifest(
+    tr_raft_wal_storage_t *storage,
+    uint64_t first_live,
+    uint64_t last_live)
+{
+    uint8_t header[TR_WAL_MANIFEST_HEADER_SIZE] = {0};
+    char path[SALTS_FS_MAX_PATH];
+    char temporary_path[SALTS_FS_MAX_PATH];
+    salts_fs_replace_state_t publish_state = SALTS_FS_REPLACE_NOT_PUBLISHED;
+    salts_file_t file = SALTS_INVALID_FILE;
+    int result;
+
+    if (!tr_wal_live_range_valid(storage, first_live, last_live)) {
+        return SALTS_EINVAL;
+    }
+    result = tr_wal_manifest_path(storage, "", path, sizeof(path));
+    if (result == SALTS_OK) {
+        result = tr_wal_manifest_path(
+            storage, ".tmp", temporary_path, sizeof(temporary_path));
+    }
+    if (result != SALTS_OK) {
+        return result;
+    }
+
+    memcpy(header, TR_WAL_MANIFEST_MAGIC, 8U);
+    tr_wal_put_u32(header + 8U, TR_WAL_FORMAT_VERSION);
+    tr_wal_put_u32(header + 12U, TR_WAL_MANIFEST_HEADER_SIZE);
+    tr_wal_put_u64(header + 16U, first_live);
+    tr_wal_put_u64(header + 24U, last_live);
+    tr_wal_put_u64(header + 32U, tr_wal_manifest_checksum(header));
+
+    file = salts_fs_open(temporary_path,
+                         SALTS_FS_O_RDWR | SALTS_FS_O_CREAT |
+                             SALTS_FS_O_TRUNC,
+                         SALTS_FS_DEFAULT_MODE);
+    if (file == SALTS_INVALID_FILE) {
+        return SALTS_EIO;
+    }
+    result = tr_wal_write_all(
+        storage, TR_RAFT_WAL_IO_MANIFEST_WRITE,
+        file, header, sizeof(header));
+    {
+        int close_result = salts_fs_close(file);
+        if (result == SALTS_OK) {
+            result = close_result;
+        }
+    }
+    if (result == SALTS_OK) {
+        result = storage->replace_durable(
+            storage->replace_durable_context,
+            temporary_path, path, &publish_state);
+    }
+    if (result != SALTS_OK) {
+        if (publish_state == SALTS_FS_REPLACE_NOT_PUBLISHED) {
+            (void)salts_fs_unlink(temporary_path);
+        } else {
+            storage->faulted = 1;
+        }
+    }
+    return result;
 }
 
 typedef struct tr_wal_snapshot_file_source {
@@ -771,7 +936,7 @@ static uint64_t tr_wal_transaction_checksum(const uint8_t *frame,
 }
 
 static int tr_wal_create_segment(tr_raft_wal_storage_t *storage,
-                                 size_t sequence)
+                                 uint64_t sequence)
 {
     uint8_t header[TR_WAL_SEGMENT_HEADER_SIZE] = {0};
     char temporary_path[SALTS_FS_MAX_PATH];
@@ -835,6 +1000,49 @@ static int tr_wal_create_segment(tr_raft_wal_storage_t *storage,
     storage->current_segment = sequence;
     storage->current_offset = sizeof(header);
     return SALTS_OK;
+}
+
+int tr_raft_wal_storage_rebase_segment_sequence_for_test(
+    tr_raft_wal_storage_t *storage,
+    uint64_t sequence)
+{
+    char previous_path[SALTS_FS_MAX_PATH];
+    int result;
+
+    if (storage == NULL || sequence == 0U ||
+        storage->transaction_active || storage->faulted) {
+        return SALTS_EINVAL;
+    }
+    if (storage->current_file == SALTS_INVALID_FILE ||
+        storage->current_offset != TR_WAL_SEGMENT_HEADER_SIZE ||
+        storage->first_live_segment != storage->current_segment) {
+        return SALTS_EBUSY;
+    }
+    if (sequence == storage->current_segment) {
+        return SALTS_OK;
+    }
+
+    memcpy(previous_path, storage->current_path,
+           strlen(storage->current_path) + 1U);
+    result = salts_fs_close(storage->current_file);
+    storage->current_file = SALTS_INVALID_FILE;
+    if (result == SALTS_OK) {
+        result = tr_wal_create_segment(storage, sequence);
+    }
+    if (result == SALTS_OK) {
+        result = tr_wal_write_manifest(storage, sequence, sequence);
+    }
+    if (result == SALTS_OK) {
+        storage->first_live_segment = sequence;
+        if (salts_fs_access(previous_path, SALTS_FS_ACCESS_EXISTS) ==
+            SALTS_OK) {
+            result = salts_fs_unlink(previous_path);
+        }
+    }
+    if (result != SALTS_OK) {
+        storage->faulted = 1;
+    }
+    return result;
 }
 
 static int tr_wal_append_operation(tr_raft_wal_storage_t *storage,
@@ -971,6 +1179,7 @@ static int tr_wal_commit(void *context)
     size_t frame_size;
     size_t payload_size;
     uint64_t transaction_id;
+    int rotated = 0;
     int result;
     if (storage == NULL || !storage->transaction_active) return SALTS_EINVAL;
     if (storage->faulted) return SALTS_EIO;
@@ -993,7 +1202,12 @@ static int tr_wal_commit(void *context)
         return SALTS_ENOSPC;
     }
     if (frame_size > storage->segment_bytes - storage->current_offset) {
-        if (storage->current_segment >= storage->max_segments) {
+        if (storage->current_segment == UINT64_MAX ||
+            !tr_wal_live_range_valid(
+                storage, storage->first_live_segment,
+                storage->current_segment) ||
+            storage->current_segment - storage->first_live_segment >=
+                (uint64_t)storage->max_live_segments - 1U) {
             return SALTS_ENOSPC;
         }
         result = salts_fs_close(storage->current_file);
@@ -1006,6 +1220,7 @@ static int tr_wal_commit(void *context)
             storage->faulted = 1;
             return result;
         }
+        rotated = 1;
     }
     result = tr_wal_write_all(
         storage, TR_RAFT_WAL_IO_TRANSACTION_WRITE,
@@ -1018,6 +1233,15 @@ static int tr_wal_commit(void *context)
     if (result != SALTS_OK) {
         storage->faulted = 1;
         return result;
+    }
+    if (rotated) {
+        result = tr_wal_write_manifest(
+            storage, storage->first_live_segment,
+            storage->current_segment);
+        if (result != SALTS_OK) {
+            storage->faulted = 1;
+            return result;
+        }
     }
     storage->current_offset += frame_size;
     storage->last_transaction_id = transaction_id;
@@ -1195,7 +1419,7 @@ static int tr_wal_apply_payload(tr_raft_wal_storage_t *storage,
 }
 
 static int tr_wal_replay_segment(tr_raft_wal_storage_t *storage,
-                                 size_t sequence, int is_first, int is_last,
+                                 uint64_t sequence, int is_first, int is_last,
                                  tr_raft_wal_recovery_t *recovery,
                                  uint64_t *last_transaction_id,
                                  uint64_t *out_valid_size)
@@ -1291,50 +1515,120 @@ static int tr_wal_replay_segment(tr_raft_wal_storage_t *storage,
 
 static int tr_wal_replay(tr_raft_wal_storage_t *storage,
                          tr_raft_wal_recovery_t *recovery,
-                         size_t *out_last_segment, uint64_t *out_valid_size,
-                         uint64_t *out_last_transaction_id)
+                         uint64_t *out_first_segment,
+                         uint64_t *out_last_segment,
+                         uint64_t *out_valid_size,
+                         uint64_t *out_last_transaction_id,
+                         int *out_manifest_present)
 {
-    size_t first_segment = 0U;
-    size_t last_segment = 0U;
-    size_t sequence;
+    uint64_t first_segment = 0U;
+    uint64_t last_segment = 0U;
+    uint64_t sequence;
     char path[SALTS_FS_MAX_PATH];
+    int manifest_present = 0;
     int result;
+
+    if (storage == NULL || recovery == NULL ||
+        out_first_segment == NULL || out_last_segment == NULL ||
+        out_valid_size == NULL || out_last_transaction_id == NULL ||
+        out_manifest_present == NULL) {
+        return SALTS_EINVAL;
+    }
+
     memset(recovery, 0, sizeof(*recovery));
+    *out_first_segment = 0U;
+    *out_last_segment = 0U;
+    *out_valid_size = 0U;
+    *out_last_transaction_id = 0U;
+    *out_manifest_present = 0;
+
     recovery->entries = (tr_raft_entry_t *)calloc(
         storage->max_log_entries, sizeof(*recovery->entries));
-    if (recovery->entries == NULL) return SALTS_ENOMEM;
-    for (sequence = 1U; sequence <= storage->max_segments; ++sequence) {
-        result = tr_wal_segment_path(storage, sequence, path, sizeof(path));
-        if (result != SALTS_OK) goto fail;
-        if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
-            first_segment = sequence;
-            break;
+    if (recovery->entries == NULL) {
+        return SALTS_ENOMEM;
+    }
+
+    result = tr_wal_read_manifest(
+        storage, &first_segment, &last_segment, &manifest_present);
+    if (result != SALTS_OK) {
+        goto fail;
+    }
+
+    if (!manifest_present) {
+        /*
+         * Compatibility bootstrap for pre-manifest WALs. This is the only
+         * lifetime-bounded scan: once open succeeds a durable manifest is
+         * written and future recovery scans only its bounded live range.
+         */
+        for (sequence = 1U;
+             sequence <= (uint64_t)storage->max_live_segments;
+             ++sequence) {
+            result = tr_wal_segment_path(
+                storage, sequence, path, sizeof(path));
+            if (result != SALTS_OK) {
+                goto fail;
+            }
+            if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
+                first_segment = sequence;
+                break;
+            }
+        }
+        if (first_segment != 0U) {
+            last_segment = first_segment;
+            for (sequence = first_segment + 1U;
+                 sequence <= (uint64_t)storage->max_live_segments;
+                 ++sequence) {
+                result = tr_wal_segment_path(
+                    storage, sequence, path, sizeof(path));
+                if (result != SALTS_OK) {
+                    goto fail;
+                }
+                if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) !=
+                    SALTS_OK) {
+                    break;
+                }
+                last_segment = sequence;
+            }
         }
     }
+
     if (first_segment == 0U) {
-        *out_last_segment = 0U;
-        *out_valid_size = 0U;
-        *out_last_transaction_id = 0U;
+        *out_manifest_present = manifest_present;
         return SALTS_OK;
     }
-    last_segment = first_segment;
-    for (sequence = first_segment + 1U; sequence <= storage->max_segments;
-         ++sequence) {
-        result = tr_wal_segment_path(storage, sequence, path, sizeof(path));
-        if (result != SALTS_OK) goto fail;
-        if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK) break;
-        last_segment = sequence;
+    if (!tr_wal_live_range_valid(
+            storage, first_segment, last_segment)) {
+        result = SALTS_EPROTO;
+        goto fail;
     }
-    for (sequence = first_segment; sequence <= last_segment; ++sequence) {
-        result = tr_wal_replay_segment(storage, sequence,
-                                       sequence == first_segment,
-                                       sequence == last_segment, recovery,
-                                       out_last_transaction_id,
-                                       out_valid_size);
-        if (result != SALTS_OK) goto fail;
+
+    sequence = first_segment;
+    for (;;) {
+        result = tr_wal_segment_path(
+            storage, sequence, path, sizeof(path));
+        if (result != SALTS_OK ||
+            salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK) {
+            result = SALTS_EPROTO;
+            goto fail;
+        }
+        result = tr_wal_replay_segment(
+            storage, sequence, sequence == first_segment,
+            sequence == last_segment, recovery,
+            out_last_transaction_id, out_valid_size);
+        if (result != SALTS_OK) {
+            goto fail;
+        }
+        if (sequence == last_segment) {
+            break;
+        }
+        ++sequence;
     }
+
+    *out_first_segment = first_segment;
     *out_last_segment = last_segment;
+    *out_manifest_present = manifest_present;
     return SALTS_OK;
+
 fail:
     tr_raft_wal_recovery_destroy(recovery);
     return result;
@@ -1351,16 +1645,18 @@ static int tr_raft_wal_storage_open_impl(
     size_t prefix_length;
     size_t segment_bytes;
     size_t transaction_bytes;
-    size_t last_segment = 0U;
+    uint64_t first_segment = 0U;
+    uint64_t last_segment = 0U;
     uint64_t valid_size = 0U;
     uint64_t last_transaction_id = 0U;
+    int manifest_present = 0;
     int result;
     if (out_storage == NULL) return SALTS_EINVAL;
     *out_storage = NULL;
     if (config == NULL || config->path_prefix == NULL ||
         config->path_prefix[0] == '\0' || config->max_log_entries == 0U ||
-        config->max_segments == 0U ||
-        config->max_segments > TR_RAFT_WAL_MAX_SEGMENTS) return SALTS_EINVAL;
+        config->max_live_segments == 0U ||
+        config->max_live_segments > TR_RAFT_WAL_MAX_LIVE_SEGMENTS) return SALTS_EINVAL;
     segment_bytes = config->segment_bytes == 0U
                         ? TR_RAFT_WAL_DEFAULT_SEGMENT_BYTES
                         : config->segment_bytes;
@@ -1387,7 +1683,7 @@ static int tr_raft_wal_storage_open_impl(
         provider != NULL ? provider->context : NULL;
     storage->segment_bytes = segment_bytes;
     storage->transaction_capacity = transaction_bytes;
-    storage->max_segments = config->max_segments;
+    storage->max_live_segments = config->max_live_segments;
     storage->max_log_entries = config->max_log_entries;
     storage->max_snapshot_bytes = config->max_snapshot_bytes == 0U
                                       ? TR_RAFT_WAL_DEFAULT_MAX_SNAPSHOT_BYTES
@@ -1415,8 +1711,9 @@ static int tr_raft_wal_storage_open_impl(
         tr_raft_wal_storage_close(storage);
         return SALTS_EBUSY;
     }
-    result = tr_wal_replay(storage, &recovery, &last_segment, &valid_size,
-                           &last_transaction_id);
+    result = tr_wal_replay(
+        storage, &recovery, &first_segment, &last_segment,
+        &valid_size, &last_transaction_id, &manifest_present);
     if (result != SALTS_OK) {
         tr_raft_wal_storage_close(storage);
         return result;
@@ -1435,7 +1732,22 @@ static int tr_raft_wal_storage_open_impl(
             return SALTS_ENOENT;
         }
         result = tr_wal_create_segment(storage, 1U);
+        if (result == SALTS_OK) {
+            result = tr_wal_write_manifest(storage, 1U, 1U);
+        }
+        if (result == SALTS_OK) {
+            storage->first_live_segment = 1U;
+        }
     } else {
+        if (!manifest_present) {
+            result = tr_wal_write_manifest(
+                storage, first_segment, last_segment);
+            if (result != SALTS_OK) {
+                tr_raft_wal_storage_close(storage);
+                return result;
+            }
+        }
+        storage->first_live_segment = first_segment;
         result = tr_wal_segment_path(storage, last_segment,
                                      storage->current_path,
                                      sizeof(storage->current_path));
@@ -1532,13 +1844,16 @@ int tr_raft_wal_storage_bind(tr_raft_wal_storage_t *storage,
 int tr_raft_wal_storage_load(tr_raft_wal_storage_t *storage,
                              tr_raft_wal_recovery_t *out_recovery)
 {
-    size_t last_segment = 0U;
+    uint64_t first_segment = 0U;
+    uint64_t last_segment = 0U;
     uint64_t valid_size = 0U;
     uint64_t last_transaction_id = 0U;
+    int manifest_present = 0;
     if (storage == NULL || out_recovery == NULL) return SALTS_EINVAL;
     if (storage->transaction_active) return SALTS_EBUSY;
-    return tr_wal_replay(storage, out_recovery, &last_segment, &valid_size,
-                         &last_transaction_id);
+    return tr_wal_replay(
+        storage, out_recovery, &first_segment, &last_segment,
+        &valid_size, &last_transaction_id, &manifest_present);
 }
 
 static int tr_wal_persist_snapshot_source(
@@ -1561,9 +1876,11 @@ static int tr_wal_persist_snapshot_source(
     tr_raft_index_t previous_snapshot_index;
     tr_raft_term_t previous_snapshot_term;
     uint64_t checksum = 0U;
-    size_t checkpoint_segment;
+    uint64_t checkpoint_segment;
+    uint64_t previous_first_live_segment;
     int matching_entry = 0;
     int checkpoint_compaction;
+    int checkpoint_segment_created = 0;
     int result;
 
     if (storage == NULL || configuration == NULL || source == NULL ||
@@ -1585,6 +1902,7 @@ static int tr_wal_persist_snapshot_source(
     memset(&recovery, 0, sizeof(recovery));
     previous_snapshot_index = storage->snapshot_index;
     previous_snapshot_term = storage->snapshot_term;
+    previous_first_live_segment = storage->first_live_segment;
     result = tr_raft_wal_storage_load(storage, &recovery);
     if (result != SALTS_OK) {
         return result;
@@ -1631,7 +1949,7 @@ static int tr_wal_persist_snapshot_source(
 
     if (checkpoint_compaction &&
         storage->current_offset != TR_WAL_SEGMENT_HEADER_SIZE) {
-        if (storage->current_segment >= storage->max_segments) {
+        if (storage->current_segment == UINT64_MAX) {
             result = SALTS_ENOSPC;
             goto cleanup;
         }
@@ -1640,6 +1958,9 @@ static int tr_wal_persist_snapshot_source(
         if (result == SALTS_OK) {
             result = tr_wal_create_segment(
                 storage, storage->current_segment + 1U);
+            if (result == SALTS_OK) {
+                checkpoint_segment_created = 1;
+            }
         }
         if (result != SALTS_OK) {
             storage->faulted = 1;
@@ -1685,12 +2006,27 @@ static int tr_wal_persist_snapshot_source(
     }
 
     if (result == SALTS_OK) {
-        size_t sequence;
+        uint64_t sequence;
 
         storage->snapshot_index = snapshot_index;
         storage->snapshot_term = snapshot_term;
-        for (sequence = 1U;
-             checkpoint_compaction && sequence < checkpoint_segment;
+        if (checkpoint_compaction) {
+            /*
+             * Publish the new authoritative live range before unlinking any
+             * history. A crash before this manifest update keeps the old
+             * range authoritative; a crash after it can ignore old files.
+             */
+            result = tr_wal_write_manifest(
+                storage, checkpoint_segment, checkpoint_segment);
+            if (result == SALTS_OK) {
+                storage->first_live_segment = checkpoint_segment;
+            } else {
+                storage->faulted = 1;
+            }
+        }
+        for (sequence = previous_first_live_segment;
+             result == SALTS_OK && checkpoint_compaction &&
+             sequence != 0U && sequence < checkpoint_segment;
              ++sequence) {
             char path[SALTS_FS_MAX_PATH];
 
@@ -1721,6 +2057,16 @@ static int tr_wal_persist_snapshot_source(
     }
 
 cleanup:
+    if (result != SALTS_OK && checkpoint_segment_created &&
+        storage != NULL &&
+        storage->first_live_segment != storage->current_segment) {
+        /*
+         * The current file is a durable but non-authoritative orphan until
+         * the manifest advances. Do not allow this live instance to accept
+         * later transactions on that file.
+         */
+        storage->faulted = 1;
+    }
     tr_raft_wal_recovery_destroy(&recovery);
     return result;
 }

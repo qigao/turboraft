@@ -325,8 +325,12 @@ cmake_config_target(turboraft_data_stream_tests
 add_test(NAME turboraft.data_stream COMMAND turboraft_data_stream_tests)
 
 add_executable(turboraft_wal_storage_tests test_raft_wal_storage.c)
+target_include_directories(
+  turboraft_wal_storage_tests
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/storage)
 target_link_libraries(turboraft_wal_storage_tests
-                      PRIVATE TurboRaft::WalStorage Salts::TinyTest)
+                      PRIVATE TurboRaft::WalStorage Salts::TinyTest
+                              xxHash::xxhash)
 cmake_config_target(turboraft_wal_storage_tests
                     NO_INSTALL
                     FOLDER "tests/core")
@@ -379,6 +383,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_test(
     NAME turboraft.wal_snapshot_directory_fsync_fault
     COMMAND turboraft_wal_publish_fault_tests directory-fsync)
+  add_test(
+    NAME turboraft.wal_manifest_staging_fsync_fault
+    COMMAND turboraft_wal_publish_fault_tests manifest-staging-fsync)
+  add_test(
+    NAME turboraft.wal_manifest_directory_fsync_fault
+    COMMAND turboraft_wal_publish_fault_tests manifest-directory-fsync)
 endif()
 
 add_executable(turboraft_wire_fuzz_corpus_tests

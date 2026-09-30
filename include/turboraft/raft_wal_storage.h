@@ -15,7 +15,9 @@ extern "C" {
 #define TR_RAFT_WAL_MIN_SEGMENT_BYTES (64U * 1024U)
 #define TR_RAFT_WAL_DEFAULT_SEGMENT_BYTES (64U * 1024U * 1024U)
 #define TR_RAFT_WAL_DEFAULT_TRANSACTION_BYTES (256U * 1024U)
-#define TR_RAFT_WAL_MAX_SEGMENTS 65535U
+#define TR_RAFT_WAL_MAX_LIVE_SEGMENTS 65535U
+/* Deprecated source-compatibility spelling. */
+#define TR_RAFT_WAL_MAX_SEGMENTS TR_RAFT_WAL_MAX_LIVE_SEGMENTS
 #define TR_RAFT_WAL_DEFAULT_MAX_SNAPSHOT_BYTES \
     (UINT64_C(256) * 1024U * 1024U)
 
@@ -26,7 +28,19 @@ typedef struct tr_raft_wal_storage_config {
     const char *path_prefix;
     size_t segment_bytes;
     size_t max_transaction_bytes;
-    size_t max_segments;
+    /*
+     * Maximum simultaneously live WAL segment files. Segment sequence numbers
+     * remain monotonic for the storage lifetime and are not capped by this
+     * value.
+     *
+     * max_segments is a deprecated source-compatible alias. The anonymous
+     * union preserves the public struct layout while making live retention the
+     * canonical name.
+     */
+    union {
+        size_t max_live_segments;
+        size_t max_segments;
+    };
     size_t max_log_entries;
     uint64_t max_snapshot_bytes;
     bool create_if_missing;
