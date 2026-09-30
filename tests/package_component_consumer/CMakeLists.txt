@@ -60,10 +60,13 @@ if(NOT TARGET TurboRaft::${TURBORAFT_COMPONENT})
           "TurboRaft::${TURBORAFT_COMPONENT} was not exported by the installed SDK")
 endif()
 
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/component_probe_header.h"
+     "#include <${_component_header}>\n")
+
 add_executable(turboraft_component_package_consumer main.c)
-target_compile_definitions(
+target_include_directories(
   turboraft_component_package_consumer
-  PRIVATE TURBORAFT_COMPONENT_HEADER="${_component_header}")
+  PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(
   turboraft_component_package_consumer
   PRIVATE TurboRaft::${TURBORAFT_COMPONENT})
