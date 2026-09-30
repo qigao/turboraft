@@ -611,6 +611,8 @@ cleanup_write:
     if (result != SALTS_OK) {
         if (publish_state == SALTS_FS_REPLACE_NOT_PUBLISHED) {
             (void)salts_fs_unlink(temporary_path);
+        } else {
+            storage->faulted = 1;
         }
         return result;
     }
@@ -675,6 +677,8 @@ static int tr_wal_create_segment(tr_raft_wal_storage_t *storage,
     if (result != SALTS_OK) {
         if (publish_state == SALTS_FS_REPLACE_NOT_PUBLISHED) {
             (void)salts_fs_unlink(temporary_path);
+        } else {
+            storage->faulted = 1;
         }
         return result;
     }
