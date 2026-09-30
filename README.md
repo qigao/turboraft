@@ -31,14 +31,14 @@ them.
 
 ## Dependencies
 
-Configure requires exact active-profile installations provided through:
+Configure requires explicit active-profile installations provided through:
 
 - `SALTS_ROOT`
 - `SALTS_UTILS_ROOT`
 - `FLOWMQ_ROOT`
 
 The supplied user presets resolve Debug and Release profiles independently and
-use `NO_DEFAULT_PATH` for first-party package discovery.
+use `NO_DEFAULT_PATH` for first-party package discovery. First-party package versions are not pinned by TurboRaft; CI resolves the latest published SDKs or current producer branches and fails fast when their exported contracts are incompatible.
 
 The production-qualified OS/compiler/dependency boundary is documented in
 [`docs/SUPPORTED_PLATFORMS.md`](docs/SUPPORTED_PLATFORMS.md). A platform that
