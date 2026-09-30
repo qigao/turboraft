@@ -53,9 +53,9 @@ if(TURBORAFT_PROFILE_FULL)
   add_subdirectory(tools)
   include(cmake/FindTools.cmake)
 
-  if(NOT RE2C_EXECUTABLE)
+  if(NOT RE2C_EXECUTABLE OR NOT EXISTS "${RE2C_EXECUTABLE}")
     message(FATAL_ERROR
-            "TurboRaft full profile requires a runnable re2c executable")
+            "TurboRaft full profile requires an existing runnable re2c executable")
   endif()
   if(NOT EXISTS "${LEMPAR}")
     message(FATAL_ERROR
