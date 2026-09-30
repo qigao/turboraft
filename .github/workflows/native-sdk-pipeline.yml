@@ -412,6 +412,23 @@ jobs:
           build/package_cflow_consumer/turboraft_cflow_package_consumer
           build/package_flowmq_consumer/turboraft_flowmq_package_consumer
           build/package_control_plane_consumer/turboraft_control_plane_package_consumer
+
+          mapfile -t components < <(
+            python3 tests/package_component_consumer/list_components.py full
+          )
+          for component in "${components[@]}"; do
+            build_dir="build/package-component-${component}"
+            cmake -S tests/package_component_consumer -B "$build_dir" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+              -DVCPKG_TARGET_TRIPLET=x64-linux \
+              -DVCPKG_MANIFEST_MODE=OFF \
+              -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+              -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+              -DTURBORAFT_COMPONENT="$component"
+            cmake --build "$build_dir" --parallel 2
+            "$build_dir/turboraft_component_package_consumer"
+          done
       - name: Verify restored package consumers on Windows
         if: matrix.os == 'windows'
         shell: cmd
@@ -433,6 +450,15 @@ jobs:
           if errorlevel 1 exit /b 1
           build\package_control_plane_consumer\turboraft_control_plane_package_consumer.exe
           if errorlevel 1 exit /b 1
+
+          for /f %%C in ('python tests\package_component_consumer\list_components.py full') do (
+            cmake -S tests\package_component_consumer -B "build\package-component-%%C" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching -DTURBORAFT_COMPONENT=%%C
+            if errorlevel 1 exit /b 1
+            cmake --build "build\package-component-%%C" --parallel 2
+            if errorlevel 1 exit /b 1
+            "build\package-component-%%C\turboraft_component_package_consumer.exe"
+            if errorlevel 1 exit /b 1
+          )
 
   publish:
     name: Publish package and GitHub Release
