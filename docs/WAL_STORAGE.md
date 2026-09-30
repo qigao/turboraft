@@ -50,6 +50,43 @@ segment must begin with a valid checkpoint. If an unmatched suffix remains,
 the older segments stay authoritative until a later complete checkpoint can
 reclaim them.
 
+## Deterministic durability fault boundary
+
+Durability fault injection is test-only and remains outside the installed
+TurboRaft ABI. Tests under `src/storage` may bind a private per-storage I/O
+provider before mutation or open/recovery. The provider receives a 1-based
+ordinal counted independently for each phase:
+
+- segment write;
+- transaction write;
+- transaction fsync;
+- snapshot staging write;
+- snapshot header rewrite;
+- writable segment reopen;
+- torn-tail recovery truncate.
+
+For write phases the provider may reduce the requested byte count to force a
+real short write, or return an explicit status such as `SALTS_ENOSPC` or
+`SALTS_EIO` before the filesystem operation. Production instances use the
+normal Salts filesystem path and do not carry a public fault-control surface.
+
+Namespace publication has a separate private provider because its contract is
+stronger than a single filesystem call. Snapshot and new-segment publication
+use `salts_fs_replace_durable`, whose result distinguishes not-published,
+published-and-durable, and durability-unknown outcomes. The phased I/O
+provider tests writes/fsync/reopen/truncate; the durable-replace provider tests
+pre-publication failure and post-replacement uncertainty. These providers are
+complementary and must not be collapsed into a retry fallback.
+
+Service preserves the same durability barrier. Core may hold a provisional
+commit in an outstanding Ready while persistence is attempted, but Runtime
+does not acknowledge that Ready or invoke the FSM until storage commit
+succeeds. If WAL write/fsync fails, Service faults, `applied_index` stays at
+the last durable value, and the failed Ready remains unacknowledged. Normal
+reopen/recovery is authoritative: it exposes only the last proven durable
+prefix, or a fully published state allowed by the filesystem durability
+contract.
+
 ## Scope
 
 The application owns live FSM state. It creates opaque snapshot bytes and
