@@ -117,10 +117,14 @@ int main(void)
     failed |= expect(commit_one_entry(storage) == SALTS_OK,
                      "commit initial durable entry");
 
+    failed |= expect(setenv("TURBORAFT_FS_TEST_ARMED", "1", 1) == 0,
+                     "arm deterministic snapshot fsync fault");
     result = tr_raft_wal_storage_store_snapshot(
         storage, 1U, 1U, &configuration, snapshot, sizeof(snapshot));
     failed |= expect(result == SALTS_EIO,
                      "injected snapshot publication fault must surface EIO");
+    failed |= expect(unsetenv("TURBORAFT_FS_TEST_ARMED") == 0,
+                     "disarm deterministic snapshot fsync fault");
 
     if (pre_publish) {
         failed |= expect(
