@@ -3,7 +3,7 @@
 
 #include <turboraft/raft_service.h>
 
-#include <crpc/crpc.h>
+#include <http_server/rpc.h>
 
 #ifdef __cplusplus
 extern "C" {
