@@ -358,6 +358,8 @@ cmake_config_target(turboraft_service_wal_fault_tests
                     FOLDER "tests/core")
 add_test(NAME turboraft.service_wal_fault
          COMMAND turboraft_service_wal_fault_tests)
+set_tests_properties(turboraft.service_wal_fault
+                     PROPERTIES LABELS "service;storage;durability")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_executable(turboraft_wal_publish_fault_tests
