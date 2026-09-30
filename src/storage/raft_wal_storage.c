@@ -22,6 +22,9 @@
 #define TR_WAL_TRANSACTION_MAGIC "TRWAL001"
 #define TR_WAL_SNAPSHOT_MAGIC "TRSNP001"
 #define TR_WAL_SNAPSHOT_HEADER_SIZE 48U
+#define TR_WAL_MANIFEST_MAGIC "TRMNF001"
+#define TR_WAL_MANIFEST_SIZE 40U
+#define TR_WAL_LEGACY_MAX_SEGMENT_SEQUENCE UINT64_C(65535)
 
 enum tr_wal_operation_type {
     TR_WAL_OP_HARD_STATE = 1,
@@ -40,10 +43,12 @@ struct tr_raft_wal_storage {
     size_t transaction_capacity;
     size_t transaction_used;
     size_t segment_bytes;
-    size_t max_segments;
+    size_t max_live_segments;
     size_t max_log_entries;
     uint64_t max_snapshot_bytes;
-    size_t current_segment;
+    uint64_t first_live_segment;
+    uint64_t manifest_last_segment;
+    uint64_t current_segment;
     uint64_t current_offset;
     uint64_t last_transaction_id;
     int process_lock_registered;
@@ -249,10 +254,24 @@ static uint64_t tr_wal_get_u64(const uint8_t *input)
 }
 
 static int tr_wal_segment_path(const tr_raft_wal_storage_t *storage,
-                               size_t sequence, char *path, size_t path_size)
+                               uint64_t sequence,
+                               char *path,
+                               size_t path_size)
 {
-    int length = snprintf(path, path_size, "%s.%08zu.wal",
-                          storage->path_prefix, sequence);
+    int length = snprintf(
+        path, path_size, "%s.%08llu.wal", storage->path_prefix,
+        (unsigned long long)sequence);
+    return length < 0 || (size_t)length >= path_size ? SALTS_ENAMETOOLONG
+                                                     : SALTS_OK;
+}
+
+static int tr_wal_manifest_path(const tr_raft_wal_storage_t *storage,
+                                const char *suffix,
+                                char *path,
+                                size_t path_size)
+{
+    int length = snprintf(path, path_size, "%s.manifest%s",
+                          storage->path_prefix, suffix);
     return length < 0 || (size_t)length >= path_size ? SALTS_ENAMETOOLONG
                                                      : SALTS_OK;
 }
@@ -346,6 +365,224 @@ static int tr_wal_read_exact(salts_file_t file, uint64_t offset,
         used += (size_t)count;
     }
     return SALTS_OK;
+}
+
+static uint64_t tr_wal_manifest_checksum(const uint8_t *manifest)
+{
+    return XXH3_64bits(manifest, 32U);
+}
+
+static int tr_wal_manifest_validate_range(
+    const tr_raft_wal_storage_t *storage,
+    uint64_t first_sequence,
+    uint64_t last_sequence)
+{
+    uint64_t live_count;
+
+    if (first_sequence == 0U || last_sequence == 0U) {
+        return first_sequence == 0U && last_sequence == 0U
+                   ? SALTS_OK
+                   : SALTS_EPROTO;
+    }
+    if (last_sequence < first_sequence) {
+        return SALTS_EPROTO;
+    }
+    live_count = last_sequence - first_sequence + 1U;
+    return live_count <= (uint64_t)storage->max_live_segments
+               ? SALTS_OK
+               : SALTS_EPROTO;
+}
+
+static int tr_wal_publish_manifest(
+    tr_raft_wal_storage_t *storage,
+    uint64_t first_sequence,
+    uint64_t last_sequence)
+{
+    uint8_t manifest[TR_WAL_MANIFEST_SIZE] = {0};
+    char final_path[SALTS_FS_MAX_PATH];
+    char temporary_path[SALTS_FS_MAX_PATH];
+    salts_fs_replace_state_t publish_state = SALTS_FS_REPLACE_NOT_PUBLISHED;
+    salts_file_t file = SALTS_INVALID_FILE;
+    int result;
+
+    if (storage == NULL ||
+        tr_wal_manifest_validate_range(
+            storage, first_sequence, last_sequence) != SALTS_OK) {
+        return SALTS_EINVAL;
+    }
+    result = tr_wal_manifest_path(
+        storage, "", final_path, sizeof(final_path));
+    if (result == SALTS_OK) {
+        result = tr_wal_manifest_path(
+            storage, ".tmp", temporary_path, sizeof(temporary_path));
+    }
+    if (result != SALTS_OK) {
+        return result;
+    }
+
+    memcpy(manifest, TR_WAL_MANIFEST_MAGIC, 8U);
+    tr_wal_put_u32(manifest + 8U, TR_WAL_FORMAT_VERSION);
+    tr_wal_put_u32(manifest + 12U, TR_WAL_MANIFEST_SIZE);
+    tr_wal_put_u64(manifest + 16U, first_sequence);
+    tr_wal_put_u64(manifest + 24U, last_sequence);
+    tr_wal_put_u64(manifest + 32U, tr_wal_manifest_checksum(manifest));
+
+    file = salts_fs_open(
+        temporary_path,
+        SALTS_FS_O_RDWR | SALTS_FS_O_CREAT | SALTS_FS_O_TRUNC,
+        SALTS_FS_DEFAULT_MODE);
+    if (file == SALTS_INVALID_FILE) {
+        return SALTS_EIO;
+    }
+    result = tr_wal_write_all(
+        storage, TR_RAFT_WAL_IO_MANIFEST_WRITE,
+        file, manifest, sizeof(manifest));
+    {
+        int close_result = salts_fs_close(file);
+        file = SALTS_INVALID_FILE;
+        if (result == SALTS_OK) {
+            result = close_result;
+        }
+    }
+    if (result == SALTS_OK) {
+        result = storage->replace_durable(
+            storage->replace_durable_context,
+            temporary_path, final_path, &publish_state);
+    }
+    if (result != SALTS_OK) {
+        if (publish_state == SALTS_FS_REPLACE_NOT_PUBLISHED) {
+            (void)salts_fs_unlink(temporary_path);
+        } else {
+            storage->faulted = 1;
+        }
+        return result;
+    }
+
+    storage->first_live_segment = first_sequence;
+    storage->manifest_last_segment = last_sequence;
+    return SALTS_OK;
+}
+
+static int tr_wal_read_manifest(
+    tr_raft_wal_storage_t *storage,
+    uint64_t *out_first_sequence,
+    uint64_t *out_last_sequence)
+{
+    uint8_t manifest[TR_WAL_MANIFEST_SIZE];
+    char path[SALTS_FS_MAX_PATH];
+    salts_fs_stat_t stat;
+    salts_file_t file = SALTS_INVALID_FILE;
+    uint64_t first_sequence;
+    uint64_t last_sequence;
+    int result;
+
+    if (storage == NULL || out_first_sequence == NULL ||
+        out_last_sequence == NULL) {
+        return SALTS_EINVAL;
+    }
+    result = tr_wal_manifest_path(storage, "", path, sizeof(path));
+    if (result != SALTS_OK) {
+        return result;
+    }
+    result = salts_fs_stat(path, &stat);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    if (!stat.is_file || stat.size != sizeof(manifest)) {
+        return SALTS_EPROTO;
+    }
+    file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
+    if (file == SALTS_INVALID_FILE) {
+        return SALTS_EIO;
+    }
+    result = tr_wal_read_exact(file, 0U, manifest, sizeof(manifest));
+    {
+        int close_result = salts_fs_close(file);
+        if (result == SALTS_OK) {
+            result = close_result;
+        }
+    }
+    if (result != SALTS_OK) {
+        return result;
+    }
+    if (memcmp(manifest, TR_WAL_MANIFEST_MAGIC, 8U) != 0 ||
+        tr_wal_get_u32(manifest + 8U) != TR_WAL_FORMAT_VERSION ||
+        tr_wal_get_u32(manifest + 12U) != TR_WAL_MANIFEST_SIZE ||
+        tr_wal_get_u64(manifest + 32U) !=
+            tr_wal_manifest_checksum(manifest)) {
+        return SALTS_EPROTO;
+    }
+
+    first_sequence = tr_wal_get_u64(manifest + 16U);
+    last_sequence = tr_wal_get_u64(manifest + 24U);
+    result = tr_wal_manifest_validate_range(
+        storage, first_sequence, last_sequence);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    *out_first_sequence = first_sequence;
+    *out_last_sequence = last_sequence;
+    return SALTS_OK;
+}
+
+static int tr_wal_reject_legacy_namespace(
+    tr_raft_wal_storage_t *storage)
+{
+    char path[SALTS_FS_MAX_PATH];
+    uint64_t sequence;
+
+    for (sequence = 1U;
+         sequence <= TR_WAL_LEGACY_MAX_SEGMENT_SEQUENCE;
+         ++sequence) {
+        int result = tr_wal_segment_path(
+            storage, sequence, path, sizeof(path));
+        if (result != SALTS_OK) {
+            return result;
+        }
+        if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
+            return SALTS_EPROTO;
+        }
+    }
+    return SALTS_OK;
+}
+
+static int tr_wal_load_or_initialize_manifest(
+    tr_raft_wal_storage_t *storage,
+    bool create_if_missing)
+{
+    uint64_t first_sequence = 0U;
+    uint64_t last_sequence = 0U;
+    int result = tr_wal_read_manifest(
+        storage, &first_sequence, &last_sequence);
+
+    if (result == SALTS_OK) {
+        storage->first_live_segment = first_sequence;
+        storage->manifest_last_segment = last_sequence;
+        return SALTS_OK;
+    }
+    if (result != SALTS_ENOENT) {
+        return result;
+    }
+
+    result = tr_wal_reject_legacy_namespace(storage);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    if (!create_if_missing) {
+        return SALTS_ENOENT;
+    }
+    return tr_wal_publish_manifest(storage, 0U, 0U);
+}
+
+static uint64_t tr_wal_live_segment_count(
+    const tr_raft_wal_storage_t *storage)
+{
+    if (storage->first_live_segment == 0U ||
+        storage->manifest_last_segment == 0U) {
+        return 0U;
+    }
+    return storage->manifest_last_segment -
+           storage->first_live_segment + 1U;
 }
 
 typedef struct tr_wal_snapshot_file_source {
@@ -771,7 +1008,7 @@ static uint64_t tr_wal_transaction_checksum(const uint8_t *frame,
 }
 
 static int tr_wal_create_segment(tr_raft_wal_storage_t *storage,
-                                 size_t sequence)
+                                 uint64_t sequence)
 {
     uint8_t header[TR_WAL_SEGMENT_HEADER_SIZE] = {0};
     char temporary_path[SALTS_FS_MAX_PATH];
