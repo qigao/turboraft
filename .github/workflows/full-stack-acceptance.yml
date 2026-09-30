@@ -166,6 +166,24 @@ jobs:
             cmake --build "$build_dir" --parallel 2
           done
 
+      - name: Verify full profile fail-fast boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .ci/build/profile-missing-flowmq
+          if FLOWMQ_ROOT="" CHTTP_ROOT="" cmake -S .               -B .ci/build/profile-missing-flowmq -G Ninja               -DCMAKE_BUILD_TYPE=Release               -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"               -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR"               -DVCPKG_TARGET_TRIPLET=x64-linux               -DVCPKG_MANIFEST_MODE=OFF               -DTURBORAFT_BUILD_PROFILE=full               -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF               >.ci/build/profile-missing-flowmq.log 2>&1; then
+            echo "full profile unexpectedly configured without FLOWMQ_ROOT" >&2
+            exit 1
+          fi
+          grep -F "FLOWMQ_ROOT" .ci/build/profile-missing-flowmq.log
+
+          rm -rf .ci/build/profile-missing-re2c
+          if cmake -S . -B .ci/build/profile-missing-re2c -G Ninja               -DCMAKE_BUILD_TYPE=Release               -DRE2C_EXECUTABLE=/definitely/missing/re2c               -DTURBORAFT_BUILD_PROFILE=full               -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF               >.ci/build/profile-missing-re2c.log 2>&1; then
+            echo "full profile unexpectedly configured with missing re2c" >&2
+            exit 1
+          fi
+          grep -F "existing runnable re2c executable"             .ci/build/profile-missing-re2c.log
+
       - name: Build and install CHttp master
         shell: bash
         run: |
