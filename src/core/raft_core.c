@@ -2015,8 +2015,7 @@ int tr_raft_core_change_membership(
         return SALTS_EPERM;
     }
     if (core->leadership_transfer_target != 0U ||
-        tr_read_total_count(core) != 0U ||
-        tr_peer_transport_paused(core, (size_t) transferee_index)) {
+        tr_read_total_count(core) != 0U) {
         core->in_call = false;
         return SALTS_EBUSY;
     }
@@ -2061,7 +2060,8 @@ int tr_raft_core_transfer_leadership(tr_raft_core_t *core,
         return SALTS_EPROTO;
     }
     if (core->leadership_transfer_target != 0U ||
-        tr_read_total_count(core) != 0U) {
+        tr_read_total_count(core) != 0U ||
+        tr_peer_transport_paused(core, (size_t) transferee_index)) {
         core->in_call = false;
         return SALTS_EBUSY;
     }
