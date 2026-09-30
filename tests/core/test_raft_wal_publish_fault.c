@@ -1,5 +1,7 @@
 #include <turboraft/raft_wal_storage.h>
 
+#include "raft_wal_storage_internal.h"
+
 #include <salts_error.h>
 #include <salts_fs.h>
 
@@ -9,6 +11,16 @@
 #include <string.h>
 #include <unistd.h>
 
+typedef enum publish_fault_phase {
+    PUBLISH_FAULT_PRE = 1,
+    PUBLISH_FAULT_POST = 2
+} publish_fault_phase_t;
+
+typedef struct publish_fault_context {
+    publish_fault_phase_t phase;
+    int fired;
+} publish_fault_context_t;
+
 static int expect(int condition, const char *message)
 {
     if (condition) {
@@ -16,6 +28,53 @@ static int expect(int condition, const char *message)
     }
     fprintf(stderr, "FAIL: %s\n", message);
     return 1;
+}
+
+static int fault_replace_durable(
+    void *context,
+    const char *staging_path,
+    const char *destination_path,
+    salts_fs_replace_state_t *state)
+{
+    publish_fault_context_t *fault =
+        (publish_fault_context_t *)context;
+
+    if (fault == NULL || state == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (fault->fired) {
+        return salts_fs_replace_durable(
+            staging_path, destination_path, state);
+    }
+
+    fault->fired = 1;
+    *state = SALTS_FS_REPLACE_NOT_PUBLISHED;
+    if (fault->phase == PUBLISH_FAULT_PRE) {
+        return SALTS_EIO;
+    }
+    if (fault->phase == PUBLISH_FAULT_POST) {
+        salts_file_t file =
+            salts_fs_open(staging_path, SALTS_FS_O_RDWR, 0);
+        int result;
+
+        if (file == SALTS_INVALID_FILE) {
+            return SALTS_EIO;
+        }
+        result = salts_fs_fsync(file);
+        if (salts_fs_close(file) != SALTS_OK && result == SALTS_OK) {
+            result = SALTS_EIO;
+        }
+        if (result != SALTS_OK) {
+            return result;
+        }
+        result = salts_fs_rename(staging_path, destination_path);
+        if (result != SALTS_OK) {
+            return result;
+        }
+        *state = SALTS_FS_REPLACE_DURABILITY_UNKNOWN;
+        return SALTS_EIO;
+    }
+    return SALTS_EINVAL;
 }
 
 static void cleanup_prefix(const char *prefix)
@@ -81,6 +140,8 @@ int main(void)
     tr_raft_wal_storage_config_t config;
     tr_raft_wal_storage_t *storage = NULL;
     tr_raft_wal_recovery_t recovery;
+    publish_fault_context_t fault;
+    tr_raft_wal_storage_io_ops_t ops;
     char prefix[SALTS_FS_MAX_PATH];
     char snapshot_path[SALTS_FS_MAX_PATH];
     int result;
@@ -117,14 +178,21 @@ int main(void)
     failed |= expect(commit_one_entry(storage) == SALTS_OK,
                      "commit initial durable entry");
 
-    failed |= expect(setenv("TURBORAFT_FS_TEST_ARMED", "1", 1) == 0,
-                     "arm deterministic snapshot fsync fault");
+    memset(&fault, 0, sizeof(fault));
+    fault.phase = pre_publish ? PUBLISH_FAULT_PRE : PUBLISH_FAULT_POST;
+    memset(&ops, 0, sizeof(ops));
+    ops.context = &fault;
+    ops.replace_durable = fault_replace_durable;
+    failed |= expect(
+        tr_raft_wal_storage_set_io_for_test(storage, &ops) == SALTS_OK,
+        "install private deterministic storage provider");
+
     result = tr_raft_wal_storage_store_snapshot(
         storage, 1U, 1U, &configuration, snapshot, sizeof(snapshot));
     failed |= expect(result == SALTS_EIO,
                      "injected snapshot publication fault must surface EIO");
-    failed |= expect(unsetenv("TURBORAFT_FS_TEST_ARMED") == 0,
-                     "disarm deterministic snapshot fsync fault");
+    failed |= expect(fault.fired == 1,
+                     "deterministic publication provider must fire exactly once");
 
     if (pre_publish) {
         failed |= expect(
