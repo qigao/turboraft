@@ -1,5 +1,7 @@
 #include <turboraft/raft_wal_storage.h>
 
+#include "raft_wal_storage_internal.h"
+
 #include <salts_error.h>
 #include <salts_fs.h>
 #include <openssl/sha.h>
@@ -57,6 +59,8 @@ struct tr_raft_wal_storage {
     tr_raft_index_t pending_last_log_index;
     int transaction_active;
     int faulted;
+    tr_raft_wal_replace_durable_fn replace_durable;
+    void *replace_durable_context;
 };
 
 typedef struct tr_wal_process_lock_entry {
@@ -66,6 +70,35 @@ typedef struct tr_wal_process_lock_entry {
 
 static atomic_flag tr_wal_process_lock_guard = ATOMIC_FLAG_INIT;
 static tr_wal_process_lock_entry_t *tr_wal_process_locks = NULL;
+
+static int tr_wal_replace_durable_default(
+    void *context,
+    const char *staging_path,
+    const char *destination_path,
+    salts_fs_replace_state_t *state)
+{
+    (void)context;
+    return salts_fs_replace_durable(staging_path, destination_path, state);
+}
+
+int tr_raft_wal_storage_set_replace_durable_for_test(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_wal_replace_durable_fn replace_durable,
+    void *context)
+{
+    if (storage == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (storage->transaction_active) {
+        return SALTS_EBUSY;
+    }
+    storage->replace_durable =
+        replace_durable != NULL ? replace_durable
+                                : tr_wal_replace_durable_default;
+    storage->replace_durable_context =
+        replace_durable != NULL ? context : NULL;
+    return SALTS_OK;
+}
 
 static void tr_wal_process_lock_guard_acquire(void)
 {
@@ -605,7 +638,8 @@ cleanup_write:
     free(buffer);
 
     if (result == SALTS_OK) {
-        result = salts_fs_replace_durable(
+        result = storage->replace_durable(
+            storage->replace_durable_context,
             temporary_path, final_path, &publish_state);
     }
     if (result != SALTS_OK) {
@@ -671,7 +705,8 @@ static int tr_wal_create_segment(tr_raft_wal_storage_t *storage,
         }
     }
     if (result == SALTS_OK) {
-        result = salts_fs_replace_durable(
+        result = storage->replace_durable(
+            storage->replace_durable_context,
             temporary_path, storage->current_path, &publish_state);
     }
     if (result != SALTS_OK) {
@@ -1234,6 +1269,8 @@ int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
     memcpy(storage->path_prefix, config->path_prefix, prefix_length + 1U);
     storage->lock_file = SALTS_INVALID_FILE;
     storage->current_file = SALTS_INVALID_FILE;
+    storage->replace_durable = tr_wal_replace_durable_default;
+    storage->replace_durable_context = NULL;
     storage->segment_bytes = segment_bytes;
     storage->transaction_capacity = transaction_bytes;
     storage->max_segments = config->max_segments;
