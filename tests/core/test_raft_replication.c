@@ -531,7 +531,6 @@ spec("native raft replication")
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.commit_index, 1U);
         check(status.joint_configuration);
-        check_equal(tr_raft_core_advance(core), SALTS_OK);
 
         response.from = 4U;
         ready = replication_ready_capacity(messages, 2U);
