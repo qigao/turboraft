@@ -500,9 +500,36 @@ spec("native raft replication")
         response.match_index = 1U;
         ready = replication_ready_capacity(messages, 2U);
         check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check(ready.commit_changed);
+        check_equal(ready.commit_index, 1U);
+        check_equal(tr_raft_core_status(core, &status), SALTS_OK);
+        check_equal(status.commit_index, 1U);
+        check(status.joint_configuration);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        {
+            tr_raft_tick_t tick = {1U, 7U};
+
+            ready = replication_ready_capacity(messages, 2U);
+            check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
+            check(ready.log_changed);
+            check_false(ready.commit_changed);
+            check_equal(ready.log_entries[0].index, 2U);
+            check_equal(ready.message_count, 2U);
+            for (index = 0U; index < ready.message_count; ++index) {
+                check_not_equal(ready.messages[index].to, 3U);
+            }
+            check_equal(tr_raft_core_advance(core), SALTS_OK);
+        }
+
+        response.from = 2U;
+        response.previous_log_index = 1U;
+        response.match_index = 2U;
+        ready = replication_ready_capacity(messages, 2U);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check_false(ready.commit_changed);
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
-        check_equal(status.commit_index, 0U);
+        check_equal(status.commit_index, 1U);
         check(status.joint_configuration);
         check_equal(tr_raft_core_advance(core), SALTS_OK);
 
@@ -510,10 +537,10 @@ spec("native raft replication")
         ready = replication_ready_capacity(messages, 2U);
         check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
         check(ready.commit_changed);
-        check_equal(ready.commit_index, 1U);
+        check_equal(ready.commit_index, 2U);
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
-        check_equal(status.commit_index, 1U);
-        check(status.joint_configuration);
+        check_equal(status.commit_index, 2U);
+        check_false(status.joint_configuration);
 
         tr_raft_core_destroy(core);
     }
