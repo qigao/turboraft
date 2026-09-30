@@ -220,12 +220,15 @@ jobs:
         run: |
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           set "PATH=%TURBORAFT_ROOT%\bin;%CHTTP_ROOT%\bin;%FLOWMQ_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
+          set "TURBORAFT_SAVED_SALTS_UTILS_ROOT=%SALTS_UTILS_ROOT%"
+          set "SALTS_UTILS_ROOT="
           cmake -S tests\package_core_consumer -B .ci\build\package-core-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF
           if errorlevel 1 exit /b 1
           cmake --build .ci\build\package-core-windows --parallel 2
           if errorlevel 1 exit /b 1
           .ci\build\package-core-windows\turboraft_core_package_consumer.exe
           if errorlevel 1 exit /b 1
+          set "SALTS_UTILS_ROOT=%TURBORAFT_SAVED_SALTS_UTILS_ROOT%"
           cmake -S tests\package_flowmq_consumer -B .ci\build\package-flowmq-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF
           if errorlevel 1 exit /b 1
           cmake --build .ci\build\package-flowmq-windows --parallel 2
