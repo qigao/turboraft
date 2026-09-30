@@ -41,6 +41,29 @@ Configure requires exact active-profile installations provided through:
 The supplied user presets resolve Debug and Release profiles independently and
 use `NO_DEFAULT_PATH` for first-party package discovery.
 
+### Source build profiles
+
+`TURBORAFT_BUILD_PROFILE` makes source-only dependency boundaries explicit:
+
+- `full` (default) builds the complete SDK, transport, FlowMQ integration,
+  text/replay syntax, optional ControlPlane, tests and release surfaces. It
+  requires `FLOWMQ_ROOT`, re2c, and the repository Lemon host tool.
+- `core-dev` builds `TurboRaft::Core` and `TurboRaft::Service` only. It
+  requires `SALTS_ROOT` and `SALTS_UTILS_ROOT`, but not `FLOWMQ_ROOT`,
+  `CHTTP_ROOT`, re2c, or Lemon.
+- `storage-dev` extends `core-dev` with snapshot receiver/sender,
+  `DataStream`, and `WalStorage`. It additionally resolves OpenSSL and
+  xxHash, but still does not require FlowMQ, CHttp, or text parser tools.
+
+Focused profiles are library profiles; tests, benchmarks, examples, fuzzers,
+and database fixtures remain full-profile surfaces and fail fast if requested
+with a focused profile.
+
+SaltsUtils is intentionally still required by every profile: Core links the
+installed DataBind target and source builds use the SDK's `salts-idlc` as a
+build-time generator for the Raft wire schema. No checked-in-code or legacy
+fallback is used in place of that compiler.
+
 The production-qualified OS/compiler/dependency boundary is documented in
 [`docs/SUPPORTED_PLATFORMS.md`](docs/SUPPORTED_PLATFORMS.md). A platform that
 is not in that matrix may still compile, but it is not a TurboRaft 0.2.x
