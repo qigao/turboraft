@@ -188,7 +188,7 @@ if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
     message(FATAL_ERROR
             "TURBODB_ROOT must name the TurboDB install prefix when ORM SQLite fixtures are enabled")
   endif()
-  find_package(Orm CONFIG REQUIRED
+  find_package(TurboDB CONFIG REQUIRED
                PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
   if(NOT TARGET Orm::C)
     message(FATAL_ERROR "The TurboDB install does not provide Orm::C")
