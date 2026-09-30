@@ -181,7 +181,8 @@ jobs:
             return Join-Path $selected.FullName "sdk\$Rid"
           }
           function Get-Sdk-Version([string]$Root) {
-            return Split-Path (Split-Path $Root -Parent) -Parent | Split-Path -Leaf
+            $versionDir = Split-Path (Split-Path $Root -Parent) -Parent
+            return Split-Path $versionDir -Leaf
           }
           $saltsRoot = Resolve-Sdk "salts.native" "windows-x64"
           $saltsUtilsRoot = Resolve-Sdk "saltsutils.native" "windows-x64"
