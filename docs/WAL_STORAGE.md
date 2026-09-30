@@ -15,9 +15,12 @@ snapshot payload without depending on a database.
 - New segment files are staged and published with
   `salts_fs_replace_durable`; a segment is not admitted as the writable
   current segment until its namespace publication is durable.
-- Segment and transaction capacities are fixed at open. Capacity exhaustion
-  returns `SALTS_ENOSPC`; there is no unbounded allocation or in-memory
-  fallback.
+- Segment and transaction capacities are fixed at open. `max_live_segments` is
+  the maximum simultaneously live WAL segment count, not a lifetime sequence
+  ceiling. The legacy `max_segments` field spelling remains a deprecated
+  layout-preserving alias only. Segment identities are monotonic 64-bit sequence numbers and are
+  never reused. Capacity exhaustion returns `SALTS_ENOSPC`; there is no
+  unbounded allocation or in-memory fallback.
 - Every transaction frame contains its transaction id, predecessor id,
   payload length, and XXH3 checksum. Recovery requires consecutive segment and
   transaction ids.
@@ -29,9 +32,27 @@ snapshot payload without depending on a database.
 - The lock file is held exclusively for the instance lifetime. Open, close,
   recovery, and rotation are control-plane operations and require quiescence.
 
-Files use `<path_prefix>.NNNNNNNN.wal`; `<path_prefix>.lock` prevents two
-processes from opening the same log. Snapshot payloads use
+Files use `<path_prefix>.NNNNNNNN.wal` (eight digits minimum; larger
+monotonic sequences extend naturally). `<path_prefix>.manifest` records the
+authoritative bounded live sequence range, and `<path_prefix>.lock` prevents
+two processes from opening the same log. Snapshot payloads use
 `<path_prefix>.snapshot.<index>.<term>`.
+
+The manifest is staged and published with `salts_fs_replace_durable`. For
+ordinary rotation, a new segment and its transaction are durable before the
+manifest extends `last_live_sequence`; the operation is not acknowledged
+until that manifest update succeeds. For a complete checkpoint, the checkpoint
+transaction is durable before the manifest atomically advances both
+`first_live_sequence` and `last_live_sequence` to the checkpoint segment;
+only then are older segments unlinked. A crash therefore observes either the
+old authoritative history or the complete new checkpoint, never a range that
+references already-reclaimed history.
+
+Pre-manifest WALs are supported by one bounded compatibility scan from
+sequence 1 through the configured `max_live_segments`. A successful open writes
+the durable manifest immediately. All subsequent recovery scans only the
+manifest's bounded live range, so startup work is independent of lifetime
+segment sequence.
 
 Snapshot data is written to a staging file and published with
 `salts_fs_replace_durable` before its referencing WAL transaction. A
@@ -45,8 +66,9 @@ safe to reuse after a crash before WAL commit; conflicting bytes fail fast.
 When a snapshot covers the complete retained log, storage rotates first and
 writes the self-contained snapshot checkpoint as the first transaction of the
 new segment. Only after that transaction is fsynced are older segments removed.
-Recovery may therefore begin at a segment number greater than one, but such a
-segment must begin with a valid checkpoint. If an unmatched suffix remains,
+Recovery may therefore begin at a segment number greater than one—even a
+sequence far beyond `max_live_segments`—but such a segment must begin with a valid
+checkpoint. If an unmatched suffix remains,
 the older segments stay authoritative until a later complete checkpoint can
 reclaim them.
 
@@ -62,6 +84,7 @@ ordinal counted independently for each phase:
 - transaction fsync;
 - snapshot staging write;
 - snapshot header rewrite;
+- manifest staging write;
 - writable segment reopen;
 - torn-tail recovery truncate.
 

@@ -1,6 +1,8 @@
 #include <turboraft/raft_wal_storage.h>
 #include <turboraft/raft_snapshot_stream.h>
 
+#include "raft_wal_storage_internal.h"
+
 #include <tinytest.h>
 #include <salts_error.h>
 #include <salts_fs.h>
@@ -12,7 +14,8 @@
 
 enum {
     WAL_TEST_MAX_ENTRIES = 128U,
-    WAL_TEST_MAX_SEGMENTS = 4U
+    WAL_TEST_MAX_SEGMENTS = 4U,
+    WAL_TEST_CLEANUP_SEGMENTS = 32U
 };
 
 static tr_raft_wal_storage_config_t wal_test_config(const char *prefix,
@@ -23,7 +26,7 @@ static tr_raft_wal_storage_config_t wal_test_config(const char *prefix,
     config.path_prefix = prefix;
     config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
     config.max_transaction_bytes = 8U * 1024U;
-    config.max_segments = WAL_TEST_MAX_SEGMENTS;
+    config.max_live_segments = WAL_TEST_MAX_SEGMENTS;
     config.max_log_entries = WAL_TEST_MAX_ENTRIES;
     config.max_snapshot_bytes = 1024U;
     config.create_if_missing = create;
@@ -105,15 +108,38 @@ static int wal_read_recovered_snapshot(
                : SALTS_EIO;
 }
 
+static int wal_test_copy_file(const char *source,
+                              const char *destination)
+{
+    salts_fs_buf_t bytes = {0};
+    int result;
+
+    if (source == NULL || destination == NULL) {
+        return SALTS_EINVAL;
+    }
+    result = salts_fs_read_file(source, &bytes);
+    if (result == SALTS_OK) {
+        result = salts_fs_write_file(destination, &bytes);
+    }
+    salts_fs_buf_free(&bytes);
+    return result;
+}
+
 static void wal_test_cleanup(char *prefix)
 {
     char path[SALTS_FS_MAX_PATH];
     size_t index;
-    for (index = 1U; index <= WAL_TEST_MAX_SEGMENTS; ++index) {
+    for (index = 1U; index <= WAL_TEST_CLEANUP_SEGMENTS; ++index) {
         snprintf(path, sizeof(path), "%s.%08zu.wal", prefix, index);
         if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
             check_equal(tt_remove_file(path), 0);
     }
+    wal_test_path(path, sizeof(path), prefix, ".manifest");
+    if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
+        check_equal(tt_remove_file(path), 0);
+    wal_test_path(path, sizeof(path), prefix, ".manifest.tmp");
+    if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
+        check_equal(tt_remove_file(path), 0);
     wal_test_path(path, sizeof(path), prefix, ".lock");
     if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
         check_equal(tt_remove_file(path), 0);
@@ -551,6 +577,213 @@ spec("raft segmented WAL storage")
         check_equal(recovery.commit_index, WAL_TEST_MAX_ENTRIES);
         check_equal(recovery.entries[WAL_TEST_MAX_ENTRIES - 1U].index,
                       WAL_TEST_MAX_ENTRIES);
+        tr_raft_wal_recovery_destroy(&recovery);
+        check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+        wal_test_cleanup(prefix);
+    }
+
+    it("treats max_segments as live retention instead of lifetime sequence")
+    {
+        const tr_raft_conf_t configuration = {
+            TR_RAFT_CONF_FINAL, 1U, 1U,
+            {{1U, TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER}}
+        };
+        char *prefix =
+            tt_make_temp_file("turboraft-wal-live-retention", ".data");
+        tr_raft_wal_storage_config_t config = wal_test_config(prefix, true);
+        tr_raft_wal_storage_t *storage = NULL;
+        tr_raft_storage_t adapter;
+        tr_raft_wal_recovery_t recovery;
+        char path[SALTS_FS_MAX_PATH];
+        size_t cycle;
+
+        config.max_live_segments = 1U;
+        config.max_log_entries = 8U;
+
+        check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
+        check_equal(tr_raft_wal_storage_rebase_segment_sequence_for_test(
+                        storage, TR_RAFT_WAL_MAX_LIVE_SEGMENTS),
+                    SALTS_OK);
+        check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+        storage = NULL;
+        config.create_if_missing = false;
+
+        for (cycle = 1U; cycle <= 6U; ++cycle) {
+            tr_raft_entry_t entry =
+                wal_test_entry((tr_raft_index_t)cycle, 1U,
+                               700U + cycle, "x");
+            uint8_t snapshot = (uint8_t)cycle;
+
+            check_equal(tr_raft_wal_storage_open(&config, &storage),
+                        SALTS_OK);
+            check_equal(tr_raft_wal_storage_bind(storage, &adapter),
+                        SALTS_OK);
+            check_equal(adapter.begin(adapter.context), SALTS_OK);
+            check_equal(adapter.write_hard_state(adapter.context, 1U, 1U),
+                        SALTS_OK);
+            check_equal(adapter.append_log(adapter.context, &entry, 1U),
+                        SALTS_OK);
+            check_equal(adapter.write_commit_index(
+                            adapter.context, (tr_raft_index_t)cycle),
+                        SALTS_OK);
+            check_equal(adapter.commit(adapter.context), SALTS_OK);
+            check_equal(tr_raft_wal_storage_store_snapshot(
+                            storage, (tr_raft_index_t)cycle, 1U,
+                            &configuration, &snapshot, sizeof(snapshot)),
+                        SALTS_OK);
+            check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+            storage = NULL;
+
+            config.create_if_missing = false;
+            check_equal(tr_raft_wal_storage_open(&config, &storage),
+                        SALTS_OK);
+            memset(&recovery, 0, sizeof(recovery));
+            check_equal(tr_raft_wal_storage_load(storage, &recovery),
+                        SALTS_OK);
+            check_equal(recovery.snapshot_index, cycle);
+            check_equal(recovery.snapshot_term, 1U);
+            check_equal(recovery.commit_index, cycle);
+            check_equal(recovery.entry_count, 0U);
+            tr_raft_wal_recovery_destroy(&recovery);
+            check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+            storage = NULL;
+        }
+
+        wal_test_path(path, sizeof(path), prefix, ".manifest");
+        check_equal(salts_fs_access(path, SALTS_FS_ACCESS_EXISTS), SALTS_OK);
+        snprintf(path, sizeof(path), "%s.%08llu.wal", prefix,
+                 (unsigned long long)
+                     (TR_RAFT_WAL_MAX_LIVE_SEGMENTS + 6ULL));
+        check_equal(salts_fs_access(path, SALTS_FS_ACCESS_EXISTS), SALTS_OK);
+        check_equal(tt_remove_file(path), 0);
+        snprintf(path, sizeof(path), "%s.%08u.wal", prefix,
+                 TR_RAFT_WAL_MAX_LIVE_SEGMENTS);
+        check_not_equal(salts_fs_access(path, SALTS_FS_ACCESS_EXISTS),
+                        SALTS_OK);
+
+        snprintf(path, sizeof(path), "%s.snapshot.%u.1", prefix, 6U);
+        check_equal(tt_remove_file(path), 0);
+        wal_test_cleanup(prefix);
+    }
+
+    it("restores high-sequence backup only with its manifest")
+    {
+        const uint64_t high_sequence =
+            (uint64_t)TR_RAFT_WAL_MAX_LIVE_SEGMENTS + UINT64_C(100);
+        char *source_prefix =
+            tt_make_temp_file("turboraft-wal-backup-source", ".data");
+        char *backup_prefix =
+            tt_make_temp_file("turboraft-wal-backup-copy", ".data");
+        char *missing_manifest_prefix =
+            tt_make_temp_file("turboraft-wal-backup-no-manifest", ".data");
+        tr_raft_wal_storage_config_t config =
+            wal_test_config(source_prefix, true);
+        tr_raft_wal_storage_t *storage = NULL;
+        tr_raft_storage_t adapter;
+        tr_raft_wal_recovery_t recovery;
+        tr_raft_entry_t entry = wal_test_entry(1U, 1U, 901U, "backup");
+        char source_segment[SALTS_FS_MAX_PATH];
+        char source_manifest[SALTS_FS_MAX_PATH];
+        char backup_segment[SALTS_FS_MAX_PATH];
+        char backup_manifest[SALTS_FS_MAX_PATH];
+        char missing_segment[SALTS_FS_MAX_PATH];
+
+        config.max_live_segments = 1U;
+        check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
+        check_equal(tr_raft_wal_storage_rebase_segment_sequence_for_test(
+                        storage, high_sequence),
+                    SALTS_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), SALTS_OK);
+        check_equal(adapter.begin(adapter.context), SALTS_OK);
+        check_equal(adapter.write_hard_state(adapter.context, 1U, 1U),
+                    SALTS_OK);
+        check_equal(adapter.append_log(adapter.context, &entry, 1U),
+                    SALTS_OK);
+        check_equal(adapter.write_commit_index(adapter.context, 1U),
+                    SALTS_OK);
+        check_equal(adapter.commit(adapter.context), SALTS_OK);
+        check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+        storage = NULL;
+
+        snprintf(source_segment, sizeof(source_segment), "%s.%08llu.wal",
+                 source_prefix, (unsigned long long)high_sequence);
+        wal_test_path(source_manifest, sizeof(source_manifest),
+                      source_prefix, ".manifest");
+        snprintf(backup_segment, sizeof(backup_segment), "%s.%08llu.wal",
+                 backup_prefix, (unsigned long long)high_sequence);
+        wal_test_path(backup_manifest, sizeof(backup_manifest),
+                      backup_prefix, ".manifest");
+        snprintf(missing_segment, sizeof(missing_segment), "%s.%08llu.wal",
+                 missing_manifest_prefix,
+                 (unsigned long long)high_sequence);
+
+        check_equal(wal_test_copy_file(source_segment, backup_segment),
+                    SALTS_OK);
+        check_equal(wal_test_copy_file(source_manifest, backup_manifest),
+                    SALTS_OK);
+        check_equal(wal_test_copy_file(source_segment, missing_segment),
+                    SALTS_OK);
+
+        config = wal_test_config(backup_prefix, false);
+        config.max_live_segments = 1U;
+        check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
+        memset(&recovery, 0, sizeof(recovery));
+        check_equal(tr_raft_wal_storage_load(storage, &recovery), SALTS_OK);
+        check_equal(recovery.term, 1U);
+        check_equal(recovery.commit_index, 1U);
+        check_equal(recovery.entry_count, 1U);
+        check_equal(recovery.entries[0].command_id, 901U);
+        tr_raft_wal_recovery_destroy(&recovery);
+        check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+        storage = NULL;
+
+        config = wal_test_config(missing_manifest_prefix, false);
+        config.max_live_segments = 1U;
+        check_equal(tr_raft_wal_storage_open(&config, &storage),
+                    SALTS_ENOENT);
+        check(storage == NULL);
+
+        check_equal(tt_remove_file(source_segment), 0);
+        check_equal(tt_remove_file(backup_segment), 0);
+        check_equal(tt_remove_file(missing_segment), 0);
+        wal_test_cleanup(source_prefix);
+        wal_test_cleanup(backup_prefix);
+        wal_test_cleanup(missing_manifest_prefix);
+    }
+
+    it("bootstraps a durable manifest for a legacy bounded WAL")
+    {
+        char *prefix =
+            tt_make_temp_file("turboraft-wal-manifest-bootstrap", ".data");
+        tr_raft_wal_storage_config_t config = wal_test_config(prefix, true);
+        tr_raft_wal_storage_t *storage = NULL;
+        tr_raft_storage_t adapter;
+        config.max_segments = WAL_TEST_MAX_SEGMENTS;
+        tr_raft_wal_recovery_t recovery;
+        tr_raft_entry_t entry = wal_test_entry(1U, 1U, 801U, "legacy");
+        char manifest_path[SALTS_FS_MAX_PATH];
+
+        check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
+        check_equal(tr_raft_wal_storage_bind(storage, &adapter), SALTS_OK);
+        check_equal(adapter.begin(adapter.context), SALTS_OK);
+        check_equal(adapter.append_log(adapter.context, &entry, 1U),
+                    SALTS_OK);
+        check_equal(adapter.commit(adapter.context), SALTS_OK);
+        check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+        storage = NULL;
+
+        wal_test_path(manifest_path, sizeof(manifest_path),
+                      prefix, ".manifest");
+        check_equal(tt_remove_file(manifest_path), 0);
+
+        config.create_if_missing = false;
+        check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
+        check_equal(salts_fs_access(
+                        manifest_path, SALTS_FS_ACCESS_EXISTS), SALTS_OK);
+        memset(&recovery, 0, sizeof(recovery));
+        check_equal(tr_raft_wal_storage_load(storage, &recovery), SALTS_OK);
+        check_equal(recovery.entry_count, 1U);
+        check_equal(recovery.entries[0].command_id, 801U);
         tr_raft_wal_recovery_destroy(&recovery);
         check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
         wal_test_cleanup(prefix);

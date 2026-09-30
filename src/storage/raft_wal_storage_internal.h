@@ -26,6 +26,7 @@ typedef enum tr_raft_wal_io_phase {
     TR_RAFT_WAL_IO_SNAPSHOT_HEADER_REWRITE,
     TR_RAFT_WAL_IO_REOPEN_OPEN,
     TR_RAFT_WAL_IO_REOPEN_TRUNCATE,
+    TR_RAFT_WAL_IO_MANIFEST_WRITE,
     TR_RAFT_WAL_IO_PHASE_COUNT
 } tr_raft_wal_io_phase_t;
 
@@ -66,6 +67,14 @@ int tr_raft_wal_storage_open_with_io_fault_provider_for_test(
     const tr_raft_wal_storage_config_t *config,
     const tr_raft_wal_io_fault_provider_t *provider,
     tr_raft_wal_storage_t **out_storage);
+
+/*
+ * Test-only sequence accelerator. Requires an empty current segment and
+ * durably rebases the live range to the requested monotonic sequence.
+ */
+int tr_raft_wal_storage_rebase_segment_sequence_for_test(
+    tr_raft_wal_storage_t *storage,
+    uint64_t sequence);
 
 #ifdef __cplusplus
 }
