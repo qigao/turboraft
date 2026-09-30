@@ -6,6 +6,7 @@
 #include <tinytest.h>
 #include <salts_error.h>
 #include <salts_fs.h>
+#include <xxhash.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -53,6 +54,15 @@ static void wal_test_path(char *output, size_t output_size,
                           const char *prefix, const char *suffix)
 {
     snprintf(output, output_size, "%s%s", prefix, suffix);
+}
+
+static void wal_test_put_u64(uint8_t *output, uint64_t value)
+{
+    size_t index;
+
+    for (index = 0U; index < 8U; ++index) {
+        output[index] = (uint8_t)(value >> (index * 8U));
+    }
 }
 
 typedef struct wal_generated_snapshot {
@@ -749,6 +759,40 @@ spec("raft segmented WAL storage")
         wal_test_cleanup(source_prefix);
         wal_test_cleanup(backup_prefix);
         wal_test_cleanup(missing_manifest_prefix);
+    }
+
+    it("rejects a checksum-valid manifest whose live range overflows")
+    {
+        char *prefix =
+            tt_make_temp_file("turboraft-wal-manifest-range", ".data");
+        tr_raft_wal_storage_config_t config = wal_test_config(prefix, true);
+        tr_raft_wal_storage_t *storage = NULL;
+        salts_fs_buf_t manifest = {0};
+        char manifest_path[SALTS_FS_MAX_PATH];
+        uint64_t checksum;
+
+        check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
+        check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
+        storage = NULL;
+
+        wal_test_path(manifest_path, sizeof(manifest_path),
+                      prefix, ".manifest");
+        check_equal(salts_fs_read_file(manifest_path, &manifest), SALTS_OK);
+        check_equal(manifest.len, 40U);
+
+        wal_test_put_u64((uint8_t *)manifest.base + 16U, UINT64_C(1));
+        wal_test_put_u64((uint8_t *)manifest.base + 24U, UINT64_MAX);
+        checksum = XXH3_64bits(manifest.base, 32U);
+        wal_test_put_u64((uint8_t *)manifest.base + 32U, checksum);
+        check_equal(salts_fs_write_file(manifest_path, &manifest), SALTS_OK);
+        salts_fs_buf_free(&manifest);
+
+        config.create_if_missing = false;
+        check_equal(tr_raft_wal_storage_open(&config, &storage),
+                    SALTS_EPROTO);
+        check_null(storage);
+
+        wal_test_cleanup(prefix);
     }
 
     it("bootstraps a durable manifest for a legacy bounded WAL")
