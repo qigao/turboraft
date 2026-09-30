@@ -74,9 +74,20 @@ Namespace publication has a separate private provider because its contract is
 stronger than a single filesystem call. Snapshot and new-segment publication
 use `salts_fs_replace_durable`, whose result distinguishes not-published,
 published-and-durable, and durability-unknown outcomes. The phased I/O
-provider tests writes/fsync/reopen/truncate; the durable-replace provider tests
-pre-publication failure and post-replacement uncertainty. These providers are
-complementary and must not be collapsed into a retry fallback.
+provider tests writes/fsync/reopen/truncate, including snapshot staging writes
+and the final snapshot-header rewrite. The durable-replace provider models the
+two caller-visible fsync boundaries explicitly:
+
+- staging-file fsync failure -> `NOT_PUBLISHED`, so the previous authoritative
+  path is untouched and retry remains safe;
+- post-rename parent-directory fsync failure -> `DURABILITY_UNKNOWN`, so the
+  live owner faults and reopen/recovery decides the authoritative state.
+
+The actual internal fsync ordinals of `salts_fs_replace_durable` are owned and
+fault-tested by Salts itself. TurboRaft tests the resulting ownership states
+instead of duplicating the filesystem primitive or adding an extra production
+fsync. These providers are complementary and must not be collapsed into a
+retry fallback.
 
 Service preserves the same durability barrier. Core may hold a provisional
 commit in an outstanding Ready while persistence is attempted, but Runtime

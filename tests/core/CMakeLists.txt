@@ -374,11 +374,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                       FOLDER "tests/core")
 
   add_test(
-    NAME turboraft.wal_snapshot_pre_publish_fault
-    COMMAND turboraft_wal_publish_fault_tests pre)
+    NAME turboraft.wal_snapshot_staging_fsync_fault
+    COMMAND turboraft_wal_publish_fault_tests staging-fsync)
   add_test(
-    NAME turboraft.wal_snapshot_post_publish_fault
-    COMMAND turboraft_wal_publish_fault_tests unknown)
+    NAME turboraft.wal_snapshot_directory_fsync_fault
+    COMMAND turboraft_wal_publish_fault_tests directory-fsync)
 endif()
 
 add_executable(turboraft_wire_fuzz_corpus_tests
