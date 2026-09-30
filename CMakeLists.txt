@@ -84,6 +84,24 @@ find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED
              PATHS "${TURBORAFT_SALTS_UTILS_ROOT_PATH}" NO_DEFAULT_PATH)
 find_package(FlowMQ 1.1.0 CONFIG REQUIRED
              PATHS "${TURBORAFT_FLOWMQ_ROOT_PATH}" NO_DEFAULT_PATH)
+
+set(TURBORAFT_HAVE_STANDALONE_CHTTP OFF)
+if(DEFINED ENV{CHTTP_ROOT} AND NOT "$ENV{CHTTP_ROOT}" STREQUAL "")
+  if(NOT IS_DIRECTORY "$ENV{CHTTP_ROOT}")
+    message(FATAL_ERROR "CHTTP_ROOT is not a directory: $ENV{CHTTP_ROOT}")
+  endif()
+  file(TO_CMAKE_PATH "$ENV{CHTTP_ROOT}" TURBORAFT_CHTTP_ROOT_PATH)
+  find_package(Chttp CONFIG REQUIRED
+               PATHS "${TURBORAFT_CHTTP_ROOT_PATH}" NO_DEFAULT_PATH)
+  foreach(_turboraft_chttp_target IN ITEMS CHttp::Server CHttp::Client)
+    if(NOT TARGET ${_turboraft_chttp_target})
+      message(FATAL_ERROR
+              "Standalone CHttp SDK is missing target: ${_turboraft_chttp_target}")
+    endif()
+  endforeach()
+  set(TURBORAFT_HAVE_STANDALONE_CHTTP ON)
+endif()
+
 find_package(OpenSSL REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 
@@ -377,36 +395,35 @@ else()
   message(FATAL_ERROR "Required target is unavailable: FlowMQ::FlowMQ")
 endif()
 
-if(TARGET Salts::CNet AND TARGET Salts::CHTTP AND TARGET Salts::CRPC)
+if(TURBORAFT_HAVE_STANDALONE_CHTTP)
   add_library(
-  turboraft_control_plane STATIC
-  src/control/raft_control_audit.c src/control/raft_control_plane.c)
-add_library(TurboRaft::ControlPlane ALIAS turboraft_control_plane)
-set_target_properties(turboraft_control_plane PROPERTIES EXPORT_NAME
-                                                         ControlPlane)
-target_include_directories(
-  turboraft_control_plane
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(
-  turboraft_control_plane
-  PUBLIC TurboRaft::Service Salts::CHTTP Salts::CRPC)
-
-if(BUILD_TESTS)
-  add_executable(turboraft_control_plane_tests
-                 tests/control/test_raft_control_plane.c)
+    turboraft_control_plane STATIC
+    src/control/raft_control_audit.c src/control/raft_control_plane.c)
+  add_library(TurboRaft::ControlPlane ALIAS turboraft_control_plane)
+  set_target_properties(turboraft_control_plane PROPERTIES EXPORT_NAME
+                                                           ControlPlane)
+  target_include_directories(
+    turboraft_control_plane
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
   target_link_libraries(
-    turboraft_control_plane_tests
-    PRIVATE TurboRaft::ControlPlane Salts::CHTTP Salts::CRPC Salts::TinyTest)
-  add_test(NAME turboraft.control_plane COMMAND turboraft_control_plane_tests)
-  cmake_config_target(turboraft_control_plane_tests
-                      NO_INSTALL
-                      FOLDER "tests/control")
+    turboraft_control_plane
+    PUBLIC TurboRaft::Service CHttp::Server)
 
+  if(BUILD_TESTS)
+    add_executable(turboraft_control_plane_tests
+                   tests/control/test_raft_control_plane.c)
+    target_link_libraries(
+      turboraft_control_plane_tests
+      PRIVATE TurboRaft::ControlPlane CHttp::Server Salts::TinyTest)
+    add_test(NAME turboraft.control_plane COMMAND turboraft_control_plane_tests)
+    cmake_config_target(turboraft_control_plane_tests
+                        NO_INSTALL
+                        FOLDER "tests/control")
   endif()
 else()
   message(STATUS
-          "TurboRaft ControlPlane disabled: Salts::CHTTP/Salts::CRPC targets are unavailable")
+          "TurboRaft ControlPlane disabled: set CHTTP_ROOT to a standalone CHttp SDK")
 endif()
 
 set(TURBORAFT_TEXT_SYNTAX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/text_syntax")
@@ -487,16 +504,17 @@ target_include_directories(
 target_link_libraries(turboraft_text_query_service
                       PUBLIC TurboRaft::TextSyntax TurboRaft::Service)
 
-if(TARGET Salts::CHTTP AND TARGET Salts::CRPC)
+if(TURBORAFT_HAVE_STANDALONE_CHTTP)
   add_executable(turboraft_console tools/turboraft_console.c)
-  target_link_libraries(turboraft_console
-                        PRIVATE TurboRaft::TextSyntax Salts::CHTTP Salts::CRPC)
+  target_link_libraries(
+    turboraft_console
+    PRIVATE TurboRaft::TextSyntax CHttp::Client CHttp::Server)
   cmake_config_target(turboraft_console
                       NO_INSTALL
                       FOLDER "TurboRaft/tools")
 else()
   message(STATUS
-          "TurboRaft console disabled: Salts::CHTTP/Salts::CRPC targets are unavailable")
+          "TurboRaft console disabled: set CHTTP_ROOT to a standalone CHttp SDK")
 endif()
 
 add_library(turboraft_text_protocol_debug STATIC
