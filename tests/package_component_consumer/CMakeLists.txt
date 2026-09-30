@@ -9,47 +9,24 @@ if(NOT DEFINED ENV{TURBORAFT_ROOT} OR "$ENV{TURBORAFT_ROOT}" STREQUAL "" OR
   message(FATAL_ERROR "TURBORAFT_ROOT must name the installed TurboRaft prefix")
 endif()
 
-set(_turboraft_components
-    Core
-    Service
-    SnapshotReceiver
-    SnapshotSender
-    DataStream
-    WalStorage
-    CNet
-    SnapshotManager
-    CFlowStateMachine
-    TextSyntax
-    TextQueryService
-    TextProtocolDebug
-    ReplayDriver
-    FlowMQ
-    ControlPlane
-    TurboDbRedisStateMachine)
-
-set(_turboraft_headers
-    "turboraft/raft_core.h"
-    "turboraft/raft_service.h"
-    "turboraft/raft_snapshot_receiver.h"
-    "turboraft/raft_snapshot_sender.h"
-    "turboraft/raft_data_stream.h"
-    "turboraft/raft_wal_storage.h"
-    "turboraft/raft_cnet_peer.h"
-    "turboraft/raft_snapshot_manager.h"
-    "turboraft/raft_cflow_state_machine.h"
-    "turboraft/text_syntax.h"
-    "turboraft/text_query_service.h"
-    "turboraft/text_protocol_executor.h"
-    "turboraft/text_replay_core_driver.h"
-    "turboraft/raft_flowmq_peer_service.h"
-    "turboraft/raft_control_plane.h"
-    "turboraft/turbodb_redis_state_machine.h")
-
-list(FIND _turboraft_components "${TURBORAFT_COMPONENT}" _component_index)
-if(_component_index EQUAL -1)
+file(READ "${CMAKE_CURRENT_LIST_DIR}/components.json" _components_json)
+string(JSON _component_count LENGTH "${_components_json}" components)
+set(_component_header "")
+if(_component_count GREATER 0)
+  math(EXPR _component_last "${_component_count} - 1")
+  foreach(_component_index RANGE 0 ${_component_last})
+    string(JSON _candidate_name
+           GET "${_components_json}" components ${_component_index} name)
+    if(_candidate_name STREQUAL TURBORAFT_COMPONENT)
+      string(JSON _component_header
+             GET "${_components_json}" components ${_component_index} header)
+      break()
+    endif()
+  endforeach()
+endif()
+if(_component_header STREQUAL "")
   message(FATAL_ERROR "Unsupported TURBORAFT_COMPONENT: ${TURBORAFT_COMPONENT}")
 endif()
-list(GET _turboraft_headers ${_component_index} _component_header)
 
 file(TO_CMAKE_PATH "$ENV{TURBORAFT_ROOT}" TURBORAFT_PACKAGE_ROOT)
 find_package(TurboRaft CONFIG REQUIRED COMPONENTS ${TURBORAFT_COMPONENT}
