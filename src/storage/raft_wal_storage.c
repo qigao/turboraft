@@ -1,5 +1,7 @@
 #include <turboraft/raft_wal_storage.h>
 
+#include "raft_wal_storage_internal.h"
+
 #include <salts_error.h>
 #include <salts_fs.h>
 #include <openssl/sha.h>
@@ -57,7 +59,31 @@ struct tr_raft_wal_storage {
     tr_raft_index_t pending_last_log_index;
     int transaction_active;
     int faulted;
+    tr_raft_wal_storage_io_ops_t io;
 };
+
+static int tr_wal_default_replace_durable(
+    void *context,
+    const char *staging_path,
+    const char *destination_path,
+    salts_fs_replace_state_t *state)
+{
+    (void)context;
+    return salts_fs_replace_durable(staging_path, destination_path, state);
+}
+
+static int tr_wal_replace_durable(
+    tr_raft_wal_storage_t *storage,
+    const char *staging_path,
+    const char *destination_path,
+    salts_fs_replace_state_t *state)
+{
+    if (storage == NULL || storage->io.replace_durable == NULL) {
+        return SALTS_EPROTO;
+    }
+    return storage->io.replace_durable(
+        storage->io.context, staging_path, destination_path, state);
+}
 
 typedef struct tr_wal_process_lock_entry {
     char path_prefix[SALTS_FS_MAX_PATH];
@@ -605,8 +631,8 @@ cleanup_write:
     free(buffer);
 
     if (result == SALTS_OK) {
-        result = salts_fs_replace_durable(
-            temporary_path, final_path, &publish_state);
+        result = tr_wal_replace_durable(
+            storage, temporary_path, final_path, &publish_state);
     }
     if (result != SALTS_OK) {
         if (publish_state == SALTS_FS_REPLACE_NOT_PUBLISHED) {
@@ -671,8 +697,8 @@ static int tr_wal_create_segment(tr_raft_wal_storage_t *storage,
         }
     }
     if (result == SALTS_OK) {
-        result = salts_fs_replace_durable(
-            temporary_path, storage->current_path, &publish_state);
+        result = tr_wal_replace_durable(
+            storage, temporary_path, storage->current_path, &publish_state);
     }
     if (result != SALTS_OK) {
         if (publish_state == SALTS_FS_REPLACE_NOT_PUBLISHED) {
@@ -1231,6 +1257,7 @@ int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
     if (prefix_length + 64U >= SALTS_FS_MAX_PATH) return SALTS_ENAMETOOLONG;
     storage = (tr_raft_wal_storage_t *)calloc(1U, sizeof(*storage));
     if (storage == NULL) return SALTS_ENOMEM;
+    storage->io.replace_durable = tr_wal_default_replace_durable;
     memcpy(storage->path_prefix, config->path_prefix, prefix_length + 1U);
     storage->lock_file = SALTS_INVALID_FILE;
     storage->current_file = SALTS_INVALID_FILE;
@@ -1308,6 +1335,20 @@ int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
         return result;
     }
     *out_storage = storage;
+    return SALTS_OK;
+}
+
+int tr_raft_wal_storage_set_io_for_test(
+    tr_raft_wal_storage_t *storage,
+    const tr_raft_wal_storage_io_ops_t *ops)
+{
+    if (storage == NULL || ops == NULL || ops->replace_durable == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (storage->transaction_active || storage->faulted) {
+        return SALTS_EBUSY;
+    }
+    storage->io = *ops;
     return SALTS_OK;
 }
 
