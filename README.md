@@ -31,7 +31,7 @@ them.
 
 ## Dependencies
 
-Configure requires exact active-profile installations provided through:
+Configure requires active-profile installations provided through:
 
 - `SALTS_ROOT`
 - `SALTS_UTILS_ROOT`
