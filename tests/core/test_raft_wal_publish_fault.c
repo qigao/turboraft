@@ -86,8 +86,8 @@ int main(void)
     int result;
     int failed = 0;
 
-    if (fail_call != 4 && fail_call != 5) {
-        fprintf(stderr, "FAIL: expected fsync fault ordinal 4 or 5\n");
+    if (!pre_publish && !post_publish) {
+        fprintf(stderr, "FAIL: expected pre_publish or post_publish phase\n");
         return 2;
     }
 
