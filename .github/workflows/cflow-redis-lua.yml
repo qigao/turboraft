@@ -235,21 +235,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir .ci/build-redis/turboraft \
-            -R 'turboraft\.(turbodb_redis_state_machine|cflow_redis_recovery)
-      - name: Stop isolated Redis
-        if: always()
-        shell: bash
-        run: |
-          redis-cli -p 6399 shutdown nosave || true
-
-      - name: Upload Redis diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cflow-redis-lua-diagnostics
-          path: .ci/build-redis/turboraft/Testing/Temporary
-          if-no-files-found: ignore
- \
+            -R 'turboraft\.(turbodb_redis_state_machine|cflow_redis_recovery)$' \
             --output-on-failure
 
       - name: Verify installed TurboDbRedisStateMachine component
