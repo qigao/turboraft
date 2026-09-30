@@ -297,12 +297,14 @@ int tr_raft_core_create(const tr_raft_core_config_t *config,
 void tr_raft_core_destroy(tr_raft_core_t *core);
 
 /**
- * Pauses or resumes future outbound Core generation for one remote peer.
+ * Pauses or resumes proactive outbound Core generation for one remote peer.
  *
  * This is a transport-ownership seam, not a membership change: the peer keeps
  * its voter/learner role and ordinary Raft quorum semantics. An already
  * emitted Ready is unaffected and must be settled before changing this state.
- * While paused, replication retry timers for that peer are frozen.
+ * While paused, replication retry timers for that peer are frozen. A direct
+ * Core consumer must also defer inbound messages from the paused peer until
+ * its staged transport suffix drains; Service enforces that rule for callers.
  */
 int tr_raft_core_set_peer_transport_paused(
     tr_raft_core_t *core,
