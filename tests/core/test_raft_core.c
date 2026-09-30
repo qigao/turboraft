@@ -122,6 +122,81 @@ spec("native raft election core")
         tr_raft_core_destroy(core);
     }
 
+    it("pauses one peer without changing election or healthy replication")
+    {
+        tr_raft_core_t *core = NULL;
+        tr_raft_core_config_t config = test_config(voters, 3U);
+        tr_raft_message_t messages[2];
+        tr_raft_ready_t ready = test_ready(messages, 2U);
+        tr_raft_tick_t tick = {5U, 7U};
+        tr_raft_message_t response;
+        tr_raft_proposal_t proposal;
+        static const char payload[] = "x";
+
+        check_equal(tr_raft_core_create(&config, &core), SALTS_OK);
+        check_equal(tr_raft_core_set_peer_transport_paused(
+                        core, 3U, true),
+                    SALTS_OK);
+
+        check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
+        check_equal(ready.role, TR_RAFT_PRE_CANDIDATE);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].to, 2U);
+        check_equal(ready.messages[0].type,
+                    TR_RAFT_MSG_PRE_VOTE_REQUEST);
+        check_equal(tr_raft_core_set_peer_transport_paused(
+                        core, 2U, true),
+                    SALTS_EPROTO);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_PRE_VOTE_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.campaign_term = 1U;
+        response.granted = true;
+        ready = test_ready(messages, 2U);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check_equal(ready.role, TR_RAFT_CANDIDATE);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].to, 2U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_VOTE_REQUEST);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        response.type = TR_RAFT_MSG_VOTE_RESPONSE;
+        response.term = 1U;
+        ready = test_ready(messages, 2U);
+        check_equal(tr_raft_core_step(core, &response, &ready), SALTS_OK);
+        check_equal(ready.role, TR_RAFT_LEADER);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].to, 2U);
+        check_equal(ready.messages[0].type,
+                    TR_RAFT_MSG_HEARTBEAT_REQUEST);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        memset(&proposal, 0, sizeof(proposal));
+        proposal.command_id = 1U;
+        proposal.data = payload;
+        proposal.data_length = sizeof(payload) - 1U;
+        ready = test_ready(messages, 2U);
+        check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].to, 2U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_APPEND_REQUEST);
+        check_equal(tr_raft_core_advance(core), SALTS_OK);
+
+        check_equal(tr_raft_core_set_peer_transport_paused(
+                        core, 3U, false),
+                    SALTS_OK);
+        ready = test_ready(messages, 2U);
+        check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
+        check_equal(ready.message_count, 1U);
+        check_equal(ready.messages[0].to, 3U);
+        check_equal(ready.messages[0].type, TR_RAFT_MSG_APPEND_REQUEST);
+
+        tr_raft_core_destroy(core);
+    }
+
     it("does not mutate state when output capacity is insufficient")
     {
         tr_raft_core_t *core = NULL;
