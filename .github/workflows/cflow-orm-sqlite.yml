@@ -185,7 +185,7 @@ jobs:
             -DTIDESDB_WITH_SNAPPY=OFF -DTIDESDB_WITH_LZ4=OFF \
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
           cmake --build .ci/build-orm/turbodb --target install --parallel 2
-          test -f "$TURBODB_ROOT/lib/cmake/Orm/OrmConfig.cmake"
+          test -f "$TURBODB_ROOT/lib/cmake/TurboDB/TurboDBConfig.cmake"
           test -f "$ORM_SQLITE_PLUGIN"
 
       - name: Configure TurboRaft ORM SQLite fixtures
