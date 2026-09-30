@@ -410,6 +410,91 @@ static int test_snapshot_write_failure(void)
     return failed;
 }
 
+static int test_snapshot_header_rewrite_short_write(void)
+{
+    static const tr_raft_conf_t configuration = {
+        TR_RAFT_CONF_FINAL,
+        1U,
+        1U,
+        {{1U, TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER}}
+    };
+    static const uint8_t snapshot[] = {0x10U, 0x20U, 0x30U};
+    char *prefix = make_temp_prefix("turboraft-wal-snapshot-header");
+    tr_raft_wal_storage_config_t config = fault_config(prefix, 1);
+    tr_raft_wal_storage_t *storage = NULL;
+    tr_raft_wal_recovery_t recovery;
+    fault_plan_t plan;
+    tr_raft_wal_io_fault_provider_t provider;
+    char snapshot_path[SALTS_FS_MAX_PATH];
+    char staging_path[SALTS_FS_MAX_PATH];
+    int failed = 0;
+
+    memset(&plan, 0, sizeof(plan));
+    plan.rules[0] = (fault_rule_t){
+        TR_RAFT_WAL_IO_SNAPSHOT_HEADER_REWRITE, 1U, SALTS_OK, 8U};
+    plan.count = 1U;
+    provider = provider_for(&plan);
+
+    failed |= expect(prefix != NULL, "create snapshot-header prefix");
+    if (prefix == NULL) return 1;
+    (void)snprintf(snapshot_path, sizeof(snapshot_path),
+                   "%s.snapshot.1.1", prefix);
+    (void)snprintf(staging_path, sizeof(staging_path),
+                   "%s.snapshot.1.1.tmp", prefix);
+
+    failed |= expect(
+        tr_raft_wal_storage_open(&config, &storage) == SALTS_OK,
+        "open snapshot-header storage");
+    if (storage == NULL) {
+        cleanup_prefix(prefix);
+        return 1;
+    }
+    failed |= expect(commit_entry(storage, 1U, "one") == SALTS_OK,
+                     "commit snapshot-header baseline");
+    failed |= expect(
+        tr_raft_wal_storage_set_io_fault_provider_for_test(
+            storage, &provider) == SALTS_OK,
+        "install snapshot-header provider");
+    failed |= expect(
+        tr_raft_wal_storage_store_snapshot(
+            storage, 1U, 1U, &configuration,
+            snapshot, sizeof(snapshot)) == SALTS_EIO,
+        "short snapshot header rewrite must fail publication");
+    failed |= expect(
+        salts_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
+        "failed header rewrite must not publish snapshot");
+    failed |= expect(
+        salts_fs_access(staging_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
+        "failed header rewrite must release staging file");
+
+    memset(&recovery, 0, sizeof(recovery));
+    failed |= expect(
+        tr_raft_wal_storage_load(storage, &recovery) == SALTS_OK,
+        "header rewrite failure keeps live WAL usable");
+    failed |= expect(recovery.snapshot_index == 0U &&
+                         recovery.commit_index == 1U &&
+                         recovery.entry_count == 1U,
+                     "header rewrite fault leaves previous WAL authoritative");
+    tr_raft_wal_recovery_destroy(&recovery);
+
+    failed |= expect(
+        tr_raft_wal_storage_set_io_fault_provider_for_test(
+            storage, NULL) == SALTS_OK,
+        "clear snapshot-header provider");
+    failed |= expect(
+        tr_raft_wal_storage_store_snapshot(
+            storage, 1U, 1U, &configuration,
+            snapshot, sizeof(snapshot)) == SALTS_OK,
+        "snapshot retry after header rewrite fault");
+    failed |= expect(
+        tr_raft_wal_storage_close(storage) == SALTS_OK,
+        "close snapshot-header storage");
+    storage = NULL;
+    failed |= recover_expect(prefix, 1U, 0U, 1U);
+    cleanup_prefix(prefix);
+    return failed;
+}
+
 static int test_reopen_open_failure(void)
 {
     char *prefix = make_temp_prefix("turboraft-wal-reopen-open");
@@ -519,6 +604,7 @@ int main(void)
     failed |= test_short_write_disk_full();
     failed |= test_fsync_failure();
     failed |= test_snapshot_write_failure();
+    failed |= test_snapshot_header_rewrite_short_write();
     failed |= test_reopen_open_failure();
     failed |= test_reopen_truncate_failure();
 
