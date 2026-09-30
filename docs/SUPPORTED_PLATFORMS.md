@@ -48,7 +48,7 @@ The first-party dependency policy is:
 | --- | --- | --- | --- |
 | Salts | current `master`, built in the workflow | latest Salts.Native Windows SDK | `find_package(Salts CONFIG REQUIRED)` |
 | SaltsUtils | current `master`, built in the workflow | latest SaltsUtils.Native Windows SDK | `find_package(SaltsUtils CONFIG REQUIRED)`; supplies `salts-idlc` |
-| FlowMQ | current `main` in integration gates; FlowMQ.Native 1.1.1 in package qualification | current `main` in integration gates; FlowMQ.Native 1.1.1 in package qualification | current FlowMQ package; TLS certificate/HELLO identity contract is required |
+| FlowMQ | current `main` in integration gates; latest FlowMQ.Native in package qualification | current `main` in integration gates; latest FlowMQ.Native in package qualification | current FlowMQ package; TLS certificate/HELLO identity contract is required |
 | TurboDB | not a Core dependency | not a Core dependency | only opt-in Redis/SQLite application qualification workflows |
 
 TurboRaft qualifies against the current first-party dependency line: source-based gates build current repository heads and package-based gates restore the latest published SDK packages. FlowMQ remains a current-source integration dependency and is built against those exact roots. CI therefore validates TurboRaft against the latest available first-party contracts instead of pinning an obsolete dependency epoch.
@@ -76,7 +76,7 @@ silently rebuild a third-party dependency inside a consumer workflow.
 TurboRaft 0.2.x publishes `TurboRaft.Native` for the release-qualified
 `linux-x64` and `windows-x64` SDKs only. The package has exact NuGet
 dependencies on Salts.Native 1.8.3, SaltsUtils.Native 4.1.3, and
-FlowMQ.Native 1.1.1. macOS and Android remain intentionally absent until they
+latest FlowMQ.Native. macOS and Android remain intentionally absent until they
 gain hosted release qualification.
 
 A build is not qualified merely because the repository itself compiles.
