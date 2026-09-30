@@ -88,8 +88,27 @@ static tr_service_peer_delivery_t *tr_service_delivery(
             return &service->peer_deliveries[index];
         }
     }
-    if (!create || peer_id == 0U ||
-        service->peer_delivery_count == TR_RAFT_MAX_MEMBERS) {
+    if (!create || peer_id == 0U) {
+        return NULL;
+    }
+    if (service->peer_delivery_count == TR_RAFT_MAX_MEMBERS) {
+        /*
+         * Delivery slots retain only diagnostics after a peer fully drains.
+         * Recycle one quiescent slot under membership churn rather than making
+         * historical peer identities a lifetime capacity leak.
+         */
+        for (index = 0U; index < service->peer_delivery_count; ++index) {
+            tr_service_peer_delivery_t *delivery =
+                &service->peer_deliveries[index];
+
+            if (!tr_service_delivery_has_pending(delivery) &&
+                !delivery->core_paused) {
+                free(delivery->messages);
+                memset(delivery, 0, sizeof(*delivery));
+                delivery->peer_id = peer_id;
+                return delivery;
+            }
+        }
         return NULL;
     }
     service->peer_deliveries[service->peer_delivery_count].peer_id = peer_id;
