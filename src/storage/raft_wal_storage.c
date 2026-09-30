@@ -1,5 +1,7 @@
 #include <turboraft/raft_wal_storage.h>
 
+#include "raft_wal_storage_internal.h"
+
 #include <salts_error.h>
 #include <salts_fs.h>
 #include <openssl/sha.h>
@@ -57,6 +59,8 @@ struct tr_raft_wal_storage {
     tr_raft_index_t pending_last_log_index;
     int transaction_active;
     int faulted;
+    tr_raft_wal_replace_durable_fn replace_durable;
+    void *replace_durable_context;
 };
 
 typedef struct tr_wal_process_lock_entry {
@@ -66,6 +70,35 @@ typedef struct tr_wal_process_lock_entry {
 
 static atomic_flag tr_wal_process_lock_guard = ATOMIC_FLAG_INIT;
 static tr_wal_process_lock_entry_t *tr_wal_process_locks = NULL;
+
+static int tr_wal_replace_durable_default(
+    void *context,
+    const char *staging_path,
+    const char *destination_path,
+    salts_fs_replace_state_t *state)
+{
+    (void)context;
+    return salts_fs_replace_durable(staging_path, destination_path, state);
+}
+
+int tr_raft_wal_storage_set_replace_durable_for_test(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_wal_replace_durable_fn replace_durable,
+    void *context)
+{
+    if (storage == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (storage->transaction_active) {
+        return SALTS_EBUSY;
+    }
+    storage->replace_durable =
+        replace_durable != NULL ? replace_durable
+                                : tr_wal_replace_durable_default;
+    storage->replace_durable_context =
+        replace_durable != NULL ? context : NULL;
+    return SALTS_OK;
+}
 
 static void tr_wal_process_lock_guard_acquire(void)
 {
@@ -478,6 +511,7 @@ static int tr_wal_write_snapshot_source_file(
     uint8_t digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE];
     uint8_t *buffer = NULL;
     salts_file_t file = SALTS_INVALID_FILE;
+    salts_fs_replace_state_t publish_state = SALTS_FS_REPLACE_NOT_PUBLISHED;
     uint64_t offset = 0U;
     uint64_t checksum = 0U;
     int result;
@@ -591,10 +625,6 @@ static int tr_wal_write_snapshot_source_file(
             result = SALTS_EIO;
         }
     }
-    if (result == SALTS_OK) {
-        result = salts_fs_fsync(file);
-    }
-
 cleanup_write:
     {
         int close_result = salts_fs_close(file);
@@ -608,10 +638,16 @@ cleanup_write:
     free(buffer);
 
     if (result == SALTS_OK) {
-        result = salts_fs_rename(temporary_path, final_path);
+        result = storage->replace_durable(
+            storage->replace_durable_context,
+            temporary_path, final_path, &publish_state);
     }
     if (result != SALTS_OK) {
-        (void)salts_fs_unlink(temporary_path);
+        if (publish_state == SALTS_FS_REPLACE_NOT_PUBLISHED) {
+            (void)salts_fs_unlink(temporary_path);
+        } else {
+            storage->faulted = 1;
+        }
         return result;
     }
     *out_checksum = checksum;
@@ -637,11 +673,20 @@ static int tr_wal_create_segment(tr_raft_wal_storage_t *storage,
                                  size_t sequence)
 {
     uint8_t header[TR_WAL_SEGMENT_HEADER_SIZE] = {0};
-    salts_file_t file;
+    char temporary_path[SALTS_FS_MAX_PATH];
+    salts_fs_replace_state_t publish_state = SALTS_FS_REPLACE_NOT_PUBLISHED;
+    salts_file_t file = SALTS_INVALID_FILE;
+    int length;
     int result = tr_wal_segment_path(storage, sequence, storage->current_path,
                                      sizeof(storage->current_path));
     if (result != SALTS_OK) return result;
-    file = salts_fs_open(storage->current_path,
+    length = snprintf(temporary_path, sizeof(temporary_path), "%s.tmp",
+                      storage->current_path);
+    if (length < 0 || (size_t)length >= sizeof(temporary_path)) {
+        return SALTS_ENAMETOOLONG;
+    }
+
+    file = salts_fs_open(temporary_path,
                          SALTS_FS_O_RDWR | SALTS_FS_O_CREAT |
                              SALTS_FS_O_TRUNC,
                          SALTS_FS_DEFAULT_MODE);
@@ -652,12 +697,38 @@ static int tr_wal_create_segment(tr_raft_wal_storage_t *storage,
     tr_wal_put_u64(header + 16U, sequence);
     tr_wal_put_u64(header + 24U, tr_wal_segment_checksum(header));
     result = tr_wal_write_all(file, header, sizeof(header));
-    if (result == SALTS_OK) result = salts_fs_fsync(file);
+    {
+        int close_result = salts_fs_close(file);
+        file = SALTS_INVALID_FILE;
+        if (result == SALTS_OK) {
+            result = close_result;
+        }
+    }
+    if (result == SALTS_OK) {
+        result = storage->replace_durable(
+            storage->replace_durable_context,
+            temporary_path, storage->current_path, &publish_state);
+    }
     if (result != SALTS_OK) {
-        salts_fs_close(file);
+        if (publish_state == SALTS_FS_REPLACE_NOT_PUBLISHED) {
+            (void)salts_fs_unlink(temporary_path);
+        } else {
+            storage->faulted = 1;
+        }
         return result;
     }
-    storage->current_file = file;
+
+    storage->current_file =
+        salts_fs_open(storage->current_path, SALTS_FS_O_RDWR, 0);
+    if (storage->current_file == SALTS_INVALID_FILE ||
+        salts_fs_seek(storage->current_file,
+                      (int64_t)sizeof(header), SEEK_SET) < 0) {
+        if (storage->current_file != SALTS_INVALID_FILE) {
+            (void)salts_fs_close(storage->current_file);
+            storage->current_file = SALTS_INVALID_FILE;
+        }
+        return SALTS_EIO;
+    }
     storage->current_segment = sequence;
     storage->current_offset = sizeof(header);
     return SALTS_OK;
@@ -1198,6 +1269,8 @@ int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
     memcpy(storage->path_prefix, config->path_prefix, prefix_length + 1U);
     storage->lock_file = SALTS_INVALID_FILE;
     storage->current_file = SALTS_INVALID_FILE;
+    storage->replace_durable = tr_wal_replace_durable_default;
+    storage->replace_durable_context = NULL;
     storage->segment_bytes = segment_bytes;
     storage->transaction_capacity = transaction_bytes;
     storage->max_segments = config->max_segments;

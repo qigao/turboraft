@@ -188,7 +188,7 @@ if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
     message(FATAL_ERROR
             "TURBODB_ROOT must name the TurboDB install prefix when ORM SQLite fixtures are enabled")
   endif()
-  find_package(Orm CONFIG REQUIRED
+  find_package(TurboDB CONFIG REQUIRED
                PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
   if(NOT TARGET Orm::C)
     message(FATAL_ERROR "The TurboDB install does not provide Orm::C")
@@ -331,6 +331,26 @@ cmake_config_target(turboraft_wal_storage_tests
                     NO_INSTALL
                     FOLDER "tests/core")
 add_test(NAME turboraft.wal_storage COMMAND turboraft_wal_storage_tests)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(turboraft_wal_publish_fault_tests
+                 test_raft_wal_publish_fault.c)
+  target_include_directories(
+    turboraft_wal_publish_fault_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/src/storage)
+  target_link_libraries(turboraft_wal_publish_fault_tests
+                        PRIVATE TurboRaft::WalStorage)
+  cmake_config_target(turboraft_wal_publish_fault_tests
+                      NO_INSTALL
+                      FOLDER "tests/core")
+
+  add_test(
+    NAME turboraft.wal_snapshot_pre_publish_fault
+    COMMAND turboraft_wal_publish_fault_tests pre)
+  add_test(
+    NAME turboraft.wal_snapshot_post_publish_fault
+    COMMAND turboraft_wal_publish_fault_tests unknown)
+endif()
 
 add_executable(turboraft_wire_fuzz_corpus_tests
                test_raft_wire_fuzz_corpus.c

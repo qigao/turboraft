@@ -18,7 +18,7 @@ same change.
 | Linux Release | `ubuntu-latest`, GCC (current hosted image; GCC 13.3 observed at qualification) | Salts 1.8.3, SaltsUtils 4.1.3, FlowMQ `main`; x64-linux vcpkg baseline below | configure/build, focused production integration, full CTest, SDK install, installed Core/CFlow/FlowMQ consumers |
 | Linux ASan | `ubuntu-latest`, GCC Debug + AddressSanitizer | Salts 1.8.3 / SaltsUtils 4.1.3 source tags; dependency Debug SDKs are intentionally **not** ASan-instrumented so TurboRaft owns the sanitizer runtime | focused production gates + complete CTest inventory under ASan |
 | Linux UBSan | `ubuntu-latest`, GCC Debug + UndefinedBehaviorSanitizer | Salts 1.8.3 / SaltsUtils 4.1.3 source tags; dependency Debug SDKs are intentionally uninstrumented to avoid mixed sanitizer runtimes | focused production gates + complete CTest inventory under UBSan |
-| Windows Release | `windows-latest`, x64 MSVC via `VsDevCmd` + Ninja (MSVC 19.51 observed at qualification) | Salts.Native 1.8.3, SaltsUtils.Native 4.1.3, current FlowMQ `main`, x64-windows vcpkg baseline below | MSVC configure/build, focused production gates, full CTest, SDK install, installed Core/FlowMQ consumers |
+| Windows Release | `windows-2025`, x64 MSVC via `VsDevCmd` + Ninja using the shared v145 triplet | Salts.Native 1.8.3, SaltsUtils.Native 4.1.3, current FlowMQ `main`, `qigao-x64-windows-v145` shared-cache triplet | MSVC configure/build, focused production gates, full CTest, SDK install, installed Core/FlowMQ consumers |
 
 Qualification evidence on 2026-09-23:
 

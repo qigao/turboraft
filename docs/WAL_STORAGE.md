@@ -12,6 +12,9 @@ snapshot payload without depending on a database.
 - A transaction is encoded into one preallocated bounded buffer. It never
   crosses a segment and `commit` performs one sequential write followed by
   `salts_fs_fsync`.
+- New segment files are staged and published with
+  `salts_fs_replace_durable`; a segment is not admitted as the writable
+  current segment until its namespace publication is durable.
 - Segment and transaction capacities are fixed at open. Capacity exhaustion
   returns `SALTS_ENOSPC`; there is no unbounded allocation or in-memory
   fallback.
@@ -30,8 +33,12 @@ Files use `<path_prefix>.NNNNNNNN.wal`; `<path_prefix>.lock` prevents two
 processes from opening the same log. Snapshot payloads use
 `<path_prefix>.snapshot.<index>.<term>`.
 
-Snapshot data is written and fsynced before its referencing WAL transaction.
-Recovery accepts a snapshot only when its header, index, term, size, and XXH3
+Snapshot data is written to a staging file and published with
+`salts_fs_replace_durable` before its referencing WAL transaction. A
+pre-publication failure leaves the previous authoritative path untouched; a
+post-replacement durability failure is surfaced as an error and faults the
+owner instead of being treated as a successful snapshot. Recovery accepts a
+snapshot only when its header, index, term, size, and XXH3
 checksum match the committed WAL record. A pre-existing identical snapshot is
 safe to reuse after a crash before WAL commit; conflicting bytes fail fast.
 
