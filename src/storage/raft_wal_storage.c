@@ -61,6 +61,9 @@ struct tr_raft_wal_storage {
     int faulted;
     tr_raft_wal_replace_durable_fn replace_durable;
     void *replace_durable_context;
+    tr_raft_wal_io_fault_fn io_fault;
+    void *io_fault_context;
+    uint64_t io_fault_ordinals[TR_RAFT_WAL_IO_PHASE_COUNT];
 };
 
 typedef struct tr_wal_process_lock_entry {
@@ -98,6 +101,50 @@ int tr_raft_wal_storage_set_replace_durable_for_test(
     storage->replace_durable_context =
         replace_durable != NULL ? context : NULL;
     return SALTS_OK;
+}
+
+int tr_raft_wal_storage_set_io_fault_provider_for_test(
+    tr_raft_wal_storage_t *storage,
+    const tr_raft_wal_io_fault_provider_t *provider)
+{
+    if (storage == NULL) {
+        return SALTS_EINVAL;
+    }
+    if (storage->transaction_active) {
+        return SALTS_EBUSY;
+    }
+    storage->io_fault =
+        provider != NULL ? provider->before_io : NULL;
+    storage->io_fault_context =
+        provider != NULL ? provider->context : NULL;
+    memset(storage->io_fault_ordinals, 0, sizeof(storage->io_fault_ordinals));
+    return SALTS_OK;
+}
+
+static int tr_wal_before_io(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_wal_io_phase_t phase,
+    size_t *inout_size)
+{
+    uint64_t ordinal;
+    size_t requested;
+    int result;
+
+    if (storage == NULL || inout_size == NULL ||
+        (unsigned)phase >= (unsigned)TR_RAFT_WAL_IO_PHASE_COUNT) {
+        return SALTS_EINVAL;
+    }
+    if (storage->io_fault == NULL) {
+        return SALTS_OK;
+    }
+    requested = *inout_size;
+    ordinal = ++storage->io_fault_ordinals[(size_t)phase];
+    result = storage->io_fault(
+        storage->io_fault_context, phase, ordinal, inout_size);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    return *inout_size <= requested ? SALTS_OK : SALTS_EPROTO;
 }
 
 static void tr_wal_process_lock_guard_acquire(void)
@@ -224,16 +271,68 @@ static int tr_wal_snapshot_path(const tr_raft_wal_storage_t *storage,
                                                      : SALTS_OK;
 }
 
-static int tr_wal_write_all(salts_file_t file, const uint8_t *data, size_t size)
+static int tr_wal_write_all(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_wal_io_phase_t phase,
+    salts_file_t file,
+    const uint8_t *data,
+    size_t size)
 {
     size_t offset = 0U;
+
     while (offset < size) {
-        int written = salts_fs_write(file, (const char *)data + offset,
-                                     size - offset);
-        if (written <= 0) return written < 0 ? written : SALTS_EIO;
+        size_t request = size - offset;
+        int result = tr_wal_before_io(storage, phase, &request);
+        int written;
+
+        if (result != SALTS_OK) {
+            return result;
+        }
+        if (request == 0U) {
+            return SALTS_EIO;
+        }
+        written = salts_fs_write(
+            file, (const char *)data + offset, request);
+        if (written <= 0) {
+            return written < 0 ? written : SALTS_EIO;
+        }
         offset += (size_t)written;
     }
     return SALTS_OK;
+}
+
+static int tr_wal_pwrite_exact(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_wal_io_phase_t phase,
+    salts_file_t file,
+    const uint8_t *data,
+    size_t size,
+    int64_t offset)
+{
+    size_t request = size;
+    int result = tr_wal_before_io(storage, phase, &request);
+    int written;
+
+    if (result != SALTS_OK) {
+        return result;
+    }
+    if (request == 0U) {
+        return SALTS_EIO;
+    }
+    written = salts_fs_pwrite(
+        file, (const char *)data, request, offset);
+    return written == (int)size ? SALTS_OK : SALTS_EIO;
+}
+
+static int tr_wal_fsync(
+    tr_raft_wal_storage_t *storage,
+    tr_raft_wal_io_phase_t phase,
+    salts_file_t file)
+{
+    size_t ignored = 0U;
+    int result = tr_wal_before_io(storage, phase, &ignored);
+
+    return result == SALTS_OK ? salts_fs_fsync(file) : result;
 }
 
 static int tr_wal_read_exact(salts_file_t file, uint64_t offset,
@@ -574,7 +673,9 @@ static int tr_wal_write_snapshot_source_file(
         goto cleanup_write;
     }
 
-    result = tr_wal_write_all(file, header, sizeof(header));
+    result = tr_wal_write_all(
+        storage, TR_RAFT_WAL_IO_SNAPSHOT_WRITE,
+        file, header, sizeof(header));
     while (result == SALTS_OK && offset < source->size) {
         size_t request = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
         uint64_t remaining64 = source->size - offset;
@@ -597,7 +698,9 @@ static int tr_wal_write_snapshot_source_file(
             result = SALTS_EIO;
             break;
         }
-        result = tr_wal_write_all(file, buffer, read_size);
+        result = tr_wal_write_all(
+            storage, TR_RAFT_WAL_IO_SNAPSHOT_WRITE,
+            file, buffer, read_size);
         offset += read_size;
     }
 
@@ -619,11 +722,9 @@ static int tr_wal_write_snapshot_source_file(
         tr_wal_put_u64(header + 24U, term);
         tr_wal_put_u64(header + 32U, source->size);
         tr_wal_put_u64(header + 40U, checksum);
-        if (salts_fs_pwrite(
-                file, (const char *)header, sizeof(header), 0) !=
-            (int)sizeof(header)) {
-            result = SALTS_EIO;
-        }
+        result = tr_wal_pwrite_exact(
+            storage, TR_RAFT_WAL_IO_SNAPSHOT_HEADER_REWRITE,
+            file, header, sizeof(header), 0);
     }
 cleanup_write:
     {
@@ -696,7 +797,9 @@ static int tr_wal_create_segment(tr_raft_wal_storage_t *storage,
     tr_wal_put_u32(header + 12U, TR_WAL_SEGMENT_HEADER_SIZE);
     tr_wal_put_u64(header + 16U, sequence);
     tr_wal_put_u64(header + 24U, tr_wal_segment_checksum(header));
-    result = tr_wal_write_all(file, header, sizeof(header));
+    result = tr_wal_write_all(
+        storage, TR_RAFT_WAL_IO_SEGMENT_WRITE,
+        file, header, sizeof(header));
     {
         int close_result = salts_fs_close(file);
         file = SALTS_INVALID_FILE;
@@ -904,9 +1007,14 @@ static int tr_wal_commit(void *context)
             return result;
         }
     }
-    result = tr_wal_write_all(storage->current_file, storage->transaction,
-                              frame_size);
-    if (result == SALTS_OK) result = salts_fs_fsync(storage->current_file);
+    result = tr_wal_write_all(
+        storage, TR_RAFT_WAL_IO_TRANSACTION_WRITE,
+        storage->current_file, storage->transaction, frame_size);
+    if (result == SALTS_OK) {
+        result = tr_wal_fsync(
+            storage, TR_RAFT_WAL_IO_TRANSACTION_FSYNC,
+            storage->current_file);
+    }
     if (result != SALTS_OK) {
         storage->faulted = 1;
         return result;
@@ -1232,8 +1340,10 @@ fail:
     return result;
 }
 
-int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
-                             tr_raft_wal_storage_t **out_storage)
+static int tr_raft_wal_storage_open_impl(
+    const tr_raft_wal_storage_config_t *config,
+    const tr_raft_wal_io_fault_provider_t *provider,
+    tr_raft_wal_storage_t **out_storage)
 {
     tr_raft_wal_storage_t *storage;
     tr_raft_wal_recovery_t recovery;
@@ -1271,6 +1381,10 @@ int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
     storage->current_file = SALTS_INVALID_FILE;
     storage->replace_durable = tr_wal_replace_durable_default;
     storage->replace_durable_context = NULL;
+    storage->io_fault =
+        provider != NULL ? provider->before_io : NULL;
+    storage->io_fault_context =
+        provider != NULL ? provider->context : NULL;
     storage->segment_bytes = segment_bytes;
     storage->transaction_capacity = transaction_bytes;
     storage->max_segments = config->max_segments;
@@ -1326,13 +1440,27 @@ int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
                                      storage->current_path,
                                      sizeof(storage->current_path));
         if (result == SALTS_OK) {
-            storage->current_file = salts_fs_open(
-                storage->current_path, SALTS_FS_O_RDWR, 0);
-            if (storage->current_file == SALTS_INVALID_FILE) result = SALTS_EIO;
+            size_t ignored = 0U;
+
+            result = tr_wal_before_io(
+                storage, TR_RAFT_WAL_IO_REOPEN_OPEN, &ignored);
+            if (result == SALTS_OK) {
+                storage->current_file = salts_fs_open(
+                    storage->current_path, SALTS_FS_O_RDWR, 0);
+                if (storage->current_file == SALTS_INVALID_FILE) {
+                    result = SALTS_EIO;
+                }
+            }
         }
         if (result == SALTS_OK) {
-            result = salts_fs_ftruncate(storage->current_file,
-                                        (int64_t)valid_size);
+            size_t ignored = 0U;
+
+            result = tr_wal_before_io(
+                storage, TR_RAFT_WAL_IO_REOPEN_TRUNCATE, &ignored);
+            if (result == SALTS_OK) {
+                result = salts_fs_ftruncate(
+                    storage->current_file, (int64_t)valid_size);
+            }
         }
         if (result == SALTS_OK &&
             salts_fs_seek(storage->current_file, (int64_t)valid_size,
@@ -1346,6 +1474,20 @@ int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
     }
     *out_storage = storage;
     return SALTS_OK;
+}
+
+int tr_raft_wal_storage_open(const tr_raft_wal_storage_config_t *config,
+                             tr_raft_wal_storage_t **out_storage)
+{
+    return tr_raft_wal_storage_open_impl(config, NULL, out_storage);
+}
+
+int tr_raft_wal_storage_open_with_io_fault_provider_for_test(
+    const tr_raft_wal_storage_config_t *config,
+    const tr_raft_wal_io_fault_provider_t *provider,
+    tr_raft_wal_storage_t **out_storage)
+{
+    return tr_raft_wal_storage_open_impl(config, provider, out_storage);
 }
 
 int tr_raft_wal_storage_close(tr_raft_wal_storage_t *storage)
