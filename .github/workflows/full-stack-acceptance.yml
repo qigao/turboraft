@@ -287,10 +287,8 @@ jobs:
           TURBORAFT_ROOT: ${{ github.workspace }}/.ci/pkgs/turboraft
         run: |
           set -euo pipefail
-          components=(
-            Core Service SnapshotReceiver SnapshotSender DataStream WalStorage
-            CNet SnapshotManager CFlowStateMachine TextSyntax TextQueryService
-            TextProtocolDebug ReplayDriver FlowMQ ControlPlane
+          mapfile -t components < <(
+            python3 tests/package_component_consumer/list_components.py full
           )
           for component in "${components[@]}"; do
             build_dir=".ci/build/package-component-${component}"
