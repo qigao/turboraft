@@ -16,8 +16,6 @@ permissions:
   packages: read
 
 env:
-  SALTS_SDK_VERSION: "1.8.3"
-  SALTS_UTILS_SDK_VERSION: "4.1.3"
   FLOWMQ_REF: main
 
 jobs:
@@ -71,7 +69,7 @@ jobs:
           "FLOWMQ_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\flowmq" >> $env:GITHUB_ENV
           "TURBORAFT_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\turboraft" >> $env:GITHUB_ENV
 
-      - name: Restore released Salts Windows SDKs
+      - name: Restore latest Salts Windows SDKs
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -90,15 +88,26 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[$env:SALTS_SDK_VERSION]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[$env:SALTS_UTILS_SDK_VERSION]" />
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
             </ItemGroup>
           </Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages --no-cache
           if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
-          $saltsRoot = Join-Path $packages "salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64"
-          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64"
+          function Get-SinglePackageDirectory([string]$Root) {
+            $dirs = @(Get-ChildItem -LiteralPath $Root -Directory)
+            if ($dirs.Count -ne 1) {
+              throw "expected exactly one resolved package version under $Root, found $($dirs.Count)"
+            }
+            return $dirs[0]
+          }
+          $saltsPackage = Get-SinglePackageDirectory (Join-Path $packages "salts.native")
+          $saltsUtilsPackage = Get-SinglePackageDirectory (Join-Path $packages "saltsutils.native")
+          $saltsRoot = Join-Path $saltsPackage.FullName "sdk\windows-x64"
+          $saltsUtilsRoot = Join-Path $saltsUtilsPackage.FullName "sdk\windows-x64"
+          Write-Host "Resolved latest Salts.Native -> $($saltsPackage.Name)"
+          Write-Host "Resolved latest SaltsUtils.Native -> $($saltsUtilsPackage.Name)"
           foreach ($path in @(
             (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
             (Join-Path $saltsUtilsRoot "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"),
