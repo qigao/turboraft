@@ -20,6 +20,7 @@ env:
   SALTS_REF: v1.8.3
   SALTS_UTILS_REF: v4.1.3
   FLOWMQ_REF: main
+  CHTTP_REF: master
   ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
 
@@ -41,7 +42,8 @@ jobs:
       SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts
       SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts-utils
       FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/flowmq
-      LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/flowmq/lib:${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}/x64-linux/debug/lib:${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}/x64-linux/lib
+      CHTTP_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/chttp
+      LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/chttp/lib:${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/flowmq/lib:${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}/x64-linux/debug/lib:${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}/x64-linux/lib
     steps:
       - name: Checkout exact TurboRaft head
         uses: actions/checkout@v4
@@ -78,6 +80,14 @@ jobs:
           path: .ci/src-${{ matrix.name }}/flowmq
           persist-credentials: false
 
+      - name: Checkout CHttp master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/chttp
+          ref: ${{ env.CHTTP_REF }}
+          path: .ci/src-${{ matrix.name }}/chttp
+          persist-credentials: false
+
       - name: Install host build tools
         shell: bash
         run: |
@@ -105,6 +115,9 @@ jobs:
               "libuv",
               "kcp",
               "boringssl",
+              "llhttp",
+              "tree-sitter",
+              "tree-sitter-c",
               "miniaudio",
               "lua",
               { "name": "zeromq", "default-features": false },
@@ -151,6 +164,21 @@ jobs:
             -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
           cmake --build ".ci/build-${{ matrix.name }}/salts-utils" --target install --parallel 2
           test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
+
+      - name: Build and install CHttp Debug
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S ".ci/src-${{ matrix.name }}/chttp" \
+            -B ".ci/build-${{ matrix.name }}/chttp" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$CHTTP_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build ".ci/build-${{ matrix.name }}/chttp" --target install --parallel 2
 
       - name: Build and install FlowMQ Debug
         shell: bash

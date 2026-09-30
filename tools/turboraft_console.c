@@ -1,7 +1,7 @@
 #include <turboraft/raft_control_plane.h>
 #include <turboraft/text_syntax.h>
 
-#include <chttp/chttp.h>
+#include <http_client/http.h>
 #include <salts_error.h>
 
 #include <stdio.h>

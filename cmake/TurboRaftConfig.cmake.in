@@ -75,7 +75,22 @@ if(_turboraft_need_cnet)
     # CNet is exported by Salts.
 endif()
 if(_turboraft_need_http)
-    # CHTTP and CRPC are exported by Salts.
+    if(NOT DEFINED ENV{CHTTP_ROOT} OR "$ENV{CHTTP_ROOT}" STREQUAL "" OR
+       NOT IS_DIRECTORY "$ENV{CHTTP_ROOT}")
+        set(TurboRaft_FOUND FALSE)
+        set(TurboRaft_NOT_FOUND_MESSAGE
+            "CHTTP_ROOT must name the installed standalone CHttp profile")
+        return()
+    endif()
+    file(TO_CMAKE_PATH "$ENV{CHTTP_ROOT}" TURBORAFT_CHTTP_ROOT_PATH)
+    find_dependency(Chttp CONFIG REQUIRED
+                    PATHS "${TURBORAFT_CHTTP_ROOT_PATH}" NO_DEFAULT_PATH)
+    if(NOT TARGET CHttp::Server)
+        set(TurboRaft_FOUND FALSE)
+        set(TurboRaft_NOT_FOUND_MESSAGE
+            "Standalone CHttp SDK must export CHttp::Server")
+        return()
+    endif()
 endif()
 if(_turboraft_need_flowmq)
     if(NOT DEFINED ENV{FLOWMQ_ROOT} OR "$ENV{FLOWMQ_ROOT}" STREQUAL "")
@@ -118,5 +133,6 @@ unset(_turboraft_need_http)
 unset(_turboraft_need_flowmq)
 unset(_turboraft_need_turbodb_redis_state_machine)
 unset(TURBORAFT_FLOWMQ_ROOT_PATH)
+unset(TURBORAFT_CHTTP_ROOT_PATH)
 unset(TURBORAFT_TURBODB_ROOT_PATH)
 check_required_components(TurboRaft)

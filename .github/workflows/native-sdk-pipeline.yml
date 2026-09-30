@@ -89,6 +89,12 @@ jobs:
           echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "FLOWMQ_ROOT=$packages/flowmq.native/$FLOWMQ_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          chttp_versions=("$packages/chttp.native"/*)
+          test "${#chttp_versions[@]}" -eq 1
+          chttp_pkg="${chttp_versions[0]}"
+          test -d "$chttp_pkg/sdk/linux-x64"
+          echo "CHTTP_ROOT=$chttp_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "CHTTP_SDK_VERSION=$(basename "$chttp_pkg")" >> "$GITHUB_ENV"
       - name: Restore vcpkg dependencies cache-only
         shell: bash
         run: |
@@ -99,8 +105,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/bin:$FLOWMQ_ROOT/bin:$PATH"
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/bin:$FLOWMQ_ROOT/bin:$CHTTP_ROOT/bin:$PATH"
+          export LD_LIBRARY_PATH="$CHTTP_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           prefix="$GITHUB_WORKSPACE/stage/sdk/linux-x64"
           cmake -S . -B build/native-sdk -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=OFF             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             -DCMAKE_INSTALL_PREFIX="$prefix"             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF             -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF             -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=OFF             -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
           cmake --build build/native-sdk --parallel 2
@@ -115,6 +121,7 @@ jobs:
           salts=$SALTS_SDK_VERSION
           salts_utils=$SALTS_UTILS_SDK_VERSION
           flowmq=$FLOWMQ_SDK_VERSION
+          chttp=$CHTTP_SDK_VERSION
           profile=Release
           EOF
       - uses: actions/upload-artifact@v4
@@ -165,6 +172,12 @@ jobs:
           "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
           "FLOWMQ_ROOT=$packages\flowmq.native\$env:FLOWMQ_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          $chttpVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "chttp.native") -Directory)
+          if ($chttpVersions.Count -ne 1) { throw "expected one CHttp.Native version, found $($chttpVersions.Count)" }
+          $chttpRoot = Join-Path $chttpVersions[0].FullName "sdk\windows-x64"
+          if (-not (Test-Path -LiteralPath $chttpRoot -PathType Container)) { throw "missing CHttp Windows SDK root: $chttpRoot" }
+          "CHTTP_ROOT=$chttpRoot" >> $env:GITHUB_ENV
+          "CHTTP_SDK_VERSION=$($chttpVersions[0].Name)" >> $env:GITHUB_ENV
       - name: Restore vcpkg dependencies cache-only
         shell: pwsh
         run: |
@@ -178,7 +191,7 @@ jobs:
         run: |
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
-          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%FLOWMQ_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
+          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%FLOWMQ_ROOT%\bin;%CHTTP_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
           cmake -S . -B build\native-sdk -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\stage\sdk\windows-x64" -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=OFF -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
           if errorlevel 1 exit /b 1
           cmake --build build\native-sdk --parallel 2
@@ -202,6 +215,7 @@ jobs:
             "salts=$env:SALTS_SDK_VERSION"
             "salts_utils=$env:SALTS_UTILS_SDK_VERSION"
             "flowmq=$env:FLOWMQ_SDK_VERSION"
+            "chttp=$env:CHTTP_SDK_VERSION"
             "profile=Release"
           ) | Set-Content -LiteralPath (Join-Path $prefix "turboraft-sdk-manifest.txt")
       - uses: actions/upload-artifact@v4
@@ -322,13 +336,21 @@ jobs:
           cat > "$project" <<EOF
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-            <ItemGroup><PackageReference Include="TurboRaft.Native" Version="[${{ needs.metadata.outputs.package_version }}]" /></ItemGroup>
+            <ItemGroup>
+              <PackageReference Include="TurboRaft.Native" Version="[${{ needs.metadata.outputs.package_version }}]" />
+              <PackageReference Include="CHttp.Native" Version="*" />
+            </ItemGroup>
           </Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
           echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "FLOWMQ_ROOT=$packages/flowmq.native/$FLOWMQ_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          chttp_versions=("$packages/chttp.native"/*)
+          test "${#chttp_versions[@]}" -eq 1
+          chttp_pkg="${chttp_versions[0]}"
+          test -d "$chttp_pkg/sdk/linux-x64"
+          echo "CHTTP_ROOT=$chttp_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "TURBORAFT_ROOT=$packages/turboraft.native/${{ needs.metadata.outputs.package_version }}/sdk/linux-x64" >> "$GITHUB_ENV"
       - name: Restore packed SDK on Windows
         if: matrix.os == 'windows'
@@ -346,13 +368,19 @@ jobs:
           @"
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-            <ItemGroup><PackageReference Include="TurboRaft.Native" Version="[${{ needs.metadata.outputs.package_version }}]" /></ItemGroup>
+            <ItemGroup>
+              <PackageReference Include="TurboRaft.Native" Version="[${{ needs.metadata.outputs.package_version }}]" />
+              <PackageReference Include="CHttp.Native" Version="*" />
+            </ItemGroup>
           </Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages
           "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
           "FLOWMQ_ROOT=$packages\flowmq.native\$env:FLOWMQ_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          $chttpVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "chttp.native") -Directory)
+          if ($chttpVersions.Count -ne 1) { throw "expected one CHttp.Native version, found $($chttpVersions.Count)" }
+          "CHTTP_ROOT=$(Join-Path $chttpVersions[0].FullName 'sdk\windows-x64')" >> $env:GITHUB_ENV
           "TURBORAFT_ROOT=$packages\turboraft.native\${{ needs.metadata.outputs.package_version }}\sdk\windows-x64" >> $env:GITHUB_ENV
       - name: Restore qualification vcpkg dependencies
         shell: bash
@@ -375,22 +403,23 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          export LD_LIBRARY_PATH="$FLOWMQ_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib"
-          for consumer in package_core_consumer package_cflow_consumer package_flowmq_consumer; do
+          export LD_LIBRARY_PATH="$CHTTP_ROOT/lib:$FLOWMQ_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib"
+          for consumer in package_core_consumer package_cflow_consumer package_flowmq_consumer package_control_plane_consumer; do
             cmake -S "tests/$consumer" -B "build/$consumer" -G Ninja               -DCMAKE_BUILD_TYPE=Release               -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"               -DVCPKG_TARGET_TRIPLET=x64-linux               -DVCPKG_MANIFEST_MODE=OFF               -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"               -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
             cmake --build "build/$consumer" --parallel 2
           done
           build/package_core_consumer/turboraft_core_package_consumer
           build/package_cflow_consumer/turboraft_cflow_package_consumer
           build/package_flowmq_consumer/turboraft_flowmq_package_consumer
+          build/package_control_plane_consumer/turboraft_control_plane_package_consumer
       - name: Verify restored package consumers on Windows
         if: matrix.os == 'windows'
         shell: cmd
         run: |
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
-          set "PATH=%TURBORAFT_ROOT%\bin;%FLOWMQ_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
-          for %%C in (package_core_consumer package_cflow_consumer package_flowmq_consumer) do (
+          set "PATH=%TURBORAFT_ROOT%\bin;%CHTTP_ROOT%\bin;%FLOWMQ_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
+          for %%C in (package_core_consumer package_cflow_consumer package_flowmq_consumer package_control_plane_consumer) do (
             cmake -S "tests\%%C" -B "build\%%C" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
             if errorlevel 1 exit /b 1
             cmake --build "build\%%C" --parallel 2
@@ -401,6 +430,8 @@ jobs:
           build\package_cflow_consumer\turboraft_cflow_package_consumer.exe
           if errorlevel 1 exit /b 1
           build\package_flowmq_consumer\turboraft_flowmq_package_consumer.exe
+          if errorlevel 1 exit /b 1
+          build\package_control_plane_consumer\turboraft_control_plane_package_consumer.exe
           if errorlevel 1 exit /b 1
 
   publish:

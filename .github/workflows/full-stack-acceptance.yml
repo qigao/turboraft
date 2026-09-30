@@ -21,11 +21,13 @@ env:
   SALTS_REF: v1.8.3
   SALTS_UTILS_REF: v4.1.3
   FLOWMQ_REF: main
+  CHTTP_REF: master
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
   SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
   SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
   FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs/flowmq
-  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs/flowmq/lib:${{ github.workspace }}/.ci/pkgs/salts-utils/lib:${{ github.workspace }}/.ci/pkgs/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed/x64-linux/lib
+  CHTTP_ROOT: ${{ github.workspace }}/.ci/pkgs/chttp
+  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs/chttp/lib:${{ github.workspace }}/.ci/pkgs/flowmq/lib:${{ github.workspace }}/.ci/pkgs/salts-utils/lib:${{ github.workspace }}/.ci/pkgs/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed/x64-linux/lib
 
 jobs:
   full-release:
@@ -67,6 +69,14 @@ jobs:
           path: .ci/src/flowmq
           persist-credentials: false
 
+      - name: Checkout CHttp master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/chttp
+          ref: ${{ env.CHTTP_REF }}
+          path: .ci/src/chttp
+          persist-credentials: false
+
       - name: Install host build tools
         shell: bash
         run: |
@@ -96,6 +106,9 @@ jobs:
               "libuv",
               "kcp",
               "boringssl",
+              "llhttp",
+              "tree-sitter",
+              "tree-sitter-c",
               "miniaudio",
               "lua",
               { "name": "zeromq", "default-features": false },
@@ -140,6 +153,20 @@ jobs:
           cmake --build .ci/build/salts-utils --target install --parallel 2
           test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
 
+      - name: Build and install CHttp master
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src/chttp -B .ci/build/chttp -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$CHTTP_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build .ci/build/chttp --target install --parallel 2
+
       - name: Build and install FlowMQ main
         shell: bash
         run: |
@@ -162,6 +189,7 @@ jobs:
           test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
           test -f "$FLOWMQ_ROOT/lib/cmake/FlowMQ/FlowMQConfig.cmake"
+          test -f "$CHTTP_ROOT/lib/cmake/Chttp/ChttpConfig.cmake"
 
       - name: Configure TurboRaft Release with tests
         shell: bash
@@ -236,6 +264,22 @@ jobs:
             -DVCPKG_MANIFEST_MODE=OFF
           cmake --build .ci/build/package-flowmq-consumer --parallel 2
           .ci/build/package-flowmq-consumer/turboraft_flowmq_package_consumer
+
+      - name: Verify installed ControlPlane package contract
+        shell: bash
+        env:
+          TURBORAFT_ROOT: ${{ github.workspace }}/.ci/pkgs/turboraft
+        run: |
+          set -euo pipefail
+          cmake -S tests/package_control_plane_consumer \
+            -B .ci/build/package-control-plane-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build/package-control-plane-consumer --parallel 2
+          .ci/build/package-control-plane-consumer/turboraft_control_plane_package_consumer
 
       - name: Targeted production integration gates
         shell: bash

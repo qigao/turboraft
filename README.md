@@ -2,8 +2,8 @@
 
 TurboRaft is a C11 Raft library built on the Salts package family. It separates
 the deterministic consensus core from transport, durable WAL storage, snapshot
-transfer, application state machines, and the CHTTP/CRPC control
-plane.
+transfer, application state machines, and a standalone CHttp JSON-RPC/HTTP
+control plane.
 
 The repository includes pre-vote and check-quorum elections, batched
 replication, ReadIndex, leadership transfer, learners, Joint Consensus,
@@ -21,9 +21,9 @@ ROUTER/DEALER peer service.
   owner thread.
 - `TurboRaft::SnapshotManager` emits transport-neutral payloads through a
   bounded enqueue callback.
-- `TurboRaft::ControlPlane` owns a CRPC server. Its status provider is an
-  explicit cross-owner boundary; use an executor or mailbox when Raft belongs
-  to another thread.
+- `TurboRaft::ControlPlane` when a standalone CHttp SDK is configured owns a JSON-RPC server from standalone
+  `CHttp::Server`. Its status provider is an explicit cross-owner boundary;
+  use an executor or mailbox when Raft belongs to another thread.
 
 Successful CNet or FlowMQ send admission means the bytes were copied into
 bounded local storage. It does not mean the remote peer received or persisted
@@ -36,6 +36,7 @@ Configure requires exact active-profile installations provided through:
 - `SALTS_ROOT`
 - `SALTS_UTILS_ROOT`
 - `FLOWMQ_ROOT`
+- `CHTTP_ROOT` when building or consuming `TurboRaft::ControlPlane`
 
 The supplied user presets resolve Debug and Release profiles independently and
 use `NO_DEFAULT_PATH` for first-party package discovery.
