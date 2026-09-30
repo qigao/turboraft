@@ -1,0 +1,20 @@
+{
+  "components": [
+    {"name":"Core","header":"turboraft/raft_core.h","profiles":["full"]},
+    {"name":"Service","header":"turboraft/raft_service.h","profiles":["full"]},
+    {"name":"SnapshotReceiver","header":"turboraft/raft_snapshot_receiver.h","profiles":["full"]},
+    {"name":"SnapshotSender","header":"turboraft/raft_snapshot_sender.h","profiles":["full"]},
+    {"name":"DataStream","header":"turboraft/raft_data_stream.h","profiles":["full"]},
+    {"name":"WalStorage","header":"turboraft/raft_wal_storage.h","profiles":["full"]},
+    {"name":"CNet","header":"turboraft/raft_cnet_peer.h","profiles":["full"]},
+    {"name":"SnapshotManager","header":"turboraft/raft_snapshot_manager.h","profiles":["full"]},
+    {"name":"CFlowStateMachine","header":"turboraft/raft_cflow_state_machine.h","profiles":["full"]},
+    {"name":"TextSyntax","header":"turboraft/text_syntax.h","profiles":["full"]},
+    {"name":"TextQueryService","header":"turboraft/text_query_service.h","profiles":["full"]},
+    {"name":"TextProtocolDebug","header":"turboraft/text_protocol_executor.h","profiles":["full"]},
+    {"name":"ReplayDriver","header":"turboraft/text_replay_core_driver.h","profiles":["full"]},
+    {"name":"FlowMQ","header":"turboraft/raft_flowmq_peer_service.h","profiles":["full"]},
+    {"name":"ControlPlane","header":"turboraft/raft_control_plane.h","profiles":["full"]},
+    {"name":"TurboDbRedisStateMachine","header":"turboraft/turbodb_redis_state_machine.h","profiles":["redis"]}
+  ]
+}
