@@ -332,6 +332,35 @@ cmake_config_target(turboraft_wal_storage_tests
                     FOLDER "tests/core")
 add_test(NAME turboraft.wal_storage COMMAND turboraft_wal_storage_tests)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_library(turboraft_fs_fsync_fault SHARED raft_fs_fsync_fault.c)
+  target_compile_features(turboraft_fs_fsync_fault PRIVATE c_std_11)
+  set_target_properties(turboraft_fs_fsync_fault PROPERTIES
+                        PREFIX ""
+                        FOLDER "tests/core")
+
+  add_executable(turboraft_wal_publish_fault_tests
+                 test_raft_wal_publish_fault.c)
+  target_link_libraries(turboraft_wal_publish_fault_tests
+                        PRIVATE TurboRaft::WalStorage)
+  cmake_config_target(turboraft_wal_publish_fault_tests
+                      NO_INSTALL
+                      FOLDER "tests/core")
+
+  add_test(
+    NAME turboraft.wal_snapshot_pre_publish_fault
+    COMMAND ${CMAKE_COMMAND} -E env
+            "TURBORAFT_FS_TEST_FAIL_FSYNC_CALL=4"
+            "LD_PRELOAD=$<TARGET_FILE:turboraft_fs_fsync_fault>"
+            $<TARGET_FILE:turboraft_wal_publish_fault_tests>)
+  add_test(
+    NAME turboraft.wal_snapshot_post_publish_fault
+    COMMAND ${CMAKE_COMMAND} -E env
+            "TURBORAFT_FS_TEST_FAIL_FSYNC_CALL=5"
+            "LD_PRELOAD=$<TARGET_FILE:turboraft_fs_fsync_fault>"
+            $<TARGET_FILE:turboraft_wal_publish_fault_tests>)
+endif()
+
 add_executable(turboraft_wire_fuzz_corpus_tests
                test_raft_wire_fuzz_corpus.c
                ../fuzz/raft_wire_fuzz.c)
