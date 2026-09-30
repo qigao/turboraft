@@ -367,6 +367,24 @@ static uint64_t tr_wal_manifest_checksum(const uint8_t *header)
     return XXH3_64bits(header, 32U);
 }
 
+static int tr_wal_live_range_valid(
+    const tr_raft_wal_storage_t *storage,
+    uint64_t first_live,
+    uint64_t last_live)
+{
+    if (storage == NULL || first_live == 0U || last_live < first_live ||
+        storage->max_live_segments == 0U) {
+        return 0;
+    }
+    /*
+     * Avoid computing (last - first + 1), which can wrap for the full
+     * uint64_t range.  count <= max is equivalent to
+     * (last - first) < max once last >= first.
+     */
+    return last_live - first_live <
+           (uint64_t)storage->max_live_segments;
+}
+
 static int tr_wal_read_manifest(
     tr_raft_wal_storage_t *storage,
     uint64_t *out_first_live,
@@ -424,8 +442,7 @@ static int tr_wal_read_manifest(
     }
     first_live = tr_wal_get_u64(header + 16U);
     last_live = tr_wal_get_u64(header + 24U);
-    if (first_live == 0U || last_live < first_live ||
-        last_live - first_live + 1U > (uint64_t)storage->max_live_segments) {
+    if (!tr_wal_live_range_valid(storage, first_live, last_live)) {
         return SALTS_EPROTO;
     }
     *out_first_live = first_live;
@@ -446,8 +463,7 @@ static int tr_wal_write_manifest(
     salts_file_t file = SALTS_INVALID_FILE;
     int result;
 
-    if (storage == NULL || first_live == 0U || last_live < first_live ||
-        last_live - first_live + 1U > (uint64_t)storage->max_live_segments) {
+    if (!tr_wal_live_range_valid(storage, first_live, last_live)) {
         return SALTS_EINVAL;
     }
     result = tr_wal_manifest_path(storage, "", path, sizeof(path));
@@ -1187,9 +1203,11 @@ static int tr_wal_commit(void *context)
     }
     if (frame_size > storage->segment_bytes - storage->current_offset) {
         if (storage->current_segment == UINT64_MAX ||
-            storage->first_live_segment == 0U ||
-            storage->current_segment - storage->first_live_segment + 1U >=
-                (uint64_t)storage->max_live_segments) {
+            !tr_wal_live_range_valid(
+                storage, storage->first_live_segment,
+                storage->current_segment) ||
+            storage->current_segment - storage->first_live_segment >=
+                (uint64_t)storage->max_live_segments - 1U) {
             return SALTS_ENOSPC;
         }
         result = salts_fs_close(storage->current_file);
@@ -1578,9 +1596,8 @@ static int tr_wal_replay(tr_raft_wal_storage_t *storage,
         *out_manifest_present = manifest_present;
         return SALTS_OK;
     }
-    if (last_segment < first_segment ||
-        last_segment - first_segment + 1U >
-            (uint64_t)storage->max_live_segments) {
+    if (!tr_wal_live_range_valid(
+            storage, first_segment, last_segment)) {
         result = SALTS_EPROTO;
         goto fail;
     }
