@@ -329,7 +329,8 @@ target_include_directories(
   turboraft_wal_storage_tests
   PRIVATE ${PROJECT_SOURCE_DIR}/src/storage)
 target_link_libraries(turboraft_wal_storage_tests
-                      PRIVATE TurboRaft::WalStorage Salts::TinyTest)
+                      PRIVATE TurboRaft::WalStorage Salts::TinyTest
+                              xxHash::xxhash)
 cmake_config_target(turboraft_wal_storage_tests
                     NO_INSTALL
                     FOLDER "tests/core")
