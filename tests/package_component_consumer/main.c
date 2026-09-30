@@ -1,8 +1,4 @@
-#ifndef TURBORAFT_COMPONENT_HEADER
-#error TURBORAFT_COMPONENT_HEADER must be defined by CMake
-#endif
-
-#include TURBORAFT_COMPONENT_HEADER
+#include "component_probe_header.h"
 
 int main(void)
 {
