@@ -15,8 +15,8 @@ permissions:
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_REF: v1.8.3
-  SALTS_UTILS_REF: v4.1.3
+  SALTS_REF: master
+  SALTS_UTILS_REF: master
   FLOWMQ_REF: main
   TURBODB_REF: master
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed_redis
@@ -42,7 +42,7 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout Salts 1.8.3
+      - name: Checkout Salts master
         uses: actions/checkout@v4
         with:
           repository: qigao/salts
@@ -50,7 +50,7 @@ jobs:
           path: .ci/src-redis/salts
           persist-credentials: false
 
-      - name: Checkout SaltsUtils 4.1.3
+      - name: Checkout SaltsUtils master
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
@@ -115,7 +115,7 @@ jobs:
             --only-binarycaching \
             --triplet=x64-linux
 
-      - name: Build and install Salts 1.8.3
+      - name: Build and install Salts master
         shell: bash
         run: |
           set -euo pipefail
@@ -130,7 +130,7 @@ jobs:
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
           cmake --build .ci/build-redis/salts --target install --parallel 2
 
-      - name: Build and install SaltsUtils 4.1.3
+      - name: Build and install SaltsUtils master
         shell: bash
         run: |
           set -euo pipefail
