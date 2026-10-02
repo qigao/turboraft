@@ -1,0 +1,298 @@
+name: Extended deterministic chaos campaign
+
+on:
+  workflow_dispatch:
+    inputs:
+      first_seed:
+        description: First deterministic chaos seed
+        required: false
+        default: "1"
+      seed_count:
+        description: Number of consecutive seeds (1..16)
+        required: false
+        default: "16"
+  schedule:
+    - cron: "17 3 * * 1"
+  pull_request:
+    branches: [master, build/use-latest-first-party-dependencies]
+    paths:
+      - ".github/workflows/extended-chaos.yml"
+
+concurrency:
+  group: turboraft-extended-chaos-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+  SALTS_REF: master
+  SALTS_UTILS_REF: master
+  FLOWMQ_REF: main
+  VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
+  SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
+  SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
+  FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs/flowmq
+  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs/flowmq/lib:${{ github.workspace }}/.ci/pkgs/salts-utils/lib:${{ github.workspace }}/.ci/pkgs/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed/x64-linux/lib
+
+jobs:
+  campaign:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact TurboRaft head
+        uses: actions/checkout@v4
+
+      - name: Resolve and validate campaign range
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            first=1
+            count=1
+          else
+            first="${{ inputs.first_seed || '1' }}"
+            count="${{ inputs.seed_count || '16' }}"
+          fi
+          [[ "$first" =~ ^[0-9]+$ ]]
+          [[ "$count" =~ ^[0-9]+$ ]]
+          (( first >= 1 && first <= 4294967295 ))
+          (( count >= 1 && count <= 16 ))
+          last=$((first + count - 1))
+          (( last <= 4294967295 ))
+          echo "CHAOS_FIRST_SEED=$first" >> "$GITHUB_ENV"
+          echo "CHAOS_SEED_COUNT=$count" >> "$GITHUB_ENV"
+          echo "CHAOS_LAST_SEED=$last" >> "$GITHUB_ENV"
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore shared re2c binary
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - name: Checkout Salts
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.SALTS_REF }}
+          path: .ci/src/salts
+          persist-credentials: false
+
+      - name: Checkout SaltsUtils
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.SALTS_UTILS_REF }}
+          path: .ci/src/salts-utils
+          persist-credentials: false
+
+      - name: Checkout FlowMQ
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/flowmq
+          ref: ${{ env.FLOWMQ_REF }}
+          path: .ci/src/flowmq
+          persist-credentials: false
+
+      - name: Install host build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential libtool nasm ninja-build pkg-config
+
+      - name: Restore vcpkg dependency union
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$VCPKG_INSTALLED_DIR" .ci/super-manifest
+          cat > .ci/super-manifest/vcpkg.json <<'JSON'
+          {
+            "name": "turboraft-extended-chaos",
+            "version-semver": "0.1.0",
+            "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
+            "dependencies": [
+              { "name": "pkgconf", "host": true },
+              "simde",
+              "zstd",
+              "aklomp-base64",
+              "c-ares",
+              "libuv",
+              "kcp",
+              "boringssl",
+              "miniaudio",
+              "lua",
+              { "name": "zeromq", "default-features": false },
+              { "name": "xxhash", "version>=": "0.8.3" }
+            ]
+          }
+          JSON
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$GITHUB_WORKSPACE/.ci/super-manifest" \
+            --x-install-root="$VCPKG_INSTALLED_DIR" \
+            --only-binarycaching \
+            --triplet=x64-linux
+
+      - name: Build first-party dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src/salts -B .ci/build/salts -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
+          cmake --build .ci/build/salts --target install --parallel 2
+
+          cmake -S .ci/src/salts-utils -B .ci/build/salts-utils -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
+            -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
+          cmake --build .ci/build/salts-utils --target install --parallel 2
+
+          cmake -S .ci/src/flowmq -B .ci/build/flowmq -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$FLOWMQ_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build .ci/build/flowmq --target install --parallel 2
+
+      - name: Record campaign provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          {
+            echo "turboraft_sha=$(git rev-parse HEAD)"
+            echo "salts_sha=$(git -C .ci/src/salts rev-parse HEAD)"
+            echo "salts_utils_sha=$(git -C .ci/src/salts-utils rev-parse HEAD)"
+            echo "flowmq_sha=$(git -C .ci/src/flowmq rev-parse HEAD)"
+            echo "first_seed=$CHAOS_FIRST_SEED"
+            echo "seed_count=$CHAOS_SEED_COUNT"
+            echo "last_seed=$CHAOS_LAST_SEED"
+            echo "runner=${{ runner.os }}-${{ runner.arch }}"
+            echo "event=${{ github.event_name }}"
+            echo "scenario=multiprocess-seeded"
+            echo "companion_scenario=snapshot-group-isolation"
+          } | tee artifacts/campaign-metadata.txt
+          cat > artifacts/reproduce.sh <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export TURBORAFT_CHAOS_FIRST_SEED=$CHAOS_FIRST_SEED
+          export TURBORAFT_CHAOS_SEED_COUNT=$CHAOS_SEED_COUNT
+          export TURBORAFT_CHAOS_NODE="$PWD/.ci/build/turboraft/bin/turboraft_multiprocess_node"
+          "$PWD/.ci/build/turboraft/bin/turboraft_multiprocess_chaos_tests"
+          ctest --test-dir "$PWD/.ci/build/turboraft" \
+            -R '^turboraft\.snapshot_group_isolation$' --output-on-failure
+          EOF
+          chmod +x artifacts/reproduce.sh
+
+      - name: Build chaos harness
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p artifacts
+          set +e
+          cmake -S . -B .ci/build/turboraft -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DTURBORAFT_BUILD_PROFILE=full \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            2>&1 | tee artifacts/configure.log
+          configure_rc=${PIPESTATUS[0]}
+          if (( configure_rc != 0 )); then
+            echo "configure_exit_code=$configure_rc" | tee -a artifacts/campaign-metadata.txt
+            exit "$configure_rc"
+          fi
+          cmake --build .ci/build/turboraft --parallel 2 --target \
+            turboraft_multiprocess_node \
+            turboraft_multiprocess_chaos_tests \
+            turboraft_snapshot_group_isolation_tests \
+            2>&1 | tee artifacts/build.log
+          build_rc=${PIPESTATUS[0]}
+          set -e
+          echo "build_exit_code=$build_rc" | tee -a artifacts/campaign-metadata.txt
+          if (( build_rc != 0 )); then
+            exit "$build_rc"
+          fi
+
+      - name: Run extended deterministic chaos campaign
+        shell: bash
+        run: |
+          set -uo pipefail
+          export TURBORAFT_CHAOS_NODE="$GITHUB_WORKSPACE/.ci/build/turboraft/bin/turboraft_multiprocess_node"
+          export TURBORAFT_CHAOS_FIRST_SEED="$CHAOS_FIRST_SEED"
+          export TURBORAFT_CHAOS_SEED_COUNT="$CHAOS_SEED_COUNT"
+          set +e
+          "$GITHUB_WORKSPACE/.ci/build/turboraft/bin/turboraft_multiprocess_chaos_tests" \
+            2>&1 | tee artifacts/chaos.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$rc" | tee -a artifacts/campaign-metadata.txt
+          if (( rc != 0 )); then
+            echo "Campaign failed. Search chaos.log for 'chaos seed=' to get exact seed/stage/round." >&2
+            exit "$rc"
+          fi
+
+      - name: Run snapshot catch-up sibling-progress scenario
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          ctest --test-dir "$GITHUB_WORKSPACE/.ci/build/turboraft" \
+            -R '^turboraft\.snapshot_group_isolation$' \
+            --output-on-failure 2>&1 | tee artifacts/snapshot-group-isolation.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "snapshot_group_isolation_exit_code=$rc" | tee -a artifacts/campaign-metadata.txt
+          if (( rc != 0 )); then
+            echo "scenario=snapshot-group-isolation failed; reproduce with ctest -R '^turboraft\\.snapshot_group_isolation$' --output-on-failure" >&2
+            exit "$rc"
+          fi
+
+      - name: Publish campaign summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Extended chaos campaign"
+            echo ""
+            echo "- commit: $(git rev-parse HEAD)"
+            echo "- seeds: $CHAOS_FIRST_SEED..$CHAOS_LAST_SEED ($CHAOS_SEED_COUNT total)"
+            echo "- seeded scenario: multiprocess-seeded"
+            echo "- companion scenario: snapshot-group-isolation"
+            echo "- reproduction: TURBORAFT_CHAOS_FIRST_SEED=$CHAOS_FIRST_SEED TURBORAFT_CHAOS_SEED_COUNT=$CHAOS_SEED_COUNT"
+            echo ""
+            echo "The seeded harness emits exact seed/stage/round on failure; snapshot evidence is retained separately."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload retained chaos evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extended-chaos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/
+            .ci/build/turboraft/Testing/Temporary/
+          if-no-files-found: error
+          retention-days: 30
