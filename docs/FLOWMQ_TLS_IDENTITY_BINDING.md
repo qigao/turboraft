@@ -120,12 +120,20 @@ Hot reload is intentionally unsupported. A restart makes the policy generation
 and lifetime unambiguous, while the two-entry overlap prevents an availability
 gap.
 
+The hosted FlowMQ peer-service acceptance exercises the complete sequence with
+two independent test client certificates and a CA bundle: old certificate
+accepted under the overlap policy, new certificate accepted under the overlap
+policy, old certificate rejected after retirement, and new certificate accepted
+after retirement. The rejected generation increments
+`tls_identity_rejections` without delivering a Raft frame.
+
 ## Compatibility, migration, and rollback
 
 This change adds fields to public TurboRaft configuration and status structs.
-TurboRaft 0.2.0 requires FlowMQ 1.1.0 or newer; the FlowMQ side is delivered by qigao/flowmq PR #11. TurboRaft is pre-1.0 and these
-structs have no ABI size/version member, so all C consumers must recompile
-against the new header. Existing plaintext
+TurboRaft is pre-1.0; first-party consumers follow the repository's
+current/latest dependency policy rather than encoding a minimum FlowMQ package
+version. These structs have no ABI size/version member, so consumers crossing
+this source-compatibility boundary must recompile against the current header. Existing plaintext
 configurations remain source-compatible when structs are zero-initialized.
 Existing TLS configurations must add per-peer fingerprints and enable required
 client authentication; otherwise creation now fails fast.
