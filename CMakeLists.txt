@@ -664,6 +664,9 @@ install(
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/turboraft"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(
+  PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/tools/turboraft_incident_bundle.py"
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/tools")
+install(
   EXPORT TurboRaftTargets
   FILE TurboRaftTargets.cmake
   NAMESPACE TurboRaft::
