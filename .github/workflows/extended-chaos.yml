@@ -28,8 +28,8 @@ permissions:
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_REF: master
-  SALTS_UTILS_REF: master
+  SALTS_REF: v1.8.3
+  SALTS_UTILS_REF: v4.1.3
   FLOWMQ_REF: main
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
   SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
