@@ -111,6 +111,9 @@ jobs:
           cmake -S . -B build/native-sdk -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=OFF             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             -DCMAKE_INSTALL_PREFIX="$prefix"             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF             -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF             -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=OFF             -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
           cmake --build build/native-sdk --parallel 2
           cmake --install build/native-sdk
+          python3 tools/abi/public_callback_contract.py \
+            --sdk-root "$prefix" \
+            --contract "$prefix/share/turboraft/abi/PUBLIC_CALLBACK_CONTRACTS.json"
           python3 tools/abi/public_abi_inventory.py capture \
             --sdk-root "$prefix" \
             --platform linux \
@@ -204,6 +207,8 @@ jobs:
           if errorlevel 1 exit /b 1
           cmake --install build\native-sdk
           if errorlevel 1 exit /b 1
+          python tools\abi\public_callback_contract.py --sdk-root "%GITHUB_WORKSPACE%\stage\sdk\windows-x64" --contract "%GITHUB_WORKSPACE%\stage\sdk\windows-x64\share\turboraft\abi\PUBLIC_CALLBACK_CONTRACTS.json"
+          if errorlevel 1 exit /b 1
           python tools\abi\public_abi_inventory.py capture --sdk-root "%GITHUB_WORKSPACE%\stage\sdk\windows-x64" --platform windows --output "%GITHUB_WORKSPACE%\stage\sdk\windows-x64\share\turboraft\abi\public-abi.json"
           if errorlevel 1 exit /b 1
       - name: Verify and record Windows SDK
@@ -258,6 +263,7 @@ jobs:
             test -f "package/sdk/$rid/include/turboraft/raft_core.h"
             test -f "package/sdk/$rid/share/turboraft/tools/turboraft_incident_bundle.py"
             test -f "package/sdk/$rid/share/turboraft/abi/public-abi.json"
+            test -f "package/sdk/$rid/share/turboraft/abi/PUBLIC_CALLBACK_CONTRACTS.json"
             test -f "package/sdk/$rid/turboraft-sdk-manifest.txt"
           done
           python3 tools/abi/public_abi_inventory.py compare \
@@ -284,6 +290,7 @@ jobs:
           for rid in linux-x64 windows-x64; do
             grep -Fx "sdk/$rid/lib/cmake/TurboRaft/TurboRaftConfig.cmake" "$RUNNER_TEMP/turboraft-files.txt"
             grep -Fx "sdk/$rid/share/turboraft/abi/public-abi.json" "$RUNNER_TEMP/turboraft-files.txt"
+            grep -Fx "sdk/$rid/share/turboraft/abi/PUBLIC_CALLBACK_CONTRACTS.json" "$RUNNER_TEMP/turboraft-files.txt"
             grep -Fx "sdk/$rid/turboraft-sdk-manifest.txt" "$RUNNER_TEMP/turboraft-files.txt"
           done
       - uses: actions/upload-artifact@v4
