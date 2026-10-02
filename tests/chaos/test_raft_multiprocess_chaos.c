@@ -105,6 +105,7 @@ typedef struct tr_chaos_process_node {
     salts_process_t *process;
     uint32_t next_request_id;
     int alive;
+    int require_existing;
     tr_chaos_response_t status;
     tr_chaos_response_t group_status[TR_CHAOS_GROUP_COUNT];
 } tr_chaos_process_node_t;
@@ -480,7 +481,7 @@ static int tr_chaos_node_spawn(tr_chaos_process_node_t *node,
     salts_process_options_t options;
     tr_chaos_response_t response;
     char node_id[16];
-    const char *args[5];
+    const char *args[6];
     int result;
 
     snprintf(node_id, sizeof(node_id), "%llu",
@@ -489,7 +490,8 @@ static int tr_chaos_node_spawn(tr_chaos_process_node_t *node,
     args[1] = node_id;
     args[2] = "--db";
     args[3] = node->database_path;
-    args[4] = NULL;
+    args[4] = node->require_existing ? "--require-existing" : NULL;
+    args[5] = NULL;
     salts_process_options_init(&options);
     options.program = program;
     options.args = args;
