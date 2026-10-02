@@ -189,7 +189,8 @@ static uint32_t tr_chaos_initial_timeout(tr_raft_node_id_t node_id,
 
 static int tr_chaos_group_open(tr_chaos_node_t *node,
                                size_t slot,
-                               const char *database_path)
+                               const char *database_path,
+                               int create_if_missing)
 {
     static const tr_raft_node_id_t voters[] = {1U, 2U, 3U};
     tr_chaos_group_t *group = &node->groups[slot];
@@ -220,7 +221,8 @@ static int tr_chaos_group_open(tr_chaos_node_t *node,
     group->storage_config.max_transaction_bytes = 32U * 1024U;
     group->storage_config.max_segments = 64U;
     group->storage_config.max_log_entries = TR_CHAOS_NODE_MAX_LOG_ENTRIES;
-    group->storage_config.create_if_missing = true;
+    group->storage_config.create_if_missing =
+        create_if_missing != 0;
     group->storage_config.max_snapshot_bytes = 1024U * 1024U;
 
     result = tr_raft_wal_storage_open(&group->storage_config, &group->storage);
@@ -316,7 +318,8 @@ static int tr_chaos_node_open(tr_chaos_node_t *node,
     }
 
     for (slot = 0U; slot < TR_CHAOS_GROUP_COUNT; ++slot) {
-        result = tr_chaos_group_open(node, slot, database_path);
+        result = tr_chaos_group_open(
+            node, slot, database_path, create_if_missing);
         if (result != SALTS_OK) {
             while (slot > 0U) {
                 --slot;
@@ -510,9 +513,18 @@ int main(int argc, char **argv)
     uint8_t *payload;
     int exit_code = 0;
 
-    if (argc != 5 || strcmp(argv[1], "--node") != 0 ||
+    int create_if_missing = 1;
+
+    if ((argc != 5 && argc != 6) ||
+        strcmp(argv[1], "--node") != 0 ||
         strcmp(argv[3], "--db") != 0) {
         return 2;
+    }
+    if (argc == 6) {
+        if (strcmp(argv[5], "--require-existing") != 0) {
+            return 2;
+        }
+        create_if_missing = 0;
     }
     node_id = (tr_raft_node_id_t)strtoull(argv[2], NULL, 10);
     if (node_id == 0U || node_id > 3U || argv[4][0] == '\0') {
@@ -528,7 +540,8 @@ int main(int argc, char **argv)
     if (payload == NULL) {
         return 4;
     }
-    if (tr_chaos_node_open(&node, node_id, argv[4]) != SALTS_OK) {
+    if (tr_chaos_node_open(
+            &node, node_id, argv[4], create_if_missing) != SALTS_OK) {
         free(payload);
         return 5;
     }
