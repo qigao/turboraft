@@ -7,7 +7,7 @@ endif()
 
 file(TO_CMAKE_PATH "$ENV{TURBORAFT_ROOT}" TURBORAFT_PACKAGE_ROOT)
 
-find_package(TurboRaft 0.2 CONFIG REQUIRED COMPONENTS FlowMQ
+find_package(TurboRaft CONFIG REQUIRED COMPONENTS FlowMQ
              PATHS "${TURBORAFT_PACKAGE_ROOT}" NO_DEFAULT_PATH)
 
 add_executable(turboraft_flowmq_package_consumer main.c)

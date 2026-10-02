@@ -66,7 +66,7 @@ fallback is used in place of that compiler.
 
 The production-qualified OS/compiler/dependency boundary is documented in
 [`docs/SUPPORTED_PLATFORMS.md`](docs/SUPPORTED_PLATFORMS.md). A platform that
-is not in that matrix may still compile, but it is not a TurboRaft 0.2.x
+is not in that matrix may still compile, but it is not a TurboRaft 0.3.x
 release gate until hosted CI proves the same runtime and package contracts.
 
 The pre-1.0 source/API policy and the objective criteria for a stable 1.0 C

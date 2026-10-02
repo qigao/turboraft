@@ -20,7 +20,7 @@ typedef struct tr_raft_service_peer_delivery {
 
 struct tr_raft_service {
     tr_raft_core_t *core;
-    tr_raft_runtime_t runtime;
+    tr_raft_runtime_t *runtime;
     tr_raft_storage_t storage;
     tr_raft_transport_t transport;
     tr_raft_state_machine_t state_machine;
@@ -416,7 +416,7 @@ static int tr_service_mutation_guard(tr_raft_service_t *service)
             return result;
         }
     }
-    return tr_raft_runtime_apply_blocked(&service->runtime)
+    return tr_raft_runtime_apply_blocked(service->runtime)
                ? SALTS_EBUSY
                : SALTS_OK;
 }
@@ -674,9 +674,9 @@ static int tr_service_process_ready(
                    : SALTS_OK;
     }
     result = tr_raft_runtime_process(
-        &service->runtime, ready, &service->last_runtime_result);
+        service->runtime, ready, &service->last_runtime_result);
     if (result == SALTS_EBUSY &&
-        tr_raft_runtime_apply_blocked(&service->runtime)) {
+        tr_raft_runtime_apply_blocked(service->runtime)) {
         result = tr_service_enqueue_read_states(service, ready);
         return result == SALTS_OK ? SALTS_EBUSY
                                   : tr_service_fault(service, result);
@@ -692,11 +692,11 @@ static int tr_service_process_ready(
     return tr_service_snapshot(service, false);
 }
 
-static int tr_service_runtime_init(
+static int tr_service_runtime_create(
     tr_raft_service_t *service,
     tr_raft_core_t *core,
     const tr_raft_storage_t *storage,
-    tr_raft_runtime_t *runtime)
+    tr_raft_runtime_t **out_runtime)
 {
     tr_raft_runtime_config_t config;
 
@@ -708,7 +708,7 @@ static int tr_service_runtime_init(
     config.transport.snapshot_context = service;
     config.transport.enqueue_snapshot = tr_service_enqueue_snapshot;
     config.state_machine = service->state_machine;
-    return tr_raft_runtime_init(runtime, &config);
+    return tr_raft_runtime_create(&config, out_runtime);
 }
 
 int tr_raft_service_create(
@@ -753,8 +753,8 @@ int tr_raft_service_create(
         free(service);
         return result;
     }
-    result = tr_service_runtime_init(service, service->core,
-                                     &service->storage, &service->runtime);
+    result = tr_service_runtime_create(service, service->core,
+                                       &service->storage, &service->runtime);
     if (result != SALTS_OK) {
         tr_raft_core_destroy(service->core);
         free(service->snapshot_buffer);
@@ -771,6 +771,7 @@ void tr_raft_service_destroy(tr_raft_service_t *service)
         return;
     }
     tr_service_clear_pending_transport(service);
+    (void)tr_raft_runtime_destroy(service->runtime);
     tr_raft_core_destroy(service->core);
     free(service->snapshot_buffer);
     free(service);
@@ -807,7 +808,8 @@ int tr_raft_service_prepare_backup(tr_raft_service_t *service)
 int tr_raft_service_resume_backup(tr_raft_service_t *service,
                                   const tr_raft_storage_t *storage)
 {
-    tr_raft_runtime_t replacement_runtime;
+    tr_raft_runtime_t *replacement_runtime = NULL;
+    tr_raft_runtime_t *previous_runtime;
     int result;
 
     if (service == NULL || storage == NULL) {
@@ -816,14 +818,16 @@ int tr_raft_service_resume_backup(tr_raft_service_t *service,
     if (!service->backup_prepared || !tr_service_storage_complete(storage)) {
         return SALTS_EINVAL;
     }
-    result = tr_service_runtime_init(service, service->core, storage,
-                                     &replacement_runtime);
+    result = tr_service_runtime_create(
+        service, service->core, storage, &replacement_runtime);
     if (result != SALTS_OK) {
         return result;
     }
+    previous_runtime = service->runtime;
     service->storage = *storage;
     service->runtime = replacement_runtime;
     service->backup_prepared = false;
+    (void)tr_raft_runtime_destroy(previous_runtime);
     return SALTS_OK;
 }
 
@@ -1123,9 +1127,9 @@ int tr_raft_service_poll(tr_raft_service_t *service)
             return result;
         }
     }
-    if (tr_raft_runtime_apply_blocked(&service->runtime)) {
+    if (tr_raft_runtime_apply_blocked(service->runtime)) {
         result = tr_raft_runtime_retry_apply(
-            &service->runtime, &service->last_runtime_result);
+            service->runtime, &service->last_runtime_result);
         if (result == SALTS_EBUSY) {
             return result;
         }
@@ -1193,7 +1197,9 @@ int tr_raft_service_reload(
     const tr_raft_core_config_t *recovery_config)
 {
     tr_raft_core_t *replacement = NULL;
-    tr_raft_runtime_t replacement_runtime;
+    tr_raft_core_t *previous_core;
+    tr_raft_runtime_t *replacement_runtime = NULL;
+    tr_raft_runtime_t *previous_runtime;
     tr_raft_status_t current;
     int result;
 
@@ -1214,16 +1220,19 @@ int tr_raft_service_reload(
     if (result != SALTS_OK) {
         return tr_service_fault(service, result);
     }
-    result = tr_service_runtime_init(service, replacement, &service->storage,
-                                     &replacement_runtime);
+    result = tr_service_runtime_create(
+        service, replacement, &service->storage, &replacement_runtime);
     if (result != SALTS_OK) {
         tr_raft_core_destroy(replacement);
         return tr_service_fault(service, result);
     }
 
-    tr_raft_core_destroy(service->core);
+    previous_core = service->core;
+    previous_runtime = service->runtime;
     service->core = replacement;
     service->runtime = replacement_runtime;
+    (void)tr_raft_runtime_destroy(previous_runtime);
+    tr_raft_core_destroy(previous_core);
     memset(&service->last_runtime_result, 0,
            sizeof(service->last_runtime_result));
     memset(service->read_states, 0, sizeof(service->read_states));

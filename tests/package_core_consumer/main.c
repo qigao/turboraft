@@ -29,12 +29,17 @@ int main(void)
     int (*ack_applied)(tr_raft_core_t *, tr_raft_index_t) =
         tr_raft_core_ack_applied;
     int (*legacy_advance)(tr_raft_core_t *) = tr_raft_core_advance;
+    int (*runtime_create)(const tr_raft_runtime_config_t *,
+                          tr_raft_runtime_t **) = tr_raft_runtime_create;
+    int (*runtime_destroy)(tr_raft_runtime_t *) = tr_raft_runtime_destroy;
 
     state_machine.apply_batch = legacy_apply_batch;
     return state_machine.apply_batch == NULL ||
                    ack_ready == NULL ||
                    ack_applied == NULL ||
-                   legacy_advance == NULL
+                   legacy_advance == NULL ||
+                   runtime_create == NULL ||
+                   runtime_destroy == NULL
                ? 1
                : 0;
 }

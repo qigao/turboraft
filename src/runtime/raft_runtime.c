@@ -4,7 +4,20 @@
 
 #include <salts_error.h>
 
+#include <stdlib.h>
 #include <string.h>
+
+struct tr_raft_runtime {
+    tr_raft_core_t *core;
+    tr_raft_storage_t storage;
+    tr_raft_transport_t transport;
+    tr_raft_state_machine_t state_machine;
+    const tr_raft_entry_t *blocked_entries;
+    size_t blocked_entry_count;
+    size_t blocked_apply_begin;
+    bool apply_blocked;
+    bool faulted;
+};
 
 static bool tr_ready_needs_storage(const tr_raft_ready_t *ready)
 {
@@ -254,17 +267,33 @@ static int tr_runtime_persist(tr_raft_runtime_t *runtime,
     return SALTS_OK;
 }
 
-int tr_raft_runtime_init(tr_raft_runtime_t *runtime,
-                         const tr_raft_runtime_config_t *config)
+int tr_raft_runtime_create(const tr_raft_runtime_config_t *config,
+                           tr_raft_runtime_t **out_runtime)
 {
-    if (runtime == NULL || config == NULL || config->core == NULL) {
+    tr_raft_runtime_t *runtime;
+
+    if (out_runtime == NULL) {
         return SALTS_EINVAL;
     }
-    memset(runtime, 0, sizeof(*runtime));
+    *out_runtime = NULL;
+    if (config == NULL || config->core == NULL) {
+        return SALTS_EINVAL;
+    }
+    runtime = (tr_raft_runtime_t *)calloc(1U, sizeof(*runtime));
+    if (runtime == NULL) {
+        return SALTS_ENOMEM;
+    }
     runtime->core = config->core;
     runtime->storage = config->storage;
     runtime->transport = config->transport;
     runtime->state_machine = config->state_machine;
+    *out_runtime = runtime;
+    return SALTS_OK;
+}
+
+int tr_raft_runtime_destroy(tr_raft_runtime_t *runtime)
+{
+    free(runtime);
     return SALTS_OK;
 }
 

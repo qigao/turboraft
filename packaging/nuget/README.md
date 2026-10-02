@@ -21,5 +21,5 @@ SaltsUtils package, while source builds also use SaltsUtils to locate
 `FLOWMQ_ROOT`, `CHTTP_ROOT`, and `TURBODB_ROOT` are required only when the
 selected component uses those optional integrations.
 
-macOS and Android are intentionally not shipped in TurboRaft 0.2.x because
+macOS and Android are intentionally not shipped in TurboRaft 0.3.x because
 they are not release-qualified platforms in `docs/SUPPORTED_PLATFORMS.md`.

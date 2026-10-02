@@ -5,7 +5,7 @@
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <PackageId>TurboRaft.Native</PackageId>
     <Authors>qigao</Authors>
-    <Description>TurboRaft 0.2 native C SDK for release-qualified Linux x64 and Windows x64 builds.</Description>
+    <Description>TurboRaft 0.3 native C SDK for release-qualified Linux x64 and Windows x64 builds.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/qigao/turboraft</RepositoryUrl>

@@ -1,6 +1,6 @@
 # Supported platform and dependency matrix
 
-This document defines the **release-qualified** TurboRaft 0.2.x build matrix.
+This document defines the **release-qualified** TurboRaft 0.3.x build matrix.
 It is intentionally narrower than the set of platforms on which the source may
 compile. A platform or compiler not listed here is not necessarily unsupported
 by the code; it is simply not a production-readiness gate until a hosted
@@ -73,7 +73,7 @@ silently rebuild a third-party dependency inside a consumer workflow.
 
 ## Package qualification
 
-TurboRaft 0.2.x publishes `TurboRaft.Native` for the release-qualified
+TurboRaft 0.3.x publishes `TurboRaft.Native` for the release-qualified
 `linux-x64` and `windows-x64` SDKs only. The package has exact NuGet
 dependencies on Salts.Native 1.8.3, SaltsUtils.Native 4.1.3, and
 FlowMQ.Native 1.1.1. macOS and Android remain intentionally absent until they
@@ -111,7 +111,7 @@ actionable rather than runtime/toolchain noise.
 ## Not currently release-qualified
 
 The following may compile or have component-level SDK coverage elsewhere in
-the ecosystem, but TurboRaft 0.2.x does not currently claim them as production
+the ecosystem, but TurboRaft 0.3.x does not currently claim them as production
 merge gates:
 
 - macOS;
