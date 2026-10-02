@@ -180,13 +180,36 @@ removed in a patch/minor release. An additive component is allowed.
 
 ## Symbol visibility and binary inventory
 
-The 1.0 release candidate must capture a machine-readable public symbol
-inventory for release-qualified Linux and Windows SDKs.
+Every release-qualified packaged SDK captures a machine-readable public ABI
+inventory at:
 
-Because current targets are static libraries, the inventory must inspect the
-installed archives rather than assuming a shared-library export table. It
-must distinguish TurboRaft public symbols from private/internal objects and
-compare against a declared baseline.
+`share/turboraft/abi/public-abi.json`
+
+The inventory contains:
+
+- SHA-256 for every installed `include/turboraft/*.h` public header;
+- public `tr_*` function declarations discovered from those headers;
+- all defined `tr_*` symbols found in installed static archives;
+- the declared/defined intersection used as the current public-link symbol
+  inventory;
+- declared symbols without a link definition and archive symbols without a
+  public declaration as diagnostics.
+
+Linux inventory uses `nm -g --defined-only`. Windows inventory uses MSVC
+`dumpbin /linkermember:1`. The native SDK pack gate requires Linux and
+Windows public headers, declarations, and public-link symbol inventories to
+match.
+
+Because current targets are static libraries, archive-global implementation
+symbols that are not declared in installed public headers are diagnostic
+information, not automatically public ABI. A linkable public symbol is the
+intersection of the installed declaration inventory and archive-defined
+symbols.
+
+This 0.x inventory is retained evidence, **not** a declaration that the current
+surface is the permanent 1.0 baseline. When a 1.0 release candidate is
+declared, the same comparison tool must be given the checked-in release
+baseline; removal of a baseline public symbol is then a release blocker.
 
 If shared libraries are introduced later, their exported symbol table becomes
 an additional gate, not a replacement for header/layout qualification.
