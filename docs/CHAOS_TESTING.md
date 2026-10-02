@@ -153,3 +153,41 @@ The deterministic parent-owned network does not replace the CNet/FlowMQ mTLS
 tests. Those tests validate the physical peer transport; this harness validates
 Multi-Group process isolation, per-group durable recovery, and deterministic
 cross-group fault isolation.
+
+## Retained extended campaign
+
+The scheduled/manual extended workflow runs the bounded seeded multi-process
+campaign and retains a companion `turboraft.snapshot_group_isolation` run in
+the same evidence bundle. The companion scenario uses the real bounded group
+queue plus snapshot sender/receiver and proves that sibling groups continue to
+make progress between snapshot chunks. It complements, but does not replace,
+the FlowMQ/mTLS physical transport qualification.
+
+Campaign evidence records the exact TurboRaft, Salts, SaltsUtils, and FlowMQ
+commit SHAs, seed range, runner identity, scenario names, configure/build logs,
+seeded chaos output, snapshot-group-isolation output, and a reproduction
+script.
+
+### Failure-to-regression policy
+
+A deterministic campaign failure is not considered resolved merely because a
+later scheduled run passes.
+
+1. Read the retained `chaos.log` failure line and capture its exact
+   `seed`, `stage`, and `round` plus the campaign commit/dependency SHAs.
+2. Reproduce only that seed with
+   `TURBORAFT_CHAOS_FIRST_SEED=<seed>` and
+   `TURBORAFT_CHAOS_SEED_COUNT=1`.
+3. Reduce the failure to the narrowest stable contract test when practical.
+   The resulting focused regression must run in normal hosted CI; retaining
+   only the seed in the scheduled campaign is insufficient.
+4. Link the failure evidence and regression PR from the owning reliability
+   issue before treating the seed as closed.
+5. If the failure is in the companion snapshot scenario, preserve a focused
+   `snapshot_group_isolation` (or narrower sender/receiver/scheduler)
+   regression rather than inventing a seed for a non-seeded test.
+
+Issue #85 remains open until at least one retained multi-seed campaign has
+completed successfully on current `master`. Normal PR CI remains bounded:
+the extended workflow only runs a single seed when the workflow file itself is
+changed in a pull request.
