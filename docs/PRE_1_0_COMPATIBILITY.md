@@ -189,6 +189,7 @@ The inventory contains:
 
 - SHA-256 for every installed `include/turboraft/*.h` public header;
 - public `tr_*` function declarations discovered from those headers;
+- every public `typedef enum` and its current enumerator numeric values;
 - all defined `tr_*` symbols found in installed static archives;
 - the declared/defined intersection used as the current public-link symbol
   inventory;
@@ -196,9 +197,11 @@ The inventory contains:
   public declaration as diagnostics.
 
 Linux inventory uses `nm -g --defined-only`. Windows inventory uses MSVC
-`dumpbin /linkermember:1`. The native SDK pack gate requires Linux and
-Windows public headers, declarations, and public-link symbol inventories to
-match.
+`dumpbin /linkermember:1`. Enum values are parsed from the installed public
+headers using a deliberately small constant-expression evaluator; unsupported
+expressions fail the capture instead of being guessed. The native SDK pack gate
+requires Linux and Windows public headers, declarations, enum numeric maps, and
+public-link symbol inventories to match.
 
 Because current targets are static libraries, archive-global implementation
 symbols that are not declared in installed public headers are diagnostic
@@ -209,7 +212,9 @@ symbols.
 This 0.x inventory is retained evidence, **not** a declaration that the current
 surface is the permanent 1.0 baseline. When a 1.0 release candidate is
 declared, the same comparison tool must be given the checked-in release
-baseline; removal of a baseline public symbol is then a release blocker.
+baseline; removal of a baseline public symbol or public enum value, or
+renumbering of a baseline enum value, is then a release blocker. Additive enum
+values remain possible where the enum contract permits unknown values.
 
 If shared libraries are introduced later, their exported symbol table becomes
 an additional gate, not a replacement for header/layout qualification.
@@ -253,8 +258,8 @@ true:
 - [ ] every public callback documents owner, borrowing, retention, re-entry,
       and failure semantics;
 - [x] `tr_raft_runtime_t` uses an opaque create/destroy handle;
-- [ ] public enum/flag numeric baselines are captured;
-- [ ] Linux and Windows packaged SDKs produce a retained symbol inventory;
+- [x] current packaged SDKs capture public enum numeric inventories;
+- [x] Linux and Windows packaged SDKs produce a retained symbol inventory;
 - [ ] ABI/header comparison runs against a declared release-candidate baseline;
 - [ ] installed CMake target/component inventory and minimal consumers are
       retained as qualification evidence;
