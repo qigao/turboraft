@@ -113,6 +113,7 @@ jobs:
           cmake --install build/native-sdk
           test -f "$prefix/lib/cmake/TurboRaft/TurboRaftConfig.cmake"
           test -f "$prefix/include/turboraft/raft_core.h"
+          test -f "$prefix/share/turboraft/tools/turboraft_incident_bundle.py"
           cat > "$prefix/turboraft-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.source_version }}
           package_version=${{ needs.metadata.outputs.package_version }}
@@ -204,7 +205,8 @@ jobs:
           $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
           foreach ($path in @(
             (Join-Path $prefix "lib\cmake\TurboRaft\TurboRaftConfig.cmake"),
-            (Join-Path $prefix "include\turboraft\raft_core.h"))) {
+            (Join-Path $prefix "include\turboraft\raft_core.h"),
+            (Join-Path $prefix "share\turboraft\tools\turboraft_incident_bundle.py"))) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing $path" }
           }
           @(
@@ -246,6 +248,7 @@ jobs:
           for rid in linux-x64 windows-x64; do
             test -f "package/sdk/$rid/lib/cmake/TurboRaft/TurboRaftConfig.cmake"
             test -f "package/sdk/$rid/include/turboraft/raft_core.h"
+            test -f "package/sdk/$rid/share/turboraft/tools/turboraft_incident_bundle.py"
             test -f "package/sdk/$rid/turboraft-sdk-manifest.txt"
           done
       - uses: actions/setup-dotnet@v4
