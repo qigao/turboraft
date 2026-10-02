@@ -2144,6 +2144,27 @@ spec("raft multi-process deterministic chaos")
         free(directory);
     }
 
+    it("restores a copied quiescent backup in a fresh process and catches up")
+    {
+        const char *program = getenv("TURBORAFT_CHAOS_NODE");
+        char *directory = NULL;
+
+        if (tr_chaos_configuration_status == SALTS_OK) {
+            check_not_null(program);
+        }
+        if (program != NULL && tr_chaos_configuration_status == SALTS_OK) {
+            directory = tt_make_temp_dir("turboraft-fresh-restore");
+            check_not_null(directory);
+        }
+        if (directory != NULL) {
+            check_equal(tr_chaos_run_fresh_restore_drill(
+                            program, directory),
+                        SALTS_OK);
+            check_equal(tt_remove_tree(directory), 0);
+        }
+        free(directory);
+    }
+
     it("hosts three independent groups and isolates one congested group")
     {
         const char *program = getenv("TURBORAFT_CHAOS_NODE");
