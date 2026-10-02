@@ -73,6 +73,10 @@ The pre-1.0 source/API policy and the objective criteria for a stable 1.0 C
 ABI are documented in
 [`docs/PRE_1_0_COMPATIBILITY.md`](docs/PRE_1_0_COMPATIBILITY.md).
 
+Operator backup, certificate-rotation, metrics, alerting, and incident-bundle
+procedures are documented in
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
 ```powershell
 cmake --preset win-dev-user
 cmake --build --preset win-dev-user
