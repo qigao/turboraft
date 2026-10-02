@@ -558,6 +558,192 @@ static int tr_chaos_node_stop(tr_chaos_process_node_t *node,
     return result;
 }
 
+static int tr_chaos_copy_file(const char *source_path,
+                              const char *destination_path)
+{
+    FILE *source;
+    FILE *destination;
+    uint8_t buffer[8192];
+    int result = SALTS_OK;
+
+    if (source_path == NULL || destination_path == NULL) {
+        return SALTS_EINVAL;
+    }
+    source = fopen(source_path, "rb");
+    if (source == NULL) {
+        return SALTS_ENOENT;
+    }
+    destination = fopen(destination_path, "wb");
+    if (destination == NULL) {
+        fclose(source);
+        return SALTS_EIO;
+    }
+    for (;;) {
+        size_t count = fread(buffer, 1U, sizeof(buffer), source);
+
+        if (count != 0U &&
+            fwrite(buffer, 1U, count, destination) != count) {
+            result = SALTS_EIO;
+            break;
+        }
+        if (count < sizeof(buffer)) {
+            if (ferror(source)) {
+                result = SALTS_EIO;
+            }
+            break;
+        }
+    }
+    if (fclose(source) != 0 && result == SALTS_OK) {
+        result = SALTS_EIO;
+    }
+    if (fclose(destination) != 0 && result == SALTS_OK) {
+        result = SALTS_EIO;
+    }
+    return result;
+}
+
+static int tr_chaos_format_durable_path(char *output,
+                                        size_t capacity,
+                                        const char *database_path,
+                                        tr_raft_group_id_t group_id,
+                                        const char *suffix)
+{
+    int written;
+
+    if (output == NULL || capacity == 0U || database_path == NULL ||
+        suffix == NULL) {
+        return SALTS_EINVAL;
+    }
+    written = snprintf(output, capacity, "%s.g%llu%s", database_path,
+                       (unsigned long long)group_id, suffix);
+    return written < 0 || (size_t)written >= capacity
+               ? SALTS_ENAMETOOLONG
+               : SALTS_OK;
+}
+
+static int tr_chaos_copy_quiescent_node_set(const char *source_database,
+                                             const char *restore_database)
+{
+    char source_path[640];
+    char destination_path[640];
+    char unexpected_path[640];
+    size_t slot;
+
+    for (slot = 0U; slot < TR_CHAOS_GROUP_COUNT; ++slot) {
+        tr_raft_group_id_t group_id = tr_chaos_group_ids[slot];
+        FILE *unexpected;
+        int result = tr_chaos_format_durable_path(
+            source_path, sizeof(source_path), source_database, group_id,
+            ".manifest");
+
+        if (result == SALTS_OK) {
+            result = tr_chaos_format_durable_path(
+                destination_path, sizeof(destination_path),
+                restore_database, group_id, ".manifest");
+        }
+        if (result == SALTS_OK) {
+            result = tr_chaos_copy_file(source_path, destination_path);
+        }
+        if (result == SALTS_OK) {
+            result = tr_chaos_format_durable_path(
+                source_path, sizeof(source_path), source_database, group_id,
+                ".00000001.wal");
+        }
+        if (result == SALTS_OK) {
+            result = tr_chaos_format_durable_path(
+                destination_path, sizeof(destination_path),
+                restore_database, group_id, ".00000001.wal");
+        }
+        if (result == SALTS_OK) {
+            result = tr_chaos_copy_file(source_path, destination_path);
+        }
+        if (result != SALTS_OK) {
+            return result;
+        }
+
+        result = tr_chaos_format_durable_path(
+            unexpected_path, sizeof(unexpected_path), source_database,
+            group_id, ".00000002.wal");
+        if (result != SALTS_OK) {
+            return result;
+        }
+        unexpected = fopen(unexpected_path, "rb");
+        if (unexpected != NULL) {
+            fclose(unexpected);
+            return SALTS_EPROTO;
+        }
+    }
+    return SALTS_OK;
+}
+
+static int tr_chaos_copy_incomplete_manifest(
+    const char *source_database,
+    const char *incomplete_database)
+{
+    char source_path[640];
+    char destination_path[640];
+    int result = tr_chaos_format_durable_path(
+        source_path, sizeof(source_path), source_database,
+        TR_CHAOS_PRIMARY_GROUP_ID, ".manifest");
+
+    if (result == SALTS_OK) {
+        result = tr_chaos_format_durable_path(
+            destination_path, sizeof(destination_path), incomplete_database,
+            TR_CHAOS_PRIMARY_GROUP_ID, ".manifest");
+    }
+    return result == SALTS_OK
+               ? tr_chaos_copy_file(source_path, destination_path)
+               : result;
+}
+
+static int tr_chaos_expect_existing_open_failure(
+    const char *program,
+    tr_raft_node_id_t node_id,
+    const char *database_path)
+{
+    salts_process_options_t options;
+    salts_process_result_t process_result;
+    salts_process_t *process = NULL;
+    char node_id_text[16];
+    const char *args[6];
+    int result;
+
+    if (program == NULL || database_path == NULL ||
+        node_id == 0U || node_id > 3U) {
+        return SALTS_EINVAL;
+    }
+    snprintf(node_id_text, sizeof(node_id_text), "%llu",
+             (unsigned long long)node_id);
+    args[0] = "--node";
+    args[1] = node_id_text;
+    args[2] = "--db";
+    args[3] = database_path;
+    args[4] = "--require-existing";
+    args[5] = NULL;
+    memset(&process_result, 0, sizeof(process_result));
+    salts_process_options_init(&options);
+    options.program = program;
+    options.args = args;
+    options.timeout_ms = 10000U;
+    options.max_output_bytes = 1024U * 1024U;
+    result = salts_process_spawn(&options, &process);
+    if (result != SALTS_OK) {
+        return result;
+    }
+    result = salts_process_wait(process, &process_result);
+    if (result != SALTS_OK) {
+        (void)salts_process_terminate(process);
+        (void)salts_process_wait(process, &process_result);
+        salts_process_destroy(process);
+        return result;
+    }
+    salts_process_destroy(process);
+    return process_result.state == SALTS_PROCESS_EXITED &&
+                   process_result.exit_code != 0
+               ? SALTS_OK
+               : SALTS_EPROTO;
+}
+
 static int tr_chaos_collect_group_command(
     tr_chaos_process_node_t *node,
     tr_raft_group_id_t group_id,
