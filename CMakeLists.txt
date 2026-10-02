@@ -9,7 +9,7 @@ endif()
 
 project(
   TurboRaft
-  VERSION 0.2.0
+  VERSION 0.3.0
   DESCRIPTION "Raft consensus library for the Salts ecosystem"
   HOMEPAGE_URL "https://github.com/qigao/turboraft"
   LANGUAGES C)

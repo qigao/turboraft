@@ -73,20 +73,23 @@ typedef struct tr_raft_runtime_result {
     tr_raft_read_state_t read_state;
 } tr_raft_runtime_result_t;
 
-typedef struct tr_raft_runtime {
-    tr_raft_core_t *core;
-    tr_raft_storage_t storage;
-    tr_raft_transport_t transport;
-    tr_raft_state_machine_t state_machine;
-    const tr_raft_entry_t *blocked_entries;
-    size_t blocked_entry_count;
-    size_t blocked_apply_begin;
-    bool apply_blocked;
-    bool faulted;
-} tr_raft_runtime_t;
+typedef struct tr_raft_runtime tr_raft_runtime_t;
 
-int tr_raft_runtime_init(tr_raft_runtime_t *runtime,
-                         const tr_raft_runtime_config_t *config);
+/**
+ * Creates one single-owner Runtime handle.
+ *
+ * Runtime copies the callback tables but does not own the Core or callback
+ * contexts referenced by config. Those borrowed objects must outlive Runtime.
+ * No internal thread is created. On failure *out_runtime remains NULL.
+ */
+int tr_raft_runtime_create(const tr_raft_runtime_config_t *config,
+                           tr_raft_runtime_t **out_runtime);
+
+/**
+ * Releases the Runtime handle only; borrowed Core/callback contexts are not
+ * destroyed. Passing NULL is a successful no-op.
+ */
+int tr_raft_runtime_destroy(tr_raft_runtime_t *runtime);
 
 /**
  * Consumes one outstanding Ready in durability-safe order.

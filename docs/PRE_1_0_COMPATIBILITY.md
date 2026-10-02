@@ -57,6 +57,7 @@ create/destroy-style APIs. Current examples include:
 
 - `tr_raft_core_t`
 - `tr_raft_service_t`
+- `tr_raft_runtime_t`
 - `tr_raft_wal_storage_t`
 - `tr_raft_transport_session_t`
 - `tr_raft_cnet_peer_t`
@@ -71,8 +72,8 @@ Implementation layout for an opaque handle is not public ABI.
 
 Many current config, status, message, callback-table, and plan types are
 caller-allocated concrete structs. Examples include `tr_raft_core_config_t`,
-`tr_raft_ready_t`, `tr_raft_status_t`, `tr_raft_runtime_t`,
-`tr_raft_storage_t`, `tr_raft_transport_t`, snapshot source/sink structs,
+`tr_raft_ready_t`, `tr_raft_status_t`, `tr_raft_storage_t`,
+`tr_raft_transport_t`, snapshot source/sink structs,
 transport config/status structs, and text parser plans.
 
 For a concrete public struct that does **not** begin with an explicit
@@ -86,9 +87,8 @@ version/size contract:
 - exact layout must be frozen before that type enters the 1.0 baseline, or the
   type must be migrated to an opaque/versioned design before 1.0.
 
-`tr_raft_runtime_t` deserves an explicit 1.0 decision because callers can
-allocate it directly. It must either become opaque before 1.0 or have its exact
-layout deliberately frozen and covered by the ABI baseline.
+`tr_raft_runtime_t` has been migrated to an opaque create/destroy handle.
+Its implementation layout is no longer part of the public ABI.
 
 ### Version + size structs
 
@@ -106,6 +106,16 @@ For such a type:
 
 A `size` field that is ignored by the implementation does not create ABI
 compatibility by itself.
+
+### Runtime migration
+
+Runtime's former caller-sized `tr_raft_runtime_t` layout and
+`tr_raft_runtime_init()` entry point are intentionally removed in the next
+pre-1.0 minor line. Callers migrate from stack/static allocation to
+`tr_raft_runtime_create()` / `tr_raft_runtime_destroy()`. Runtime continues
+to borrow the configured Core and callback contexts; destroying Runtime does
+not destroy those borrowed objects. The source break is intentional and does
+not change wire, WAL, snapshot, Ready, storage, transport, or apply semantics.
 
 ## Enums, flags, and constants
 
@@ -219,8 +229,7 @@ true:
       explicit version+size;
 - [ ] every public callback documents owner, borrowing, retention, re-entry,
       and failure semantics;
-- [ ] `tr_raft_runtime_t` has an explicit frozen-layout or opaque-handle
-      decision;
+- [x] `tr_raft_runtime_t` uses an opaque create/destroy handle;
 - [ ] public enum/flag numeric baselines are captured;
 - [ ] Linux and Windows packaged SDKs produce a retained symbol inventory;
 - [ ] ABI/header comparison runs against a declared release-candidate baseline;

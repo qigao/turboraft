@@ -167,13 +167,24 @@ static int build_split_apply_entries(tr_raft_entry_t entries[3])
 
 spec("raft runtime ordering")
 {
+    it("creates an opaque handle and keeps failure output null")
+    {
+        tr_raft_runtime_config_t config;
+        tr_raft_runtime_t *runtime = (tr_raft_runtime_t *)(uintptr_t)1U;
+
+        memset(&config, 0, sizeof(config));
+        check_equal(tr_raft_runtime_create(&config, &runtime), SALTS_EINVAL);
+        check_null(runtime);
+        check_equal(tr_raft_runtime_destroy(runtime), SALTS_OK);
+    }
+
     it("persists a single-node proposal before apply and advance")
     {
         static const tr_raft_node_id_t voters[] = {1U};
         tr_raft_core_config_t core_config;
         tr_raft_core_t *core = NULL;
         tr_raft_runtime_config_t runtime_config;
-        tr_raft_runtime_t runtime;
+        tr_raft_runtime_t *runtime = NULL;
         runtime_fixture_t fixture;
         tr_raft_tick_t tick = {5U, 6U};
         tr_raft_ready_t ready;
@@ -205,17 +216,17 @@ spec("raft runtime ordering")
         runtime_config.storage.rollback = storage_rollback;
         runtime_config.state_machine.context = &fixture;
         runtime_config.state_machine.apply_batch = state_apply;
-        check_equal(tr_raft_runtime_init(&runtime, &runtime_config), SALTS_OK);
+        check_equal(tr_raft_runtime_create(&runtime_config, &runtime), SALTS_OK);
 
         memset(&ready, 0, sizeof(ready));
         check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
-        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_runtime_process(runtime, &ready, &result),
                      SALTS_OK);
         fixture.event_count = 0U;
 
         memset(&ready, 0, sizeof(ready));
         check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
-        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_runtime_process(runtime, &ready, &result),
                      SALTS_OK);
         check_true(result.durable);
         check_equal(result.stage, TR_RAFT_RUNTIME_COMPLETE);
@@ -229,11 +240,13 @@ spec("raft runtime ordering")
         check_equal(status.applied_index, 1U);
         memset(&ready, 0, sizeof(ready));
         check_equal(tr_raft_core_read_index(core, 11U, &ready), SALTS_OK);
-        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_runtime_process(runtime, &ready, &result),
                      SALTS_OK);
         check(result.read_state_ready);
         check_equal(result.read_state.context_id, 11U);
         check_equal(result.read_state.index, 1U);
+        check_equal(tr_raft_runtime_destroy(runtime), SALTS_OK);
+        runtime = NULL;
         tr_raft_core_destroy(core);
     }
     it("retries a blocked state-machine apply without replaying durability or transport")
@@ -242,7 +255,7 @@ spec("raft runtime ordering")
         tr_raft_core_config_t core_config;
         tr_raft_core_t *core = NULL;
         tr_raft_runtime_config_t runtime_config;
-        tr_raft_runtime_t runtime;
+        tr_raft_runtime_t *runtime = NULL;
         runtime_fixture_t fixture;
         tr_raft_tick_t tick = {5U, 6U};
         tr_raft_ready_t ready;
@@ -275,11 +288,11 @@ spec("raft runtime ordering")
         runtime_config.storage.rollback = storage_rollback;
         runtime_config.state_machine.context = &fixture;
         runtime_config.state_machine.apply_batch = state_apply;
-        check_equal(tr_raft_runtime_init(&runtime, &runtime_config), SALTS_OK);
+        check_equal(tr_raft_runtime_create(&runtime_config, &runtime), SALTS_OK);
 
         memset(&ready, 0, sizeof(ready));
         check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
-        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_runtime_process(runtime, &ready, &result),
                     SALTS_OK);
 
         fixture.event_count = 0U;
@@ -287,24 +300,26 @@ spec("raft runtime ordering")
         fixture.apply_busy_attempts = 1U;
         memset(&ready, 0, sizeof(ready));
         check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
-        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_runtime_process(runtime, &ready, &result),
                     SALTS_EBUSY);
-        check_false(tr_raft_runtime_is_faulted(&runtime));
-        check(tr_raft_runtime_apply_blocked(&runtime));
+        check_false(tr_raft_runtime_is_faulted(runtime));
+        check(tr_raft_runtime_apply_blocked(runtime));
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.commit_index, 1U);
         check_equal(status.applied_index, 0U);
         check_equal(fixture.apply_attempts, 1U);
         durable_events = fixture.event_count;
 
-        check_equal(tr_raft_runtime_retry_apply(&runtime, &result), SALTS_OK);
-        check_false(tr_raft_runtime_apply_blocked(&runtime));
+        check_equal(tr_raft_runtime_retry_apply(runtime, &result), SALTS_OK);
+        check_false(tr_raft_runtime_apply_blocked(runtime));
         check_equal(fixture.apply_attempts, 2U);
         check_equal(fixture.event_count, durable_events + 1U);
         check_equal(fixture.events[fixture.event_count - 1U], EVENT_APPLY);
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.applied_index, 1U);
 
+        check_equal(tr_raft_runtime_destroy(runtime), SALTS_OK);
+        runtime = NULL;
         tr_raft_core_destroy(core);
     }
 
@@ -314,7 +329,7 @@ spec("raft runtime ordering")
         tr_raft_core_config_t core_config;
         tr_raft_core_t *core = NULL;
         tr_raft_runtime_config_t runtime_config;
-        tr_raft_runtime_t runtime;
+        tr_raft_runtime_t *runtime = NULL;
         runtime_fixture_t fixture;
         tr_raft_entry_t entries[3];
         tr_raft_ready_t ready;
@@ -355,15 +370,15 @@ spec("raft runtime ordering")
         runtime_config.storage.rollback = storage_rollback;
         runtime_config.state_machine.context = &fixture;
         runtime_config.state_machine.apply_batch = state_apply;
-        check_equal(tr_raft_runtime_init(&runtime, &runtime_config), SALTS_OK);
+        check_equal(tr_raft_runtime_create(&runtime_config, &runtime), SALTS_OK);
 
         memset(&ready, 0, sizeof(ready));
         check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
         check_equal(ready.committed_entry_count, 3U);
-        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_runtime_process(runtime, &ready, &result),
                     SALTS_EBUSY);
-        check_false(tr_raft_runtime_is_faulted(&runtime));
-        check(tr_raft_runtime_apply_blocked(&runtime));
+        check_false(tr_raft_runtime_is_faulted(runtime));
+        check(tr_raft_runtime_apply_blocked(runtime));
         check_equal(fixture.apply_attempts, 2U);
         check_equal(result.applied_through, 2U);
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
@@ -374,8 +389,8 @@ spec("raft runtime ordering")
         check_equal(successful_events, 1U);
         check_equal(fixture.events[0], EVENT_APPLY);
 
-        check_equal(tr_raft_runtime_retry_apply(&runtime, &result), SALTS_OK);
-        check_false(tr_raft_runtime_apply_blocked(&runtime));
+        check_equal(tr_raft_runtime_retry_apply(runtime, &result), SALTS_OK);
+        check_false(tr_raft_runtime_apply_blocked(runtime));
         check_equal(result.stage, TR_RAFT_RUNTIME_COMPLETE);
         check_equal(result.applied_through, 3U);
         check_equal(fixture.apply_attempts, 3U);
@@ -384,6 +399,8 @@ spec("raft runtime ordering")
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.applied_index, 3U);
 
+        check_equal(tr_raft_runtime_destroy(runtime), SALTS_OK);
+        runtime = NULL;
         tr_raft_core_destroy(core);
     }
 
@@ -393,7 +410,7 @@ spec("raft runtime ordering")
         tr_raft_core_config_t core_config;
         tr_raft_core_t *core = NULL;
         tr_raft_runtime_config_t runtime_config;
-        tr_raft_runtime_t runtime;
+        tr_raft_runtime_t *runtime = NULL;
         runtime_fixture_t fixture;
         tr_raft_entry_t entries[3];
         tr_raft_ready_t ready;
@@ -431,14 +448,14 @@ spec("raft runtime ordering")
         runtime_config.storage.rollback = storage_rollback;
         runtime_config.state_machine.context = &fixture;
         runtime_config.state_machine.apply_batch = state_apply;
-        check_equal(tr_raft_runtime_init(&runtime, &runtime_config), SALTS_OK);
+        check_equal(tr_raft_runtime_create(&runtime_config, &runtime), SALTS_OK);
 
         memset(&ready, 0, sizeof(ready));
         check_equal(tr_raft_core_poll(core, &ready), SALTS_OK);
-        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_runtime_process(runtime, &ready, &result),
                     SALTS_EINVAL);
-        check(tr_raft_runtime_is_faulted(&runtime));
-        check_false(tr_raft_runtime_apply_blocked(&runtime));
+        check(tr_raft_runtime_is_faulted(runtime));
+        check_false(tr_raft_runtime_apply_blocked(runtime));
         check_equal(fixture.apply_attempts, 2U);
         check_equal(result.applied_through, 2U);
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
@@ -446,6 +463,8 @@ spec("raft runtime ordering")
         check_equal(status.commit_index, 3U);
         check_equal(status.applied_index, 2U);
 
+        check_equal(tr_raft_runtime_destroy(runtime), SALTS_OK);
+        runtime = NULL;
         tr_raft_core_destroy(core);
     }
 
@@ -455,7 +474,7 @@ spec("raft runtime ordering")
         tr_raft_core_config_t core_config;
         tr_raft_core_t *core = NULL;
         tr_raft_runtime_config_t runtime_config;
-        tr_raft_runtime_t runtime;
+        tr_raft_runtime_t *runtime = NULL;
         runtime_fixture_t fixture;
         tr_raft_tick_t tick = {5U, 6U};
         tr_raft_ready_t ready;
@@ -491,11 +510,11 @@ spec("raft runtime ordering")
         runtime_config.storage.rollback = storage_rollback;
         runtime_config.state_machine.context = &fixture;
         runtime_config.state_machine.apply_batch = state_apply_descriptor;
-        check_equal(tr_raft_runtime_init(&runtime, &runtime_config), SALTS_OK);
+        check_equal(tr_raft_runtime_create(&runtime_config, &runtime), SALTS_OK);
 
         memset(&ready, 0, sizeof(ready));
         check_equal(tr_raft_core_tick(core, &tick, &ready), SALTS_OK);
-        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_runtime_process(runtime, &ready, &result),
                     SALTS_OK);
 
         memset(&descriptor, 0, sizeof(descriptor));
@@ -516,10 +535,10 @@ spec("raft runtime ordering")
         fixture.event_count = 0U;
         memset(&ready, 0, sizeof(ready));
         check_equal(tr_raft_core_propose(core, &proposal, &ready), SALTS_OK);
-        check_equal(tr_raft_runtime_process(&runtime, &ready, &result),
+        check_equal(tr_raft_runtime_process(runtime, &ready, &result),
                     SALTS_EBUSY);
         check_true(result.durable);
-        check(tr_raft_runtime_apply_blocked(&runtime));
+        check(tr_raft_runtime_apply_blocked(runtime));
         check_equal(fixture.apply_attempts, 1U);
         check_equal(fixture.descriptor_apply_count, 0U);
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
@@ -528,8 +547,8 @@ spec("raft runtime ordering")
         durable_events = fixture.event_count;
 
         fixture.blob_durable = 1;
-        check_equal(tr_raft_runtime_retry_apply(&runtime, &result), SALTS_OK);
-        check_false(tr_raft_runtime_apply_blocked(&runtime));
+        check_equal(tr_raft_runtime_retry_apply(runtime, &result), SALTS_OK);
+        check_false(tr_raft_runtime_apply_blocked(runtime));
         check_equal(fixture.apply_attempts, 2U);
         check_equal(fixture.descriptor_apply_count, 1U);
         check_equal(fixture.event_count, durable_events + 1U);
@@ -537,6 +556,8 @@ spec("raft runtime ordering")
         check_equal(tr_raft_core_status(core, &status), SALTS_OK);
         check_equal(status.applied_index, 1U);
 
+        check_equal(tr_raft_runtime_destroy(runtime), SALTS_OK);
+        runtime = NULL;
         tr_raft_core_destroy(core);
     }
 

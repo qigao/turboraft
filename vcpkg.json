@@ -1,6 +1,6 @@
 {
   "name": "vcpkg-turboraft",
-  "version-semver": "0.2.0",
+  "version-semver": "0.3.0",
   "description": "Manifest dependencies for the TurboRaft consensus library",
   "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
   "dependencies": [
