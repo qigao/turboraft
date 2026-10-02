@@ -298,7 +298,8 @@ static void tr_chaos_group_close(tr_chaos_group_t *group)
 
 static int tr_chaos_node_open(tr_chaos_node_t *node,
                               tr_raft_node_id_t node_id,
-                              const char *database_path)
+                              const char *database_path,
+                              int create_if_missing)
 {
     size_t slot;
     int result;
