@@ -1262,6 +1262,97 @@ static int tr_chaos_propose_group(
     return *out_target != 0U ? SALTS_OK : SALTS_EPROTO;
 }
 
+static int tr_chaos_wait_primary_quorum_without_node(
+    tr_chaos_process_node_t nodes[3],
+    tr_chaos_network_t *network,
+    tr_raft_wire_codec_t *codec,
+    tr_chaos_safety_t *safety,
+    uint8_t *response_payload,
+    uint32_t *random_state,
+    tr_raft_index_t target)
+{
+    uint32_t round;
+
+    if (network == NULL || codec == NULL || safety == NULL ||
+        response_payload == NULL || random_state == NULL || target == 0U) {
+        return SALTS_EINVAL;
+    }
+    for (round = 0U; round < 40U; ++round) {
+        uint8_t tick[8];
+        size_t node_index;
+        size_t delivery;
+        tr_chaos_response_t active[2];
+        size_t active_count = 0U;
+
+        for (node_index = 0U; node_index < 3U; ++node_index) {
+            int operation_result = SALTS_OK;
+            int result;
+
+            if (!nodes[node_index].alive) {
+                continue;
+            }
+            tr_chaos_put_u32(tick, 1U);
+            tr_chaos_put_u32(tick + 4U, 3U + (uint32_t)node_index);
+            result = tr_chaos_collect_command(
+                &nodes[node_index], TR_CHAOS_COMMAND_TICK,
+                tick, sizeof(tick), network, codec, safety,
+                response_payload, &operation_result);
+            if (result != SALTS_OK || operation_result != SALTS_OK) {
+                return result != SALTS_OK ? result : operation_result;
+            }
+        }
+        for (delivery = 0U;
+             delivery < TR_CHAOS_RECOVERY_DELIVERY_LIMIT &&
+             network->count != 0U;
+             ++delivery) {
+            int result = tr_chaos_deliver_one(
+                nodes, network, codec, safety, response_payload,
+                random_state, 0, 0U);
+            if (result != SALTS_OK) {
+                return result;
+            }
+        }
+        for (node_index = 0U; node_index < 3U; ++node_index) {
+            int operation_result = SALTS_OK;
+            int result;
+
+            if (!nodes[node_index].alive) {
+                continue;
+            }
+            result = tr_chaos_collect_command(
+                &nodes[node_index], TR_CHAOS_COMMAND_STATUS,
+                NULL, 0U, network, codec, safety, response_payload,
+                &operation_result);
+            if (result != SALTS_OK || operation_result != SALTS_OK) {
+                return result != SALTS_OK ? result : operation_result;
+            }
+            if (active_count < 2U) {
+                active[active_count++] = nodes[node_index].status;
+            }
+        }
+        if (active_count == 2U &&
+            active[0].applied_index >= target &&
+            active[1].applied_index >= target &&
+            active[0].applied_index == active[1].applied_index &&
+            active[0].applied_hash == active[1].applied_hash) {
+            size_t drain = 0U;
+
+            while (network->count != 0U &&
+                   drain < TR_CHAOS_MAX_QUEUED_FRAMES * 2U) {
+                int result = tr_chaos_deliver_one(
+                    nodes, network, codec, safety, response_payload,
+                    random_state, 0, 0U);
+                if (result != SALTS_OK) {
+                    return result;
+                }
+                ++drain;
+            }
+            return network->count == 0U ? SALTS_OK : SALTS_EPROTO;
+        }
+    }
+    return SALTS_ETIMEDOUT;
+}
+
 static int tr_chaos_wait_multigroup_targets(
     tr_chaos_process_node_t nodes[3],
     tr_chaos_network_t *network,
