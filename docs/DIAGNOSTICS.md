@@ -1,5 +1,9 @@
 # Build diagnostics
 
+Runtime incident collection, metrics, backup evidence, and alerting are defined
+in [`OPERATIONS.md`](OPERATIONS.md). This document covers compiler/runtime
+diagnostic builds.
+
 TurboRaft keeps diagnostic builds in separate build trees. Sanitizer findings
 and MSVC analysis warnings are build failures; no diagnostic preset silently
 falls back to an ordinary build.

@@ -27,6 +27,8 @@
     "sha256:cb334522bda1caf62ec1e374f43b0df0b9d7aee5c91d064ff81ac82f005f2aff"
 #define TR_FLOWMQ_TEST_NODE2_CERTIFICATE_SHA256                              \
     "sha256:483ac612f03ae69445ea33f6b8ef27342ce9fad891416413e91f57c3b3693733"
+#define TR_FLOWMQ_TEST_ROTATED_CLIENT_CERTIFICATE_SHA256                      \
+    "sha256:d696b3ab8d0596e3e8e8abcecc4ca87856eda0f5055f31a7dfb6c213c2c2b1f3"
 
 typedef struct tr_flowmq_message_capture {
     tr_raft_group_id_t group_id;
@@ -84,7 +86,8 @@ typedef struct tr_flowmq_live_service_config {
     tr_raft_flowmq_tls_config_t listener_tls;
     tr_raft_node_id_t peer_node_id;
     const char *peer_identity;
-    const char *peer_certificate_sha256;
+    const char *const *peer_certificate_sha256;
+    size_t peer_certificate_sha256_count;
     const char *peer_endpoint;
     tr_raft_flowmq_tls_config_t peer_tls;
     tr_raft_transport_payload_handler_fn on_payload;
@@ -677,7 +680,6 @@ static int create_live_service(
     tr_raft_flowmq_peer_service_config_t config;
     tr_raft_flowmq_peer_config_t peer;
     tr_raft_handshake_result_t handshake;
-    const char *certificate_sha256[1];
 
     if (live == NULL || out_service == NULL) {
         return SALTS_EINVAL;
@@ -689,10 +691,11 @@ static int create_live_service(
     peer.node_id = live->peer_node_id;
     peer.handshake = &handshake;
     peer.identity = live->peer_identity;
-    if (live->peer_certificate_sha256 != NULL) {
-        certificate_sha256[0] = live->peer_certificate_sha256;
-        peer.client_certificate_sha256 = certificate_sha256;
-        peer.client_certificate_sha256_count = 1U;
+    if (live->peer_certificate_sha256 != NULL &&
+        live->peer_certificate_sha256_count != 0U) {
+        peer.client_certificate_sha256 = live->peer_certificate_sha256;
+        peer.client_certificate_sha256_count =
+            live->peer_certificate_sha256_count;
     }
     peer.endpoint = live->peer_endpoint;
     peer.tls = live->peer_tls;
@@ -763,19 +766,24 @@ static int close_live_pair(tr_flowmq_live_pair_t *pair)
     return first_error;
 }
 
-static int open_live_pair_with_policy(
+static int open_live_pair_with_certificate_policy(
     tr_flowmq_live_pair_t *pair,
     int provide_client_certificate,
-    const char *expected_client_certificate_sha256,
+    const char *client_certificate_fixture,
+    const char *client_key_fixture,
+    const char *listener_ca_fixture,
+    const char *const *expected_client_certificate_sha256,
+    size_t expected_client_certificate_sha256_count,
     const char *client_identity,
     tr_raft_transport_payload_handler_fn node1_handler,
     void *node1_context,
     tr_raft_transport_payload_handler_fn node2_handler,
     void *node2_context)
 {
-    char ca_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
-    char node1_cert_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
-    char node1_key_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
+    char server_ca_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
+    char listener_ca_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
+    char client_cert_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
+    char client_key_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
     char node2_cert_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
     char node2_key_path[TR_FLOWMQ_TEST_PATH_CAPACITY];
     tr_flowmq_live_service_config_t node1;
@@ -783,8 +791,13 @@ static int open_live_pair_with_policy(
     const char *stage = "reserve-node1";
     int result;
 
-    if (pair == NULL || expected_client_certificate_sha256 == NULL ||
-        client_identity == NULL) {
+    if (pair == NULL || listener_ca_fixture == NULL ||
+        expected_client_certificate_sha256 == NULL ||
+        expected_client_certificate_sha256_count == 0U ||
+        client_identity == NULL ||
+        (provide_client_certificate &&
+         (client_certificate_fixture == NULL ||
+          client_key_fixture == NULL))) {
         return SALTS_EINVAL;
     }
     memset(pair, 0, sizeof(*pair));
@@ -798,18 +811,24 @@ static int open_live_pair_with_policy(
             pair->node2_endpoint, sizeof(pair->node2_endpoint), 1);
     }
     if (result == SALTS_OK) {
-        stage = "ca-path";
-        result = fixture_path(ca_path, sizeof(ca_path), "ca.pem");
+        stage = "server-ca-path";
+        result = fixture_path(server_ca_path, sizeof(server_ca_path),
+                              "ca.pem");
     }
     if (result == SALTS_OK) {
-        stage = "node1-cert-path";
-        result = fixture_path(node1_cert_path, sizeof(node1_cert_path),
-                              "node1-cert.pem");
+        stage = "listener-ca-path";
+        result = fixture_path(listener_ca_path, sizeof(listener_ca_path),
+                              listener_ca_fixture);
     }
-    if (result == SALTS_OK) {
-        stage = "node1-key-path";
-        result = fixture_path(node1_key_path, sizeof(node1_key_path),
-                              "node1-key.pem");
+    if (result == SALTS_OK && provide_client_certificate) {
+        stage = "client-cert-path";
+        result = fixture_path(client_cert_path, sizeof(client_cert_path),
+                              client_certificate_fixture);
+    }
+    if (result == SALTS_OK && provide_client_certificate) {
+        stage = "client-key-path";
+        result = fixture_path(client_key_path, sizeof(client_key_path),
+                              client_key_fixture);
     }
     if (result == SALTS_OK) {
         stage = "node2-cert-path";
@@ -831,11 +850,11 @@ static int open_live_pair_with_policy(
     node1.peer_node_id = 2U;
     node1.peer_identity = "node-2";
     node1.peer_endpoint = pair->node2_endpoint;
-    node1.peer_tls.ca_file = ca_path;
+    node1.peer_tls.ca_file = server_ca_path;
     node1.peer_tls.server_name = "node-2.mesh";
     if (provide_client_certificate) {
-        node1.peer_tls.cert_file = node1_cert_path;
-        node1.peer_tls.key_file = node1_key_path;
+        node1.peer_tls.cert_file = client_cert_path;
+        node1.peer_tls.key_file = client_key_path;
     }
     node1.capture = &pair->node1_capture;
     node1.on_payload = node1_handler;
@@ -844,13 +863,16 @@ static int open_live_pair_with_policy(
     node2.local_node_id = 2U;
     node2.local_identity = "node-2";
     node2.bind_endpoint = pair->node2_endpoint;
-    node2.listener_tls.ca_file = ca_path;
+    node2.listener_tls.ca_file = listener_ca_path;
     node2.listener_tls.cert_file = node2_cert_path;
     node2.listener_tls.key_file = node2_key_path;
     node2.listener_tls.require_client_certificate = 1;
     node2.peer_node_id = 1U;
     node2.peer_identity = "node-1";
-    node2.peer_certificate_sha256 = expected_client_certificate_sha256;
+    node2.peer_certificate_sha256 =
+        expected_client_certificate_sha256;
+    node2.peer_certificate_sha256_count =
+        expected_client_certificate_sha256_count;
     node2.peer_endpoint = pair->node1_endpoint;
     node2.capture = &pair->node2_capture;
     node2.on_payload = node2_handler;
@@ -878,6 +900,29 @@ static int open_live_pair_with_policy(
         (void)close_live_pair(pair);
     }
     return result;
+}
+
+static int open_live_pair_with_policy(
+    tr_flowmq_live_pair_t *pair,
+    int provide_client_certificate,
+    const char *expected_client_certificate_sha256,
+    const char *client_identity,
+    tr_raft_transport_payload_handler_fn node1_handler,
+    void *node1_context,
+    tr_raft_transport_payload_handler_fn node2_handler,
+    void *node2_context)
+{
+    const char *fingerprints[1];
+
+    if (expected_client_certificate_sha256 == NULL) {
+        return SALTS_EINVAL;
+    }
+    fingerprints[0] = expected_client_certificate_sha256;
+    return open_live_pair_with_certificate_policy(
+        pair, provide_client_certificate,
+        "node1-cert.pem", "node1-key.pem", "ca.pem",
+        fingerprints, 1U, client_identity,
+        node1_handler, node1_context, node2_handler, node2_context);
 }
 
 static int open_live_pair_with_handlers(
@@ -1335,6 +1380,91 @@ spec("Raft FlowMQ caller-driven service")
                     check_equal(node2_status.tls_identity_rejections,
                                 rejection_count);
                 }
+            }
+            check_equal(close_live_pair(&pair), SALTS_OK);
+        }
+    }
+
+    it("qualifies certificate rotation overlap and retirement across restarts")
+    {
+        const char *overlap[] = {
+            TR_FLOWMQ_TEST_NODE1_CERTIFICATE_SHA256,
+            TR_FLOWMQ_TEST_ROTATED_CLIENT_CERTIFICATE_SHA256};
+        const char *new_only[] = {
+            TR_FLOWMQ_TEST_ROTATED_CLIENT_CERTIFICATE_SHA256};
+        static const struct {
+            const char *certificate_fixture;
+            const char *key_fixture;
+            int use_overlap;
+            int expect_delivery;
+        } phases[] = {
+            {"node1-cert.pem", "node1-key.pem", 1, 1},
+            {"node2-client-cert.pem", "node2-client-key.pem", 1, 1},
+            {"node1-cert.pem", "node1-key.pem", 0, 0},
+            {"node2-client-cert.pem", "node2-client-key.pem", 0, 1}};
+        size_t phase_index;
+
+        for (phase_index = 0U;
+             phase_index < sizeof(phases) / sizeof(phases[0]);
+             ++phase_index) {
+            tr_flowmq_live_pair_t pair;
+            tr_raft_flowmq_peer_service_step_result_t node1_step;
+            tr_raft_flowmq_peer_service_step_result_t node2_step;
+            tr_raft_flowmq_peer_service_status_t node2_status;
+            tr_raft_message_t message = heartbeat();
+            const char *const *fingerprints =
+                phases[phase_index].use_overlap ? overlap : new_only;
+            size_t fingerprint_count =
+                phases[phase_index].use_overlap ? 2U : 1U;
+            uint32_t progress;
+            int result;
+
+            memset(&pair, 0, sizeof(pair));
+            memset(&node2_status, 0, sizeof(node2_status));
+            result = open_live_pair_with_certificate_policy(
+                &pair, 1,
+                phases[phase_index].certificate_fixture,
+                phases[phase_index].key_fixture,
+                "three-node-client-ca.pem",
+                fingerprints, fingerprint_count, "node-1",
+                NULL, NULL, NULL, NULL);
+            check_equal(result, SALTS_OK);
+
+            if (result == SALTS_OK) {
+                message.term = 20U + phase_index;
+                result = tr_raft_flowmq_peer_service_enqueue_group(
+                    pair.node1, 1U, &message);
+                check_equal(result, SALTS_OK);
+            }
+            for (progress = 0U;
+                 result == SALTS_OK &&
+                 progress < TR_FLOWMQ_TEST_PROGRESS_LIMIT;
+                 ++progress) {
+                memset(&node1_step, 0, sizeof(node1_step));
+                memset(&node2_step, 0, sizeof(node2_step));
+                result = step_live_pair(&pair, &node1_step, &node2_step);
+                if (result == SALTS_OK) {
+                    result = tr_raft_flowmq_peer_service_get_status(
+                        pair.node2, &node2_status);
+                }
+                if (phases[phase_index].expect_delivery) {
+                    if (pair.node2_capture.count != 0U) {
+                        break;
+                    }
+                } else if (node2_status.tls_identity_rejections != 0U) {
+                    break;
+                }
+                salts_sleep_ms(1U);
+            }
+
+            check_equal(result, SALTS_OK);
+            if (phases[phase_index].expect_delivery) {
+                check_equal(pair.node2_capture.count, 1U);
+                check_equal(node2_status.tls_identity_rejections, 0U);
+            } else {
+                check_equal(pair.node2_capture.count, 0U);
+                check_greater(node2_status.tls_identity_rejections, 0U);
+                check_equal(node2_status.last_error, SALTS_OK);
             }
             check_equal(close_live_pair(&pair), SALTS_OK);
         }

@@ -8,4 +8,5 @@ add_subdirectory(core)
 
 if(BUILD_TESTS)
   add_subdirectory(text_syntax)
+  add_subdirectory(ops)
 endif()
