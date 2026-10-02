@@ -1568,6 +1568,202 @@ cleanup:
     return result;
 }
 
+static int tr_chaos_run_fresh_restore_drill(
+    const char *program,
+    const char *directory)
+{
+    tr_chaos_process_node_t nodes[3];
+    tr_chaos_network_t network;
+    tr_chaos_safety_t safety[TR_CHAOS_GROUP_COUNT];
+    tr_raft_wire_codec_t *codec = NULL;
+    uint8_t *response_payload = NULL;
+    tr_raft_node_id_t leaders[TR_CHAOS_GROUP_COUNT] = {0U};
+    tr_raft_index_t targets[TR_CHAOS_GROUP_COUNT] = {0U};
+    tr_raft_index_t backup_applied = 0U;
+    uint64_t backup_hash = 0U;
+    uint32_t random_state = UINT32_C(0x52455354);
+    char restore_database[512];
+    char incomplete_database[512];
+    uint32_t round;
+    size_t slot;
+    size_t node_index;
+    int result = SALTS_OK;
+
+    if (program == NULL || directory == NULL) {
+        return SALTS_EINVAL;
+    }
+    memset(nodes, 0, sizeof(nodes));
+    memset(&network, 0, sizeof(network));
+    memset(safety, 0, sizeof(safety));
+    network.frames = (tr_chaos_frame_t *)calloc(
+        TR_CHAOS_MAX_QUEUED_FRAMES, sizeof(*network.frames));
+    response_payload = (uint8_t *)malloc(TR_CHAOS_MAX_RESPONSE_BYTES);
+    if (network.frames == NULL || response_payload == NULL) {
+        result = SALTS_ENOMEM;
+        goto cleanup;
+    }
+    result = tr_raft_wire_codec_create(&codec);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+
+    for (node_index = 0U; node_index < 3U; ++node_index) {
+        nodes[node_index].id = node_index + 1U;
+        snprintf(nodes[node_index].database_path,
+                 sizeof(nodes[node_index].database_path),
+                 "%s/restore-source-node-%zu.db",
+                 directory, node_index + 1U);
+        result = tr_chaos_node_spawn(
+            &nodes[node_index], program, &safety[0], response_payload);
+        if (result != SALTS_OK) {
+            goto cleanup;
+        }
+    }
+    result = tr_chaos_refresh_multigroup_status(
+        nodes, safety, response_payload);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+
+    for (round = 0U; round < 24U; ++round) {
+        result = tr_chaos_drive_multigroup_round(
+            nodes, &network, codec, safety, response_payload,
+            &random_state, 0U);
+        if (result != SALTS_OK) {
+            goto cleanup;
+        }
+        result = tr_chaos_multigroup_leaders(nodes, leaders);
+        if (result == SALTS_OK) {
+            break;
+        }
+        if (result != SALTS_EBUSY) {
+            goto cleanup;
+        }
+    }
+    if (result != SALTS_OK ||
+        leaders[0] != tr_chaos_group_preferred_leader(
+                          TR_CHAOS_PRIMARY_GROUP_ID)) {
+        result = SALTS_EPROTO;
+        goto cleanup;
+    }
+
+    result = tr_chaos_propose_group(
+        nodes, 0U, leaders[0], UINT64_C(9101),
+        &network, codec, safety, response_payload, &targets[0]);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+    result = tr_chaos_wait_multigroup_targets(
+        nodes, &network, codec, safety, response_payload,
+        &random_state, targets, 0U, 32U);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+
+    for (slot = 0U; slot < TR_CHAOS_GROUP_COUNT; ++slot) {
+        int operation_result = SALTS_OK;
+
+        result = tr_chaos_collect_group_command(
+            &nodes[2], tr_chaos_group_ids[slot],
+            TR_CHAOS_COMMAND_BACKUP_HANDOFF, NULL, 0U,
+            &network, codec, &safety[slot], response_payload,
+            &operation_result);
+        if (result != SALTS_OK || operation_result != SALTS_OK) {
+            result = result != SALTS_OK ? result : operation_result;
+            goto cleanup;
+        }
+    }
+    backup_applied = nodes[2].status.applied_index;
+    backup_hash = nodes[2].status.applied_hash;
+    if (backup_applied == 0U || backup_hash == 0U) {
+        result = SALTS_EPROTO;
+        goto cleanup;
+    }
+
+    result = tr_chaos_node_stop(&nodes[2], response_payload);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+    snprintf(restore_database, sizeof(restore_database),
+             "%s/restore-copy-node-3.db", directory);
+    snprintf(incomplete_database, sizeof(incomplete_database),
+             "%s/restore-incomplete-node-3.db", directory);
+    result = tr_chaos_copy_quiescent_node_set(
+        nodes[2].database_path, restore_database);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+    result = tr_chaos_copy_incomplete_manifest(
+        nodes[2].database_path, incomplete_database);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+    result = tr_chaos_expect_existing_open_failure(
+        program, 3U, incomplete_database);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+
+    targets[0] = 0U;
+    result = tr_chaos_propose_group(
+        nodes, 0U, leaders[0], UINT64_C(9102),
+        &network, codec, safety, response_payload, &targets[0]);
+    if (result != SALTS_OK || targets[0] <= backup_applied) {
+        result = result != SALTS_OK ? result : SALTS_EPROTO;
+        goto cleanup;
+    }
+    result = tr_chaos_wait_primary_quorum_without_node(
+        nodes, &network, codec, &safety[0], response_payload,
+        &random_state, targets[0]);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+
+    snprintf(nodes[2].database_path, sizeof(nodes[2].database_path),
+             "%s", restore_database);
+    nodes[2].require_existing = 1;
+    result = tr_chaos_node_spawn(
+        &nodes[2], program, &safety[0], response_payload);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+    if (nodes[2].status.applied_index != backup_applied ||
+        nodes[2].status.applied_hash != backup_hash ||
+        nodes[2].status.applied_index >= targets[0]) {
+        result = SALTS_EPROTO;
+        goto cleanup;
+    }
+    result = tr_chaos_refresh_multigroup_status(
+        nodes, safety, response_payload);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+    result = tr_chaos_recover_after_handoff(
+        nodes, &network, codec, &safety[0], response_payload,
+        &random_state, targets[0]);
+    if (result != SALTS_OK) {
+        goto cleanup;
+    }
+    if (nodes[2].status.applied_index < targets[0] ||
+        nodes[2].status.applied_hash != nodes[0].status.applied_hash ||
+        nodes[2].status.applied_hash != nodes[1].status.applied_hash) {
+        result = SALTS_EPROTO;
+    }
+
+cleanup:
+    for (node_index = 0U; node_index < 3U; ++node_index) {
+        int close_result = tr_chaos_node_stop(
+            &nodes[node_index], response_payload);
+        if (result == SALTS_OK && close_result != SALTS_OK) {
+            result = close_result;
+        }
+    }
+    tr_raft_wire_codec_destroy(codec);
+    free(response_payload);
+    free(network.frames);
+    return result;
+}
+
 static int tr_chaos_run_seed(const char *program,
                              const char *directory,
                              uint32_t seed)
