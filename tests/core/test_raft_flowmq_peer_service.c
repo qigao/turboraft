@@ -1385,6 +1385,91 @@ spec("Raft FlowMQ caller-driven service")
         }
     }
 
+    it("qualifies certificate rotation overlap and retirement across restarts")
+    {
+        const char *overlap[] = {
+            TR_FLOWMQ_TEST_NODE1_CERTIFICATE_SHA256,
+            TR_FLOWMQ_TEST_ROTATED_CLIENT_CERTIFICATE_SHA256};
+        const char *new_only[] = {
+            TR_FLOWMQ_TEST_ROTATED_CLIENT_CERTIFICATE_SHA256};
+        static const struct {
+            const char *certificate_fixture;
+            const char *key_fixture;
+            int use_overlap;
+            int expect_delivery;
+        } phases[] = {
+            {"node1-cert.pem", "node1-key.pem", 1, 1},
+            {"node2-client-cert.pem", "node2-client-key.pem", 1, 1},
+            {"node1-cert.pem", "node1-key.pem", 0, 0},
+            {"node2-client-cert.pem", "node2-client-key.pem", 0, 1}};
+        size_t phase_index;
+
+        for (phase_index = 0U;
+             phase_index < sizeof(phases) / sizeof(phases[0]);
+             ++phase_index) {
+            tr_flowmq_live_pair_t pair;
+            tr_raft_flowmq_peer_service_step_result_t node1_step;
+            tr_raft_flowmq_peer_service_step_result_t node2_step;
+            tr_raft_flowmq_peer_service_status_t node2_status;
+            tr_raft_message_t message = heartbeat();
+            const char *const *fingerprints =
+                phases[phase_index].use_overlap ? overlap : new_only;
+            size_t fingerprint_count =
+                phases[phase_index].use_overlap ? 2U : 1U;
+            uint32_t progress;
+            int result;
+
+            memset(&pair, 0, sizeof(pair));
+            memset(&node2_status, 0, sizeof(node2_status));
+            result = open_live_pair_with_certificate_policy(
+                &pair, 1,
+                phases[phase_index].certificate_fixture,
+                phases[phase_index].key_fixture,
+                "three-node-client-ca.pem",
+                fingerprints, fingerprint_count, "node-1",
+                NULL, NULL, NULL, NULL);
+            check_equal(result, SALTS_OK);
+
+            if (result == SALTS_OK) {
+                message.term = 20U + phase_index;
+                result = tr_raft_flowmq_peer_service_enqueue_group(
+                    pair.node1, 1U, &message);
+                check_equal(result, SALTS_OK);
+            }
+            for (progress = 0U;
+                 result == SALTS_OK &&
+                 progress < TR_FLOWMQ_TEST_PROGRESS_LIMIT;
+                 ++progress) {
+                memset(&node1_step, 0, sizeof(node1_step));
+                memset(&node2_step, 0, sizeof(node2_step));
+                result = step_live_pair(&pair, &node1_step, &node2_step);
+                if (result == SALTS_OK) {
+                    result = tr_raft_flowmq_peer_service_get_status(
+                        pair.node2, &node2_status);
+                }
+                if (phases[phase_index].expect_delivery) {
+                    if (pair.node2_capture.count != 0U) {
+                        break;
+                    }
+                } else if (node2_status.tls_identity_rejections != 0U) {
+                    break;
+                }
+                salts_sleep_ms(1U);
+            }
+
+            check_equal(result, SALTS_OK);
+            if (phases[phase_index].expect_delivery) {
+                check_equal(pair.node2_capture.count, 1U);
+                check_equal(node2_status.tls_identity_rejections, 0U);
+            } else {
+                check_equal(pair.node2_capture.count, 0U);
+                check_greater(node2_status.tls_identity_rejections, 0U);
+                check_equal(node2_status.last_error, SALTS_OK);
+            }
+            check_equal(close_live_pair(&pair), SALTS_OK);
+        }
+    }
+
     it("validates TLS peer certificate policy before bind")
     {
         const char *fingerprints[
