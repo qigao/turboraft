@@ -16,8 +16,6 @@ permissions:
   packages: read
 
 env:
-  SALTS_SDK_VERSION: "1.8.3"
-  SALTS_UTILS_SDK_VERSION: "4.1.3"
   FLOWMQ_REF: main
   CHTTP_REF: master
 
@@ -85,41 +83,49 @@ jobs:
           "CHTTP_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\chttp" >> $env:GITHUB_ENV
           "TURBORAFT_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\turboraft" >> $env:GITHUB_ENV
 
-      - name: Restore released Salts Windows SDKs
+      - name: Restore current published Salts Windows SDKs
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
-          $config = Join-Path $env:RUNNER_TEMP "turboraft-windows-sdk.config"
+          $config = Join-Path $env:RUNNER_TEMP "NuGet.Config"
           $project = Join-Path $env:RUNNER_TEMP "turboraft-windows-sdk.csproj"
           $packages = Join-Path $env:RUNNER_TEMP "turboraft-windows-sdk-packages"
-          @'
-          <?xml version="1.0" encoding="utf-8"?>
-          <configuration><packageSources><clear /></packageSources></configuration>
-          '@ | Set-Content -LiteralPath $config
+          '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
           if ($LASTEXITCODE -ne 0) { throw "failed to configure GitHub Packages source" }
-          @"
+          @'
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-            <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[$env:SALTS_SDK_VERSION]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[$env:SALTS_UTILS_SDK_VERSION]" />
-            </ItemGroup>
           </Project>
-          "@ | Set-Content -LiteralPath $project
+          '@ | Set-Content -LiteralPath $project
+          Push-Location $env:RUNNER_TEMP
+          try {
+            foreach ($package in @("Salts.Native","SaltsUtils.Native")) {
+              dotnet add $project package $package
+              if ($LASTEXITCODE -ne 0) { throw "failed to resolve $package" }
+            }
+          }
+          finally { Pop-Location }
           dotnet restore $project --configfile $config --packages $packages --no-cache
           if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
-          $saltsRoot = Join-Path $packages "salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64"
-          $saltsUtilsRoot = Join-Path $packages "saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64"
+          function Get-RestoredSdkRoot([string]$packageName) {
+            $roots = @(
+              Get-ChildItem -LiteralPath (Join-Path $packages $packageName) -Directory |
+                ForEach-Object { Join-Path $_.FullName "sdk\windows-x64" } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+            )
+            if ($roots.Count -ne 1) { throw "expected exactly one restored $packageName SDK, found $($roots.Count)" }
+            return ($roots[0] -replace '\\', '/')
+          }
+          $saltsRoot = Get-RestoredSdkRoot "salts.native"
+          $saltsUtilsRoot = Get-RestoredSdkRoot "saltsutils.native"
           foreach ($path in @(
             (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
             (Join-Path $saltsUtilsRoot "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"),
             (Join-Path $saltsUtilsRoot "bin\salts-idlc.exe"))) {
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-              throw "missing restored SDK file: $path"
-            }
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing restored SDK file: $path" }
           }
           "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$saltsUtilsRoot" >> $env:GITHUB_ENV
@@ -186,7 +192,7 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
           set "PATH=%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%FLOWMQ_ROOT%\bin;%CHTTP_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
-          cmake -S . -B .ci\build\turboraft -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF -DBUILD_TESTING=ON -DBUILD_TESTS=ON -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF
+          cmake -S . -B .ci\build\turboraft -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_APPLOCAL_DEPS=OFF -DBUILD_TESTING=ON -DBUILD_TESTS=ON -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF
           if errorlevel 1 exit /b 1
           cmake --build .ci\build\turboraft --parallel 2
           if errorlevel 1 exit /b 1
