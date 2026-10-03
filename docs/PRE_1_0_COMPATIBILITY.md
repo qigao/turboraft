@@ -67,6 +67,21 @@ supported release procedure also requires the same v0.2.0 replay limits used by
 qualification. Hosted compatibility CI invokes the real released v0.2.0
 verifier only after a successful preflight.
 
+Compatibility qualification deliberately uses **two dependency epochs**. The
+real v0.2.0 producer/verifier runs with the released v0.2.0 dependency graph
+(Salts.Native 1.8.3 / SaltsUtils.Native 4.1.3), while the current
+producer/preflight runs with the current published Salts.Native /
+SaltsUtils.Native graph. This proves that the durable/wire boundary does not
+depend on reusing the old dependency epoch.
+
+FlowMQ and CHttp are not part of the `storage-dev` WAL/snapshot parser used by
+this downgrade preflight. They remain separately qualified by the current
+package and live-peer gates. An in-place process rollback therefore means
+restarting the v0.2.0 binary with its **own released dependency graph**; it does
+not mean loading old and current FlowMQ/CHttp/Salts binaries into one process,
+and no cross-version binary ABI promise is implied for those external
+libraries.
+
 If preflight rejects current state, directly starting v0.2.0 is outside the
 supported rollback contract. Restore a backup created at a v0.2.0-compatible
 boundary or rejoin the node from a healthy compatible peer instead.
