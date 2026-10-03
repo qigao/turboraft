@@ -7,16 +7,20 @@ Release-qualified SDK payloads:
 - `sdk/linux-x64`
 - `sdk/windows-x64`
 
-Exact first-party package dependencies:
+First-party dependency policy:
 
-- Salts.Native 1.8.3
-- SaltsUtils.Native 4.1.3
-- FlowMQ.Native 1.1.1
+- restore the latest available `Salts.Native`
+- restore the latest available `SaltsUtils.Native`
+- restore the latest available `FlowMQ.Native`
+- restore the latest available `CHttp.Native` when consuming ControlPlane
+- do not encode first-party version numbers in consumer configuration
 
-Installed CMake consumers require `SALTS_ROOT`, `SALTS_UTILS_ROOT`, and
-`TURBORAFT_ROOT`. Core links `Salts::DataBind`, which is supplied by the
-SaltsUtils package, while source builds also use SaltsUtils to locate
-`salts-idlc`.
+Restore the first-party SDK graph together with `TurboRaft.Native`, then set
+`SALTS_ROOT`, `SALTS_UTILS_ROOT`, and `TURBORAFT_ROOT` to the unique SDK
+directories for the target RID. Core links `Salts::DataBind`, which is
+supplied by SaltsUtils; source builds also use SaltsUtils to locate
+`salts-idlc`. The package intentionally does not freeze a first-party
+dependency epoch.
 
 `FLOWMQ_ROOT`, `CHTTP_ROOT`, and `TURBODB_ROOT` are required only when the
 selected component uses those optional integrations.

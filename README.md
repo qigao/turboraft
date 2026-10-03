@@ -31,7 +31,7 @@ them.
 
 ## Dependencies
 
-Configure requires exact active-profile installations provided through:
+Configure requires explicit active-profile roots provided through:
 
 - `SALTS_ROOT`
 - `SALTS_UTILS_ROOT`
@@ -39,7 +39,9 @@ Configure requires exact active-profile installations provided through:
 - `CHTTP_ROOT` when building or consuming `TurboRaft::ControlPlane`
 
 The supplied user presets resolve Debug and Release profiles independently and
-use `NO_DEFAULT_PATH` for first-party package discovery.
+use `NO_DEFAULT_PATH` for first-party package discovery. First-party consumers
+do not encode package versions: source integration gates track current branches,
+while SDK/package gates restore the latest published first-party packages.
 
 ### Source build profiles
 
