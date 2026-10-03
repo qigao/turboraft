@@ -1,0 +1,210 @@
+name: Durable fsync baseline
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/benchmark_proposal_path.c"
+      - "benchmarks/proposal_path/**"
+      - ".github/workflows/durable-fsync-benchmark.yml"
+  push:
+    branches: [master]
+    paths:
+      - "benchmarks/benchmark_proposal_path.c"
+      - "benchmarks/proposal_path/**"
+      - ".github/workflows/durable-fsync-benchmark.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  linux-durable-fsync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+      SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
+      SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
+    steps:
+      - name: Checkout TurboRaft
+        uses: actions/checkout@v4
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore shared re2c binary
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - name: Checkout current Salts
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: master
+          path: .ci/src/salts
+          persist-credentials: false
+
+      - name: Checkout current SaltsUtils
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: master
+          path: .ci/src/salts-utils
+          persist-credentials: false
+
+      - name: Install host build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential libtool nasm ninja-build pkg-config
+
+      - name: Restore storage dependency cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="$RUNNER_TEMP/turboraft-fsync-vcpkg"
+          install="$GITHUB_WORKSPACE/vcpkg_installed"
+          mkdir -p "$manifest"
+          cat > "$manifest/vcpkg.json" <<'JSON'
+          {
+            "name": "turboraft-fsync-benchmark",
+            "version-semver": "0.1.0",
+            "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
+            "dependencies": [
+              { "name": "pkgconf", "host": true },
+              "simde",
+              "zstd",
+              "aklomp-base64",
+              "c-ares",
+              "libuv",
+              "kcp",
+              "boringssl",
+              "miniaudio",
+              "lua",
+              { "name": "zeromq", "default-features": false },
+              { "name": "xxhash", "version>=": "0.8.3" }
+            ]
+          }
+          JSON
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$manifest" \
+            --x-install-root="$install" \
+            --triplet=x64-linux \
+            --only-binarycaching
+
+      - name: Build and install current Salts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S .ci/src/salts -B .ci/build/salts -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
+          cmake --build .ci/build/salts --target install --parallel 2
+          echo "SALTS_SOURCE_SHA=$(git -C .ci/src/salts rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build and install current SaltsUtils
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$SALTS_ROOT/bin:$PATH"
+          cmake -S .ci/src/salts-utils -B .ci/build/salts-utils -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
+            -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
+          cmake --build .ci/build/salts-utils --target install --parallel 2
+          test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
+          echo "SALTS_UTILS_SOURCE_SHA=$(git -C .ci/src/salts-utils rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build installed storage-dev SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/bin:$PATH"
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          prefix="$GITHUB_WORKSPACE/stage/turboraft"
+          cmake -S . -B build/storage-dev -G Ninja \
+            -DTURBORAFT_BUILD_PROFILE=storage-dev \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build build/storage-dev --target install --parallel 2
+          echo "TURBORAFT_ROOT=$prefix" >> "$GITHUB_ENV"
+
+      - name: Build installed-SDK benchmark consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S benchmarks/proposal_path -B build/durable-fsync -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"
+          cmake --build build/durable-fsync --parallel 2
+
+      - name: Run retained fsync distribution benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          TURBORAFT_BENCHMARK_RAW_SAMPLES="$GITHUB_WORKSPACE/artifacts/wal-fsync-raw.csv" \
+            build/durable-fsync/turboraft_durable_fsync_benchmark \
+            > artifacts/wal-fsync-summary.csv
+          test -s artifacts/wal-fsync-summary.csv
+          test -s artifacts/wal-fsync-raw.csv
+          grep -q '^wal_fsync,1,' artifacts/wal-fsync-summary.csv
+          grep -q '^wal_fsync,4,' artifacts/wal-fsync-summary.csv
+          grep -q '^wal_fsync,8,' artifacts/wal-fsync-summary.csv
+          grep -q '^wal_fsync,16,' artifacts/wal-fsync-summary.csv
+
+      - name: Record benchmark environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "commit=$GITHUB_SHA"
+            echo "runner=$RUNNER_NAME"
+            echo "os=$RUNNER_OS"
+            echo "arch=$RUNNER_ARCH"
+            echo "salts_sha=$SALTS_SOURCE_SHA"
+            echo "salts_utils_sha=$SALTS_UTILS_SOURCE_SHA"
+            cmake --version | head -n 1
+            cc --version | head -n 1
+            uname -a
+            df -T /tmp
+            lscpu
+          } > artifacts/environment.txt
+          {
+            echo "### Durable fsync distribution"
+            echo '~~~csv'
+            cat artifacts/wal-fsync-summary.csv
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload retained baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: durable-fsync-baseline-${{ github.sha }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 30

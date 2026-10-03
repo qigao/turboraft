@@ -4,8 +4,10 @@
 #include <salts_error.h>
 #include <salts_fs.h>
 
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -15,10 +17,136 @@ enum {
     BENCH_PAYLOAD_BYTES = 64U
 };
 
+typedef struct bench_latency_distribution {
+    size_t batch_size;
+    size_t sample_count;
+    uint64_t samples_ns[BENCH_PROPOSALS];
+    uint64_t p50_ns;
+    uint64_t p95_ns;
+    uint64_t p99_ns;
+    uint64_t max_ns;
+    double ns_per_op;
+    double ops_per_sec;
+} bench_latency_distribution_t;
+
+static int bench_u64_compare(const void *left, const void *right)
+{
+    const uint64_t a = *(const uint64_t *)left;
+    const uint64_t b = *(const uint64_t *)right;
+
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+static uint64_t bench_nearest_rank(
+    const uint64_t *sorted,
+    size_t count,
+    size_t percentile)
+{
+    size_t rank;
+
+    if (sorted == NULL || count == 0U || percentile == 0U ||
+        percentile > 100U) {
+        return 0U;
+    }
+    rank = (percentile * count + 99U) / 100U;
+    if (rank == 0U) {
+        rank = 1U;
+    } else if (rank > count) {
+        rank = count;
+    }
+    return sorted[rank - 1U];
+}
+
+static int bench_finalize_distribution(
+    bench_latency_distribution_t *distribution)
+{
+    uint64_t sorted[BENCH_PROPOSALS];
+    long double total_ns = 0.0L;
+    size_t index;
+    size_t operations;
+
+    if (distribution == NULL || distribution->batch_size == 0U ||
+        distribution->sample_count == 0U ||
+        distribution->sample_count > BENCH_PROPOSALS) {
+        return SALTS_EINVAL;
+    }
+
+    memcpy(sorted, distribution->samples_ns,
+           distribution->sample_count * sizeof(sorted[0]));
+    qsort(sorted, distribution->sample_count, sizeof(sorted[0]),
+          bench_u64_compare);
+    for (index = 0U; index < distribution->sample_count; ++index) {
+        total_ns += (long double)distribution->samples_ns[index];
+    }
+    operations = distribution->sample_count * distribution->batch_size;
+    distribution->p50_ns =
+        bench_nearest_rank(sorted, distribution->sample_count, 50U);
+    distribution->p95_ns =
+        bench_nearest_rank(sorted, distribution->sample_count, 95U);
+    distribution->p99_ns =
+        bench_nearest_rank(sorted, distribution->sample_count, 99U);
+    distribution->max_ns = sorted[distribution->sample_count - 1U];
+    distribution->ns_per_op =
+        (double)(total_ns / (long double)operations);
+    distribution->ops_per_sec =
+        distribution->ns_per_op > 0.0
+            ? 1000000000.0 / distribution->ns_per_op
+            : 0.0;
+    return SALTS_OK;
+}
+
+static int bench_write_raw_samples(
+    const char *path,
+    const bench_latency_distribution_t *distributions,
+    size_t distribution_count)
+{
+    FILE *output;
+    size_t distribution_index;
+
+    if (path == NULL || path[0] == '\0') {
+        return SALTS_OK;
+    }
+    if (distributions == NULL || distribution_count == 0U) {
+        return SALTS_EINVAL;
+    }
+    output = fopen(path, "w");
+    if (output == NULL) {
+        return SALTS_EIO;
+    }
+    fprintf(output, "boundary,batch_size,sample_index,sample_ns\n");
+    for (distribution_index = 0U;
+         distribution_index < distribution_count;
+         ++distribution_index) {
+        const bench_latency_distribution_t *distribution =
+            &distributions[distribution_index];
+        size_t sample_index;
+
+        for (sample_index = 0U;
+             sample_index < distribution->sample_count;
+             ++sample_index) {
+            fprintf(output, "wal_fsync,%zu,%zu,%" PRIu64 "\n",
+                    distribution->batch_size, sample_index,
+                    distribution->samples_ns[sample_index]);
+        }
+    }
+    if (fclose(output) != 0) {
+        return SALTS_EIO;
+    }
+    return SALTS_OK;
+}
+
 typedef struct bench_memory_storage {
     size_t begin_count;
     size_t commit_count;
 } bench_memory_storage_t;
+
+static void bench_unlink_if_exists(const char *path)
+{
+    if (path != NULL &&
+        salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
+        (void)salts_fs_unlink(path);
+    }
+}
 
 static uint64_t bench_now_ns(void)
 {
@@ -334,8 +462,9 @@ static void bench_memory_storage_adapter(
     storage->rollback = bench_storage_rollback;
 }
 
-static int bench_wal_batch_path(size_t batch_size,
-                                double *out_ns_per_op)
+static int bench_wal_batch_path(
+    size_t batch_size,
+    bench_latency_distribution_t *out_distribution)
 {
     enum { MAX_BATCH = 16U };
     char prefix[256];
@@ -347,22 +476,22 @@ static int bench_wal_batch_path(size_t batch_size,
     tr_raft_entry_t entries[MAX_BATCH];
     tr_raft_index_t next_index = 1U;
     size_t batch;
-    uint64_t start;
-    uint64_t end;
     int result = SALTS_OK;
 
-    if (out_ns_per_op == NULL || batch_size == 0U ||
+    if (out_distribution == NULL || batch_size == 0U ||
         batch_size > MAX_BATCH || BENCH_PROPOSALS % batch_size != 0U) {
         return SALTS_EINVAL;
     }
+    memset(out_distribution, 0, sizeof(*out_distribution));
+    out_distribution->batch_size = batch_size;
 
     snprintf(prefix, sizeof(prefix),
              "/tmp/turboraft-groupcommit-bench-%ld-%zu",
              (long)getpid(), batch_size);
     snprintf(wal_path, sizeof(wal_path), "%s.00000001.wal", prefix);
     snprintf(lock_path, sizeof(lock_path), "%s.lock", prefix);
-    (void)salts_fs_unlink(wal_path);
-    (void)salts_fs_unlink(lock_path);
+    bench_unlink_if_exists(wal_path);
+    bench_unlink_if_exists(lock_path);
 
     memset(&config, 0, sizeof(config));
     config.path_prefix = prefix;
@@ -379,12 +508,13 @@ static int bench_wal_batch_path(size_t batch_size,
         result = tr_raft_wal_storage_bind(wal, &storage);
     }
 
-    start = bench_now_ns();
     for (batch = 0U;
          result == SALTS_OK && batch < BENCH_PROPOSALS / batch_size;
          ++batch) {
         size_t index;
         tr_raft_index_t last_index;
+        uint64_t sample_start;
+        uint64_t sample_end;
 
         for (index = 0U; index < batch_size; ++index) {
             uint8_t payload[BENCH_PAYLOAD_BYTES];
@@ -399,6 +529,7 @@ static int bench_wal_batch_path(size_t batch_size,
         }
         last_index = entries[batch_size - 1U].index;
 
+        sample_start = bench_now_ns();
         result = storage.begin(storage.context);
         if (result == SALTS_OK) {
             result = storage.write_hard_state(storage.context, 1U, 1U);
@@ -416,12 +547,20 @@ static int bench_wal_batch_path(size_t batch_size,
         } else {
             (void)storage.rollback(storage.context);
         }
+        sample_end = bench_now_ns();
+        if (result == SALTS_OK) {
+            if (out_distribution->sample_count >= BENCH_PROPOSALS) {
+                result = SALTS_ENOSPC;
+            } else {
+                out_distribution->samples_ns[
+                    out_distribution->sample_count++] =
+                    sample_end - sample_start;
+            }
+        }
     }
-    end = bench_now_ns();
 
     if (result == SALTS_OK) {
-        *out_ns_per_op =
-            (double)(end - start) / (double)BENCH_PROPOSALS;
+        result = bench_finalize_distribution(out_distribution);
     }
     if (wal != NULL) {
         int close_result = tr_raft_wal_storage_close(wal);
@@ -430,8 +569,8 @@ static int bench_wal_batch_path(size_t batch_size,
         }
     }
 
-    (void)salts_fs_unlink(wal_path);
-    (void)salts_fs_unlink(lock_path);
+    bench_unlink_if_exists(wal_path);
+    bench_unlink_if_exists(lock_path);
     return result;
 }
 
@@ -453,8 +592,8 @@ static int bench_wal_path(double *out_ns_per_op)
              (long)getpid());
     snprintf(wal_path, sizeof(wal_path), "%s.00000001.wal", prefix);
     snprintf(lock_path, sizeof(lock_path), "%s.lock", prefix);
-    (void)salts_fs_unlink(wal_path);
-    (void)salts_fs_unlink(lock_path);
+    bench_unlink_if_exists(wal_path);
+    bench_unlink_if_exists(lock_path);
 
     memset(&config, 0, sizeof(config));
     config.path_prefix = prefix;
@@ -480,8 +619,8 @@ static int bench_wal_path(double *out_ns_per_op)
         }
     }
 
-    (void)salts_fs_unlink(wal_path);
-    (void)salts_fs_unlink(lock_path);
+    bench_unlink_if_exists(wal_path);
+    bench_unlink_if_exists(lock_path);
     return result;
 }
 
@@ -505,8 +644,8 @@ static int bench_wal_service_batch_path(
              (long)getpid(), batch_size);
     snprintf(wal_path, sizeof(wal_path), "%s.00000001.wal", prefix);
     snprintf(lock_path, sizeof(lock_path), "%s.lock", prefix);
-    (void)salts_fs_unlink(wal_path);
-    (void)salts_fs_unlink(lock_path);
+    bench_unlink_if_exists(wal_path);
+    bench_unlink_if_exists(lock_path);
 
     memset(&config, 0, sizeof(config));
     config.path_prefix = prefix;
@@ -533,8 +672,8 @@ static int bench_wal_service_batch_path(
         }
     }
 
-    (void)salts_fs_unlink(wal_path);
-    (void)salts_fs_unlink(lock_path);
+    bench_unlink_if_exists(wal_path);
+    bench_unlink_if_exists(lock_path);
     return result;
 }
 
@@ -545,9 +684,7 @@ int main(void)
     double core_ns = 0.0;
     double service_ns = 0.0;
     double wal_ns = 0.0;
-    double wal_batch4_ns = 0.0;
-    double wal_batch8_ns = 0.0;
-    double wal_batch16_ns = 0.0;
+    bench_latency_distribution_t wal_distributions[4];
     double service_batch4_ns = 0.0;
     double service_batch8_ns = 0.0;
     double service_batch16_ns = 0.0;
@@ -571,84 +708,125 @@ int main(void)
         fprintf(stderr, "wal benchmark failed: %d\n", result);
         return 30;
     }
-    result = bench_wal_batch_path(4U, &wal_batch4_ns);
+    result = bench_wal_batch_path(1U, &wal_distributions[0]);
     if (result != SALTS_OK) {
-        fprintf(stderr, "wal batch4 benchmark failed: %d\n", result);
+        fprintf(stderr, "wal batch1 benchmark failed: %d\n", result);
         return 31;
     }
-    result = bench_wal_batch_path(8U, &wal_batch8_ns);
+    result = bench_wal_batch_path(4U, &wal_distributions[1]);
     if (result != SALTS_OK) {
-        fprintf(stderr, "wal batch8 benchmark failed: %d\n", result);
+        fprintf(stderr, "wal batch4 benchmark failed: %d\n", result);
         return 32;
     }
-    result = bench_wal_batch_path(16U, &wal_batch16_ns);
+    result = bench_wal_batch_path(8U, &wal_distributions[2]);
+    if (result != SALTS_OK) {
+        fprintf(stderr, "wal batch8 benchmark failed: %d\n", result);
+        return 33;
+    }
+    result = bench_wal_batch_path(16U, &wal_distributions[3]);
     if (result != SALTS_OK) {
         fprintf(stderr, "wal batch16 benchmark failed: %d\n", result);
-        return 33;
+        return 34;
     }
     result = bench_wal_service_batch_path(4U, &service_batch4_ns);
     if (result != SALTS_OK) {
         fprintf(stderr, "service batch4 benchmark failed: %d\n", result);
-        return 34;
+        return 35;
     }
     result = bench_wal_service_batch_path(8U, &service_batch8_ns);
     if (result != SALTS_OK) {
         fprintf(stderr, "service batch8 benchmark failed: %d\n", result);
-        return 35;
+        return 36;
     }
     result = bench_wal_service_batch_path(16U, &service_batch16_ns);
     if (result != SALTS_OK) {
         fprintf(stderr, "service batch16 benchmark failed: %d\n", result);
-        return 36;
+        return 37;
     }
 
-    printf("boundary,operations,ns_per_op,ops_per_sec\n");
-    printf("core_propose_advance,%u,%.2f,%.2f\n",
+    printf("boundary,batch_size,samples,operations,ns_per_op,ops_per_sec,"
+           "p50_sample_ns,p95_sample_ns,p99_sample_ns,max_sample_ns\n");
+    printf("core_propose_advance,1,0,%u,%.2f,%.2f,0,0,0,0\n",
            BENCH_PROPOSALS, core_ns,
            core_ns != 0.0 ? 1000000000.0 / core_ns : 0.0);
-    printf("service_memory,%u,%.2f,%.2f\n",
+    printf("service_memory,1,0,%u,%.2f,%.2f,0,0,0,0\n",
            BENCH_PROPOSALS, service_ns,
            service_ns != 0.0 ? 1000000000.0 / service_ns : 0.0);
-    printf("service_wal_fsync,%u,%.2f,%.2f\n",
+    printf("service_wal_fsync,1,0,%u,%.2f,%.2f,0,0,0,0\n",
            BENCH_PROPOSALS, wal_ns,
            wal_ns != 0.0 ? 1000000000.0 / wal_ns : 0.0);
-    printf("wal_vs_memory_ratio,1,%.2f,0\n",
+    printf("wal_vs_memory_ratio,1,0,1,%.2f,0,0,0,0,0\n",
            service_ns != 0.0 ? wal_ns / service_ns : 0.0);
-    printf("wal_batch4,%u,%.2f,%.2f\n",
-           BENCH_PROPOSALS, wal_batch4_ns,
-           wal_batch4_ns != 0.0 ? 1000000000.0 / wal_batch4_ns : 0.0);
-    printf("wal_batch8,%u,%.2f,%.2f\n",
-           BENCH_PROPOSALS, wal_batch8_ns,
-           wal_batch8_ns != 0.0 ? 1000000000.0 / wal_batch8_ns : 0.0);
-    printf("wal_batch16,%u,%.2f,%.2f\n",
-           BENCH_PROPOSALS, wal_batch16_ns,
-           wal_batch16_ns != 0.0 ? 1000000000.0 / wal_batch16_ns : 0.0);
-    printf("wal_batch4_speedup,1,%.2f,0\n",
-           wal_batch4_ns != 0.0 ? wal_ns / wal_batch4_ns : 0.0);
-    printf("wal_batch8_speedup,1,%.2f,0\n",
-           wal_batch8_ns != 0.0 ? wal_ns / wal_batch8_ns : 0.0);
-    printf("wal_batch16_speedup,1,%.2f,0\n",
-           wal_batch16_ns != 0.0 ? wal_ns / wal_batch16_ns : 0.0);
-    printf("service_wal_batch4,%u,%.2f,%.2f\n",
+    {
+        size_t distribution_index;
+
+        for (distribution_index = 0U;
+             distribution_index < sizeof(wal_distributions) /
+                                      sizeof(wal_distributions[0]);
+             ++distribution_index) {
+            const bench_latency_distribution_t *distribution =
+                &wal_distributions[distribution_index];
+            printf("wal_fsync,%zu,%zu,%zu,%.2f,%.2f,%" PRIu64
+                   ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+                   distribution->batch_size,
+                   distribution->sample_count,
+                   distribution->sample_count * distribution->batch_size,
+                   distribution->ns_per_op,
+                   distribution->ops_per_sec,
+                   distribution->p50_ns,
+                   distribution->p95_ns,
+                   distribution->p99_ns,
+                   distribution->max_ns);
+        }
+    }
+    printf("wal_batch4_speedup,4,0,1,%.2f,0,0,0,0,0\n",
+           wal_distributions[1].ns_per_op != 0.0
+               ? wal_distributions[0].ns_per_op /
+                     wal_distributions[1].ns_per_op
+               : 0.0);
+    printf("wal_batch8_speedup,8,0,1,%.2f,0,0,0,0,0\n",
+           wal_distributions[2].ns_per_op != 0.0
+               ? wal_distributions[0].ns_per_op /
+                     wal_distributions[2].ns_per_op
+               : 0.0);
+    printf("wal_batch16_speedup,16,0,1,%.2f,0,0,0,0,0\n",
+           wal_distributions[3].ns_per_op != 0.0
+               ? wal_distributions[0].ns_per_op /
+                     wal_distributions[3].ns_per_op
+               : 0.0);
+    printf("service_wal_batch4,4,0,%u,%.2f,%.2f,0,0,0,0\n",
            BENCH_PROPOSALS, service_batch4_ns,
            service_batch4_ns != 0.0
                ? 1000000000.0 / service_batch4_ns
                : 0.0);
-    printf("service_wal_batch8,%u,%.2f,%.2f\n",
+    printf("service_wal_batch8,8,0,%u,%.2f,%.2f,0,0,0,0\n",
            BENCH_PROPOSALS, service_batch8_ns,
            service_batch8_ns != 0.0
                ? 1000000000.0 / service_batch8_ns
                : 0.0);
-    printf("service_wal_batch16,%u,%.2f,%.2f\n",
+    printf("service_wal_batch16,16,0,%u,%.2f,%.2f,0,0,0,0\n",
            BENCH_PROPOSALS, service_batch16_ns,
            service_batch16_ns != 0.0
                ? 1000000000.0 / service_batch16_ns
                : 0.0);
-    printf("service_batch4_speedup,1,%.2f,0\n",
+    printf("service_batch4_speedup,4,0,1,%.2f,0,0,0,0,0\n",
            service_batch4_ns != 0.0 ? wal_ns / service_batch4_ns : 0.0);
-    printf("service_batch8_speedup,1,%.2f,0\n",
+    printf("service_batch8_speedup,8,0,1,%.2f,0,0,0,0,0\n",
            service_batch8_ns != 0.0 ? wal_ns / service_batch8_ns : 0.0);
-    printf("service_batch16_speedup,1,%.2f,0\n",
+    printf("service_batch16_speedup,16,0,1,%.2f,0,0,0,0,0\n",
            service_batch16_ns != 0.0 ? wal_ns / service_batch16_ns : 0.0);
+    {
+        const char *raw_samples_path =
+            getenv("TURBORAFT_BENCHMARK_RAW_SAMPLES");
+
+        result = bench_write_raw_samples(
+            raw_samples_path, wal_distributions,
+            sizeof(wal_distributions) / sizeof(wal_distributions[0]));
+        if (result != SALTS_OK) {
+            fprintf(stderr, "cannot write raw WAL samples: %d\n", result);
+            return 38;
+        }
+    }
+
     return 0;
 }
