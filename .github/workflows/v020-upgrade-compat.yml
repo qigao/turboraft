@@ -343,6 +343,21 @@ jobs:
           truncate -s 65537 "$root/segment-size/raft.00000001.wal"
           preflight_reject segment-size "$root/segment-size/raft" segment_bytes_exceeded
 
+          mkdir -p "$root/noaccess"
+          build/compat-downgrade/turboraft_v020_downgrade_fixture             "$root/noaccess/raft" low
+          find "$root/noaccess" -maxdepth 1 -type f -name 'raft*' -print0             | sort -z | xargs -0 sha256sum             > artifacts/downgrade-preflight/noaccess-before.sha256
+          chmod 000 "$root/noaccess"
+          set +e
+          "$CURRENT_TURBORAFT_ROOT/bin/turboraft_compat_check" downgrade             --target v0.2.0             --path-prefix "$root/noaccess/raft"             --legacy-max-segments 4             --legacy-segment-bytes 65536             --legacy-max-transaction-bytes 16384             --legacy-max-log-entries 16             --legacy-max-snapshot-bytes 1024             > artifacts/downgrade-preflight/noaccess.json
+          rc=$?
+          chmod 755 "$root/noaccess"
+          set -e
+          test "$rc" -ne 0
+          grep -F '"compatible":false' artifacts/downgrade-preflight/noaccess.json
+          grep -F '"reason":"manifest_io_error"' artifacts/downgrade-preflight/noaccess.json
+          find "$root/noaccess" -maxdepth 1 -type f -name 'raft*' -print0             | sort -z | xargs -0 sha256sum             > artifacts/downgrade-preflight/noaccess-after.sha256
+          diff -u artifacts/downgrade-preflight/noaccess-before.sha256                   artifacts/downgrade-preflight/noaccess-after.sha256
+
       - name: Upload real prior-release compatibility evidence
         uses: actions/upload-artifact@v4
         with:
