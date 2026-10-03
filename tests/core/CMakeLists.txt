@@ -222,6 +222,8 @@ if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
 endif()
 
 add_executable(turboraft_service_tests test_raft_service.c)
+target_include_directories(turboraft_service_tests
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src/service)
 target_link_libraries(turboraft_service_tests PRIVATE TurboRaft::Service
                                                       Salts::TinyTest)
 add_test(NAME turboraft.service COMMAND turboraft_service_tests)
