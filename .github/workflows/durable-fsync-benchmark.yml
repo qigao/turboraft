@@ -1,16 +1,18 @@
-name: Durable fsync baseline
+name: Durable storage baseline
 
 on:
   pull_request:
     paths:
       - "benchmarks/benchmark_proposal_path.c"
       - "benchmarks/proposal_path/**"
+      - "benchmarks/storage_ops/**"
       - ".github/workflows/durable-fsync-benchmark.yml"
   push:
     branches: [master]
     paths:
       - "benchmarks/benchmark_proposal_path.c"
       - "benchmarks/proposal_path/**"
+      - "benchmarks/storage_ops/**"
       - ".github/workflows/durable-fsync-benchmark.yml"
   workflow_dispatch:
 
@@ -19,7 +21,7 @@ permissions:
   packages: read
 
 jobs:
-  linux-durable-fsync:
+  linux-durable-storage:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -161,6 +163,14 @@ jobs:
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"
           cmake --build build/durable-fsync --parallel 2
 
+          cmake -S benchmarks/storage_ops -B build/storage-resource -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"
+          cmake --build build/storage-resource --parallel 2
+
       - name: Run retained fsync distribution benchmark
         shell: bash
         run: |
@@ -176,6 +186,14 @@ jobs:
           grep -q '^wal_fsync,4,' artifacts/wal-fsync-summary.csv
           grep -q '^wal_fsync,8,' artifacts/wal-fsync-summary.csv
           grep -q '^wal_fsync,16,' artifacts/wal-fsync-summary.csv
+
+          build/storage-resource/turboraft_storage_resource_benchmark \
+            > artifacts/storage-resource.csv
+          test -s artifacts/storage-resource.csv
+          grep -q '^wal_append_rotate,' artifacts/storage-resource.csv
+          grep -q '^snapshot_store_retained_suffix,' artifacts/storage-resource.csv
+          grep -q '^wal_checkpoint_compaction,' artifacts/storage-resource.csv
+          grep -q '^snapshot_install,' artifacts/storage-resource.csv
 
       - name: Record benchmark environment
         shell: bash
@@ -199,12 +217,17 @@ jobs:
             echo '~~~csv'
             cat artifacts/wal-fsync-summary.csv
             echo '~~~'
+            echo
+            echo "### Storage snapshot / compaction / resource baseline"
+            echo '~~~csv'
+            cat artifacts/storage-resource.csv
+            echo '~~~'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload retained baseline
         uses: actions/upload-artifact@v4
         with:
-          name: durable-fsync-baseline-${{ github.sha }}
+          name: durable-storage-baseline-${{ github.sha }}
           path: artifacts
           if-no-files-found: error
           retention-days: 30
