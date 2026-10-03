@@ -17,3 +17,14 @@ if(WIN32)
             $<TARGET_FILE_DIR:turboraft_benchmarks>
     COMMAND_EXPAND_LISTS)
 endif()
+
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(turboraft_proposal_path_benchmark
+                 benchmark_proposal_path.c)
+  target_link_libraries(turboraft_proposal_path_benchmark
+                        PRIVATE TurboRaft::Service TurboRaft::WalStorage)
+  cmake_config_target(turboraft_proposal_path_benchmark
+                      NO_INSTALL
+                      FOLDER "benchmarks")
+endif()
