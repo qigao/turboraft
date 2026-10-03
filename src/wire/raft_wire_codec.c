@@ -26,6 +26,8 @@ typedef struct tr_wire_var_data_view {
     size_t size;
 } tr_wire_var_data_view_t;
 
+static uint32_t tr_get_u32(const uint8_t *input);
+
 static bool tr_wire_read_var_data(const uint8_t **cursor,
                                   const uint8_t *end,
                                   tr_wire_var_data_view_t *out)
