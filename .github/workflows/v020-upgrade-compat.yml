@@ -83,9 +83,47 @@ jobs:
             test -d "$root"
           done
           echo "PRIOR_TURBORAFT_ROOT=$packages/turboraft.native/0.2.0/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_ROOT=$packages/salts.native/1.8.3/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.1.3/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "OLD_SALTS_ROOT=$packages/salts.native/1.8.3/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "OLD_SALTS_UTILS_ROOT=$packages/saltsutils.native/4.1.3/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "PRIOR_PACKAGES=$packages" >> "$GITHUB_ENV"
+
+      - name: Restore current released Salts SDKs
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/NuGet-current.config"
+          project="$RUNNER_TEMP/turboraft-current-deps.csproj"
+          packages="$RUNNER_TEMP/turboraft-current-deps"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
+            </ItemGroup>
+          </Project>
+          EOF
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          sdk_root() {
+            local package="$1" rid="$2" roots=()
+            while IFS= read -r root; do roots+=("$root"); done < <(
+              find "$packages/$package" -mindepth 3 -maxdepth 3 -type d -path "*/sdk/$rid" -print
+            )
+            [ "${#roots[@]}" -eq 1 ] || { echo "expected one $package SDK, found ${#roots[@]}" >&2; return 1; }
+            printf '%s' "${roots[0]}"
+          }
+          current_salts="$(sdk_root salts.native linux-x64)"
+          current_utils="$(sdk_root saltsutils.native linux-x64)"
+          echo "CURRENT_SALTS_ROOT=$current_salts" >> "$GITHUB_ENV"
+          echo "CURRENT_SALTS_UTILS_ROOT=$current_utils" >> "$GITHUB_ENV"
+          echo "CURRENT_SALTS_VERSION=$(basename "$(dirname "$(dirname "$current_salts")")")" >> "$GITHUB_ENV"
+          echo "CURRENT_SALTS_UTILS_VERSION=$(basename "$(dirname "$(dirname "$current_utils")")")" >> "$GITHUB_ENV"
 
       - name: Restore native link dependencies
         shell: bash
@@ -107,6 +145,7 @@ jobs:
               "libuv",
               "kcp",
               "boringssl",
+              "gmssl",
               "miniaudio",
               "lua",
               { "name": "zeromq", "default-features": false },
@@ -124,6 +163,8 @@ jobs:
         shell: bash
         env:
           TURBORAFT_ROOT: ${{ env.PRIOR_TURBORAFT_ROOT }}
+          SALTS_ROOT: ${{ env.OLD_SALTS_ROOT }}
+          SALTS_UTILS_ROOT: ${{ env.OLD_SALTS_UTILS_ROOT }}
         run: |
           set -euo pipefail
           cmake -S tests/compat/v020_upgrade -B build/v020-producer -G Ninja \
@@ -141,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/prior-to-current
-          export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$OLD_SALTS_UTILS_ROOT/lib:$OLD_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           build/v020-producer/turboraft_v020_fixture_producer \
             "$GITHUB_WORKSPACE/artifacts/prior-to-current/raft" v0.2.0 \
             | tee artifacts/v020-producer.txt
@@ -152,8 +193,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/bin:$PATH"
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export SALTS_ROOT="$CURRENT_SALTS_ROOT"
+          export SALTS_UTILS_ROOT="$CURRENT_SALTS_UTILS_ROOT"
+          export PATH="$CURRENT_SALTS_UTILS_ROOT/bin:$CURRENT_SALTS_ROOT/bin:$PATH"
+          export LD_LIBRARY_PATH="$CURRENT_SALTS_UTILS_ROOT/lib:$CURRENT_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           current="$GITHUB_WORKSPACE/stage/current"
           cmake -S . -B build/current-storage -G Ninja \
             -DTURBORAFT_BUILD_PROFILE=storage-dev \
@@ -176,6 +219,8 @@ jobs:
         shell: bash
         env:
           TURBORAFT_ROOT: ${{ env.CURRENT_TURBORAFT_ROOT }}
+          SALTS_ROOT: ${{ env.CURRENT_SALTS_ROOT }}
+          SALTS_UTILS_ROOT: ${{ env.CURRENT_SALTS_UTILS_ROOT }}
         run: |
           set -euo pipefail
           cmake -S tests/compat/v020_upgrade -B build/current-verifier -G Ninja \
@@ -192,6 +237,8 @@ jobs:
         shell: bash
         env:
           TURBORAFT_ROOT: ${{ env.CURRENT_TURBORAFT_ROOT }}
+          SALTS_ROOT: ${{ env.CURRENT_SALTS_ROOT }}
+          SALTS_UTILS_ROOT: ${{ env.CURRENT_SALTS_UTILS_ROOT }}
         run: |
           set -euo pipefail
           cmake -S tests/compat/v020_downgrade -B build/compat-downgrade -G Ninja \
@@ -206,7 +253,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$CURRENT_SALTS_UTILS_ROOT/lib:$CURRENT_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           build/current-verifier/turboraft_v020_fixture_verifier \
             "$GITHUB_WORKSPACE/artifacts/prior-to-current/raft" current \
             | tee artifacts/current-verifies-v020.txt
@@ -216,7 +263,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/current-to-prior
-          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$CURRENT_SALTS_UTILS_ROOT/lib:$CURRENT_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           build/current-verifier/turboraft_v020_fixture_producer \
             "$GITHUB_WORKSPACE/artifacts/current-to-prior/raft" current \
             | tee artifacts/current-producer.txt
@@ -227,7 +274,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$CURRENT_SALTS_UTILS_ROOT/lib:$CURRENT_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           mkdir -p artifacts/downgrade-preflight
           prefix="$GITHUB_WORKSPACE/artifacts/current-to-prior/raft"
           find "$(dirname "$prefix")" -maxdepth 1 -type f -name 'raft*' -print0 \
@@ -258,8 +305,10 @@ jobs:
           {
             echo "prior_release=v0.2.0"
             echo "current_sha=$GITHUB_SHA"
-            echo "salts_package=1.8.3"
-            echo "salts_utils_package=4.1.3"
+            echo "prior_salts=1.8.3"
+            echo "prior_salts_utils=4.1.3"
+            echo "current_salts=$CURRENT_SALTS_VERSION"
+            echo "current_salts_utils=$CURRENT_SALTS_UTILS_VERSION"
             echo "legacy_max_segments=4"
             echo "legacy_segment_bytes=65536"
             echo "legacy_max_transaction_bytes=16384"
@@ -273,7 +322,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$CURRENT_SALTS_UTILS_ROOT/lib:$CURRENT_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           root="$GITHUB_WORKSPACE/artifacts/downgrade-negative"
           mkdir -p "$root" artifacts/downgrade-preflight
 
