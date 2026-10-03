@@ -102,10 +102,13 @@ int main(int argc, char **argv)
     int result;
     int failed = 0;
 
-    if (argc != 2 || argv[1][0] == '\0') {
-        fprintf(stderr, "usage: %s <wal-prefix>\n", argv[0]);
+    const char *verifier_label;
+
+    if ((argc != 2 && argc != 3) || argv[1][0] == '\0') {
+        fprintf(stderr, "usage: %s <wal-prefix> [verifier-label]\n", argv[0]);
         return 2;
     }
+    verifier_label = argc == 3 ? argv[2] : "fixture-verifier";
 
     memset(&config, 0, sizeof(config));
     config.path_prefix = argv[1];
@@ -191,6 +194,7 @@ int main(int argc, char **argv)
     failed |= verify_wire_fixture(argv[1]);
 
     if (failed != 0) return 1;
-    puts("PASS: current TurboRaft recovered real v0.2.0 durable + wire fixtures");
+    printf("PASS: %s recovered compatible durable + wire fixtures\n",
+           verifier_label);
     return 0;
 }
