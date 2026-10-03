@@ -21,34 +21,6 @@ struct tr_raft_wire_codec {
     DataBind *binding;
 };
 
-typedef struct tr_wire_var_data_view {
-    const uint8_t *data;
-    size_t size;
-} tr_wire_var_data_view_t;
-
-static uint32_t tr_get_u32(const uint8_t *input);
-
-static bool tr_wire_read_var_data(const uint8_t **cursor,
-                                  const uint8_t *end,
-                                  tr_wire_var_data_view_t *out)
-{
-    uint32_t length;
-
-    if (cursor == NULL || *cursor == NULL || end == NULL || out == NULL ||
-        *cursor > end || (size_t)(end - *cursor) < sizeof(uint32_t)) {
-        return false;
-    }
-    length = tr_get_u32(*cursor);
-    *cursor += sizeof(uint32_t);
-    if ((size_t)length > (size_t)(end - *cursor)) {
-        return false;
-    }
-    out->data = *cursor;
-    out->size = (size_t)length;
-    *cursor += length;
-    return true;
-}
-
 static void tr_put_u16(uint8_t *output, uint16_t value)
 {
     output[0] = (uint8_t) (value >> 8U);
@@ -441,7 +413,7 @@ typedef struct tr_wire_v3_fields {
     uint64_t entry_terms[TR_RAFT_MAX_APPEND_ENTRIES];
     uint64_t entry_commands[TR_RAFT_MAX_APPEND_ENTRIES];
     /* Borrowed from the immutable frame and consumed before decode returns. */
-    tr_wire_var_data_view_t entry_data[TR_RAFT_MAX_APPEND_ENTRIES];
+    tbe_var_data_t entry_data[TR_RAFT_MAX_APPEND_ENTRIES];
 } tr_wire_v3_fields_t;
 
 static bool tr_wire_v3_read_fields(const uint8_t *payload,
@@ -506,25 +478,18 @@ static bool tr_wire_v3_read_fields(const uint8_t *payload,
     fields->entry_commands[7] =
         RaftWireMessageV3_entry8_command_id_get(&view);
 
-    {
-        const uint8_t *cursor = payload + RaftWireMessageV3_BLOCK_LENGTH;
-        const uint8_t *end = payload + payload_length;
-        size_t index;
-
-        if (cursor > end) {
-            return false;
-        }
-        for (index = 0U; index < TR_RAFT_MAX_APPEND_ENTRIES; ++index) {
-            if (!tr_wire_read_var_data(
-                    &cursor, end, &fields->entry_data[index])) {
-                return false;
-            }
-        }
-        if (cursor != end) {
-            return false;
-        }
+    if (!RaftWireMessageV3_entry1_data(&view, &fields->entry_data[0]) ||
+        !RaftWireMessageV3_entry2_data(&view, &fields->entry_data[1]) ||
+        !RaftWireMessageV3_entry3_data(&view, &fields->entry_data[2]) ||
+        !RaftWireMessageV3_entry4_data(&view, &fields->entry_data[3]) ||
+        !RaftWireMessageV3_entry5_data(&view, &fields->entry_data[4]) ||
+        !RaftWireMessageV3_entry6_data(&view, &fields->entry_data[5]) ||
+        !RaftWireMessageV3_entry7_data(&view, &fields->entry_data[6]) ||
+        !RaftWireMessageV3_entry8_data(&view, &fields->entry_data[7])) {
+        return false;
     }
-    return true;
+    return tbe_wire_var_data_end(&fields->entry_data[7]) ==
+           payload + payload_length;
 }
 
 static bool tr_wire_v3_fields_valid(const tr_wire_v3_fields_t *fields)
@@ -810,9 +775,9 @@ int tr_raft_wire_decode_snapshot_chunk(
     tr_raft_snapshot_chunk_t *chunk)
 {
     InstallSnapshotChunk_view_t wire;
-    tr_wire_var_data_view_t digest;
-    tr_wire_var_data_view_t configuration;
-    tr_wire_var_data_view_t data;
+    tbe_var_data_t digest;
+    tbe_var_data_t configuration;
+    tbe_var_data_t data;
     uint32_t payload_length;
 
     if (codec == NULL || codec->binding == NULL || frame == NULL ||
@@ -826,22 +791,12 @@ int tr_raft_wire_decode_snapshot_chunk(
         return SALTS_EPROTO;
     }
     if (!InstallSnapshotChunk_view_bind(
-            &wire, frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length)) {
+            &wire, frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length) ||
+        !InstallSnapshotChunk_snapshot_configuration(&wire, &configuration) ||
+        !InstallSnapshotChunk_snapshot_digest(&wire, &digest) ||
+        !InstallSnapshotChunk_chunk_data(&wire, &data) ||
+        tbe_wire_var_data_end(&data) != frame + frame_length) {
         return SALTS_EPROTO;
-    }
-    {
-        const uint8_t *cursor =
-            frame + TR_RAFT_WIRE_HEADER_SIZE +
-            InstallSnapshotChunk_BLOCK_LENGTH;
-        const uint8_t *end = frame + frame_length;
-
-        if (cursor > end ||
-            !tr_wire_read_var_data(&cursor, end, &configuration) ||
-            !tr_wire_read_var_data(&cursor, end, &digest) ||
-            !tr_wire_read_var_data(&cursor, end, &data) ||
-            cursor != end) {
-            return SALTS_EPROTO;
-        }
     }
     if (InstallSnapshotChunk_done_get(&wire) > 1U ||
         digest.size != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE ||
@@ -938,7 +893,7 @@ int tr_raft_wire_decode_snapshot_ack(
     tr_raft_snapshot_ack_t *ack)
 {
     InstallSnapshotAck_view_t wire;
-    tr_wire_var_data_view_t digest;
+    tbe_var_data_t digest;
     uint32_t payload_length;
 
     if (codec == NULL || codec->binding == NULL || frame == NULL ||
@@ -950,22 +905,12 @@ int tr_raft_wire_decode_snapshot_ack(
             frame, frame_length, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK,
             metadata, &payload_length) != SALTS_OK ||
         !InstallSnapshotAck_view_bind(
-            &wire, frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length)) {
+            &wire, frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length) ||
+        !InstallSnapshotAck_snapshot_digest(&wire, &digest) ||
+        tbe_wire_var_data_end(&digest) != frame + frame_length ||
+        InstallSnapshotAck_accepted_get(&wire) > 1U ||
+        digest.size != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) {
         return SALTS_EPROTO;
-    }
-    {
-        const uint8_t *cursor =
-            frame + TR_RAFT_WIRE_HEADER_SIZE +
-            InstallSnapshotAck_BLOCK_LENGTH;
-        const uint8_t *end = frame + frame_length;
-
-        if (cursor > end ||
-            !tr_wire_read_var_data(&cursor, end, &digest) ||
-            cursor != end ||
-            InstallSnapshotAck_accepted_get(&wire) > 1U ||
-            digest.size != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) {
-            return SALTS_EPROTO;
-        }
     }
 
     memset(ack, 0, sizeof(*ack));
