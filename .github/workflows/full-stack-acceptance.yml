@@ -106,6 +106,7 @@ jobs:
               "libuv",
               "kcp",
               "boringssl",
+              "gmssl",
               "llhttp",
               "tree-sitter",
               "tree-sitter-c",
