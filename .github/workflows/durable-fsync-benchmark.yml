@@ -6,6 +6,7 @@ on:
       - "benchmarks/benchmark_proposal_path.c"
       - "benchmarks/proposal_path/**"
       - "benchmarks/storage_ops/**"
+      - "benchmarks/read_index/**"
       - ".github/workflows/durable-fsync-benchmark.yml"
   push:
     branches: [master]
@@ -13,6 +14,7 @@ on:
       - "benchmarks/benchmark_proposal_path.c"
       - "benchmarks/proposal_path/**"
       - "benchmarks/storage_ops/**"
+      - "benchmarks/read_index/**"
       - ".github/workflows/durable-fsync-benchmark.yml"
   workflow_dispatch:
 
@@ -171,6 +173,14 @@ jobs:
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"
           cmake --build build/storage-resource --parallel 2
 
+          cmake -S benchmarks/read_index -B build/read-index -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"
+          cmake --build build/read-index --parallel 2
+
       - name: Run retained fsync distribution benchmark
         shell: bash
         run: |
@@ -194,6 +204,85 @@ jobs:
           grep -q '^snapshot_store_retained_suffix,' artifacts/storage-resource.csv
           grep -q '^wal_checkpoint_compaction,' artifacts/storage-resource.csv
           grep -q '^snapshot_install,' artifacts/storage-resource.csv
+
+      - name: Run retained ReadIndex idle and write-load variance benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          for run in 1 2 3 4 5; do
+            TURBORAFT_READ_INDEX_RAW_SAMPLES="$GITHUB_WORKSPACE/artifacts/read-index-raw-$run.csv" \
+              build/read-index/turboraft_read_index_benchmark \
+              > "artifacts/read-index-run-$run.csv"
+            test -s "artifacts/read-index-run-$run.csv"
+            test -s "artifacts/read-index-raw-$run.csv"
+            grep -q '^read_index_idle,' "artifacts/read-index-run-$run.csv"
+            grep -q '^read_index_write_load,' "artifacts/read-index-run-$run.csv"
+          done
+
+          python3 - <<'PY'
+          import csv
+          import glob
+          import statistics
+
+          rows = []
+          by_phase = {}
+          for path in sorted(glob.glob("artifacts/read-index-run-*.csv")):
+              run = int(path.rsplit("-", 1)[1].split(".", 1)[0])
+              with open(path, newline="", encoding="utf-8") as handle:
+                  for row in csv.DictReader(handle):
+                      row["run"] = run
+                      rows.append(row)
+                      by_phase.setdefault(row["phase"], []).append(row)
+
+          with open("artifacts/read-index-runs.csv", "w", newline="", encoding="utf-8") as handle:
+              fields = ["run", "phase", "samples", "p50_ns", "p95_ns",
+                        "p99_ns", "max_ns", "mean_ns"]
+              writer = csv.DictWriter(handle, fieldnames=fields)
+              writer.writeheader()
+              for row in sorted(rows, key=lambda value: (value["run"], value["phase"])):
+                  writer.writerow({field: row[field] for field in fields})
+
+          def cv(values):
+              mean = statistics.mean(values)
+              return statistics.pstdev(values) / mean if mean else 0.0
+
+          with open("artifacts/read-index-variance.csv", "w", newline="", encoding="utf-8") as handle:
+              fields = [
+                  "phase", "runs",
+                  "p50_min_ns", "p50_median_ns", "p50_max_ns",
+                  "p95_min_ns", "p95_median_ns", "p95_max_ns",
+                  "p99_min_ns", "p99_median_ns", "p99_max_ns",
+                  "p95_cv", "p99_cv"
+              ]
+              writer = csv.DictWriter(handle, fieldnames=fields)
+              writer.writeheader()
+              for phase in sorted(by_phase):
+                  phase_rows = by_phase[phase]
+                  p50 = [int(row["p50_ns"]) for row in phase_rows]
+                  p95 = [int(row["p95_ns"]) for row in phase_rows]
+                  p99 = [int(row["p99_ns"]) for row in phase_rows]
+                  writer.writerow({
+                      "phase": phase,
+                      "runs": len(phase_rows),
+                      "p50_min_ns": min(p50),
+                      "p50_median_ns": int(statistics.median(p50)),
+                      "p50_max_ns": max(p50),
+                      "p95_min_ns": min(p95),
+                      "p95_median_ns": int(statistics.median(p95)),
+                      "p95_max_ns": max(p95),
+                      "p99_min_ns": min(p99),
+                      "p99_median_ns": int(statistics.median(p99)),
+                      "p99_max_ns": max(p99),
+                      "p95_cv": f"{cv(p95):.6f}",
+                      "p99_cv": f"{cv(p99):.6f}",
+                  })
+          PY
+
+          test -s artifacts/read-index-runs.csv
+          test -s artifacts/read-index-variance.csv
+          grep -q '^read_index_idle,' artifacts/read-index-variance.csv
+          grep -q '^read_index_write_load,' artifacts/read-index-variance.csv
 
       - name: Record benchmark environment
         shell: bash
@@ -221,6 +310,17 @@ jobs:
             echo "### Storage snapshot / compaction / resource baseline"
             echo '~~~csv'
             cat artifacts/storage-resource.csv
+            echo '~~~'
+
+            echo
+            echo "### ReadIndex idle / durable write-load runs"
+            echo '~~~csv'
+            cat artifacts/read-index-runs.csv
+            echo '~~~'
+            echo
+            echo "### ReadIndex repeated-run variance"
+            echo '~~~csv'
+            cat artifacts/read-index-variance.csv
             echo '~~~'
           } >> "$GITHUB_STEP_SUMMARY"
 
