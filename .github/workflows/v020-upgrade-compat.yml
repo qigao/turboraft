@@ -298,7 +298,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$OLD_SALTS_UTILS_ROOT/lib:$OLD_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           build/v020-producer/turboraft_v020_fixture_verifier \
             "$GITHUB_WORKSPACE/artifacts/current-to-prior/raft" v0.2.0 \
             | tee artifacts/v020-verifies-current.txt
