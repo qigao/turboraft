@@ -9,6 +9,22 @@
 #undef SCHEMA_GENERATED_H
 #include "turboraft_wire_v3_tbe.h"
 
+/*
+ * SaltsUtils master renamed the generated wire-view primitives from the
+ * released tbe_wire spelling to DataBindBinaryWire. Keep this private codec
+ * source neutral to that generated-API rename; the generated field accessors
+ * still own layout, endian, and bounds semantics in both cases.
+ */
+#if defined(DATA_BIND_BINARY_WIRE_H)
+typedef DataBindBinaryVarData tr_wire_generated_var_data_t;
+#define tr_wire_generated_var_data_end data_bind_binary_wire_var_data_end
+#define tr_wire_generated_write_u32 data_bind_binary_wire_write_u32
+#else
+typedef tbe_var_data_t tr_wire_generated_var_data_t;
+#define tr_wire_generated_var_data_end tbe_wire_var_data_end
+#define tr_wire_generated_write_u32 tbe_wire_write_u32
+#endif
+
 #include <salts_error.h>
 #include <cstl/vec.h>
 
@@ -413,7 +429,7 @@ typedef struct tr_wire_v3_fields {
     uint64_t entry_terms[TR_RAFT_MAX_APPEND_ENTRIES];
     uint64_t entry_commands[TR_RAFT_MAX_APPEND_ENTRIES];
     /* Borrowed from the immutable frame and consumed before decode returns. */
-    DataBindBinaryVarData entry_data[TR_RAFT_MAX_APPEND_ENTRIES];
+    tr_wire_generated_var_data_t entry_data[TR_RAFT_MAX_APPEND_ENTRIES];
 } tr_wire_v3_fields_t;
 
 static bool tr_wire_v3_read_fields(const uint8_t *payload,
@@ -488,7 +504,7 @@ static bool tr_wire_v3_read_fields(const uint8_t *payload,
         !RaftWireMessageV3_entry8_data(&view, &fields->entry_data[7])) {
         return false;
     }
-    return data_bind_binary_wire_var_data_end(&fields->entry_data[7]) ==
+    return tr_wire_generated_var_data_end(&fields->entry_data[7]) ==
            payload + payload_length;
 }
 
@@ -624,7 +640,7 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
 {
     InstallSnapshotChunk_builder_t builder;
     InstallSnapshotChunk_view_t view;
-    DataBindBinaryVarData digest;
+    tr_wire_generated_var_data_t digest;
     uint8_t encoded_configuration[TR_RAFT_CONF_MAX_ENCODED_SIZE];
     size_t encoded_configuration_size = 0U;
     size_t expected_prefix_payload_length;
@@ -704,7 +720,7 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
     }
 
     chunk_length_prefix =
-        (uint8_t *)data_bind_binary_wire_var_data_end(&digest);
+        (uint8_t *)tr_wire_generated_var_data_end(&digest);
     if (chunk_length_prefix < payload ||
         (size_t)(chunk_length_prefix - payload) >
             output_capacity - TR_RAFT_WIRE_HEADER_SIZE ||
@@ -723,7 +739,7 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
         return SALTS_EPROTO;
     }
     payload_length = prefix_payload_length + chunk->data_length;
-    data_bind_binary_wire_write_u32(
+    tr_wire_generated_write_u32(
         chunk_length_prefix, TurboRaftWire_WIRE_BIG_ENDIAN,
         (uint32_t)chunk->data_length);
     tr_wire_write_envelope(output, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK,
@@ -781,9 +797,9 @@ int tr_raft_wire_decode_snapshot_chunk(
     tr_raft_snapshot_chunk_t *chunk)
 {
     InstallSnapshotChunk_view_t wire;
-    DataBindBinaryVarData digest;
-    DataBindBinaryVarData configuration;
-    DataBindBinaryVarData data;
+    tr_wire_generated_var_data_t digest;
+    tr_wire_generated_var_data_t configuration;
+    tr_wire_generated_var_data_t data;
     uint32_t payload_length;
 
     if (codec == NULL || codec->binding == NULL || frame == NULL ||
@@ -801,7 +817,7 @@ int tr_raft_wire_decode_snapshot_chunk(
         !InstallSnapshotChunk_snapshot_configuration(&wire, &configuration) ||
         !InstallSnapshotChunk_snapshot_digest(&wire, &digest) ||
         !InstallSnapshotChunk_chunk_data(&wire, &data) ||
-        data_bind_binary_wire_var_data_end(&data) != frame + frame_length) {
+        tr_wire_generated_var_data_end(&data) != frame + frame_length) {
         return SALTS_EPROTO;
     }
     if (InstallSnapshotChunk_done_get(&wire) > 1U ||
@@ -899,7 +915,7 @@ int tr_raft_wire_decode_snapshot_ack(
     tr_raft_snapshot_ack_t *ack)
 {
     InstallSnapshotAck_view_t wire;
-    DataBindBinaryVarData digest;
+    tr_wire_generated_var_data_t digest;
     uint32_t payload_length;
 
     if (codec == NULL || codec->binding == NULL || frame == NULL ||
@@ -913,7 +929,7 @@ int tr_raft_wire_decode_snapshot_ack(
         !InstallSnapshotAck_view_bind(
             &wire, frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length) ||
         !InstallSnapshotAck_snapshot_digest(&wire, &digest) ||
-        data_bind_binary_wire_var_data_end(&digest) != frame + frame_length ||
+        tr_wire_generated_var_data_end(&digest) != frame + frame_length ||
         InstallSnapshotAck_accepted_get(&wire) > 1U ||
         digest.size != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) {
         return SALTS_EPROTO;
