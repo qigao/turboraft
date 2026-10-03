@@ -1,0 +1,204 @@
+name: v0.2.0 durable upgrade compatibility
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "tests/compat/v020_upgrade/**"
+      - ".github/workflows/v020-upgrade-compat.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  linux-v020-wal-upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+    steps:
+      - name: Checkout current TurboRaft
+        uses: actions/checkout@v4
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare host tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+
+      - name: Restore v0.2.0 released SDK graph
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          feed="$RUNNER_TEMP/v020-feed"
+          packages="$RUNNER_TEMP/v020-packages"
+          config="$RUNNER_TEMP/v020-nuget.config"
+          project="$RUNNER_TEMP/v020-restore.csproj"
+          mkdir -p "$feed" artifacts
+          gh release download v0.2.0 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "TurboRaft.Native.0.2.0.nupkg" \
+            --dir "$feed"
+          sha256sum "$feed/TurboRaft.Native.0.2.0.nupkg" \
+            | tee artifacts/v020-package-sha256.txt
+
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source "$feed" --name prior --configfile "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GH_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="TurboRaft.Native" Version="[0.2.0]" />
+            </ItemGroup>
+          </Project>
+          EOF
+          dotnet restore "$project" --configfile "$config" \
+            --packages "$packages" --no-cache
+
+          for root in \
+            "$packages/turboraft.native/0.2.0/sdk/linux-x64" \
+            "$packages/salts.native/1.8.3/sdk/linux-x64" \
+            "$packages/saltsutils.native/4.1.3/sdk/linux-x64"; do
+            test -d "$root"
+          done
+          echo "PRIOR_TURBORAFT_ROOT=$packages/turboraft.native/0.2.0/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_ROOT=$packages/salts.native/1.8.3/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.1.3/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "PRIOR_PACKAGES=$packages" >> "$GITHUB_ENV"
+
+      - name: Restore native link dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="$RUNNER_TEMP/v020-vcpkg"
+          mkdir -p "$manifest"
+          cat > "$manifest/vcpkg.json" <<'JSON'
+          {
+            "name": "turboraft-v020-upgrade",
+            "version-semver": "0.1.0",
+            "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
+            "dependencies": [
+              { "name": "pkgconf", "host": true },
+              "simde",
+              "zstd",
+              "aklomp-base64",
+              "c-ares",
+              "libuv",
+              "kcp",
+              "boringssl",
+              "miniaudio",
+              "lua",
+              { "name": "zeromq", "default-features": false },
+              { "name": "xxhash", "version>=": "0.8.3" }
+            ]
+          }
+          JSON
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$manifest" \
+            --x-install-root="$VCPKG_INSTALLED_DIR" \
+            --triplet=x64-linux \
+            --only-binarycaching
+
+      - name: Build producer against real v0.2.0 SDK
+        shell: bash
+        env:
+          TURBORAFT_ROOT: ${{ env.PRIOR_TURBORAFT_ROOT }}
+        run: |
+          set -euo pipefail
+          cmake -S tests/compat/v020_upgrade -B build/v020-producer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR"
+          cmake --build build/v020-producer \
+            --target turboraft_v020_fixture_producer --parallel 2
+
+      - name: Produce prior-release durable fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/v020-fixture
+          export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          build/v020-producer/turboraft_v020_fixture_producer \
+            "$GITHUB_WORKSPACE/artifacts/v020-fixture/raft" \
+            | tee artifacts/v020-producer.txt
+          find artifacts/v020-fixture -maxdepth 1 -type f -printf '%f %s bytes\n' \
+            | sort | tee artifacts/v020-fixture-files.txt
+
+      - name: Build current storage-dev SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$GITHUB_WORKSPACE/stage/current"
+          cmake -S . -B build/current-storage -G Ninja \
+            -DTURBORAFT_BUILD_PROFILE=storage-dev \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
+            -DCMAKE_INSTALL_PREFIX="$current" \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=OFF \
+            -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
+          cmake --build build/current-storage --target install --parallel 2
+          test -f "$current/lib/cmake/TurboRaft/TurboRaftConfig.cmake"
+          echo "CURRENT_TURBORAFT_ROOT=$current" >> "$GITHUB_ENV"
+
+      - name: Build current verifier
+        shell: bash
+        env:
+          TURBORAFT_ROOT: ${{ env.CURRENT_TURBORAFT_ROOT }}
+        run: |
+          set -euo pipefail
+          cmake -S tests/compat/v020_upgrade -B build/current-verifier -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR"
+          cmake --build build/current-verifier \
+            --target turboraft_v020_fixture_verifier --parallel 2
+
+      - name: Verify current recovery of v0.2.0 durable state
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          build/current-verifier/turboraft_v020_fixture_verifier \
+            "$GITHUB_WORKSPACE/artifacts/v020-fixture/raft" \
+            | tee artifacts/current-verifier.txt
+          {
+            echo "prior_release=v0.2.0"
+            echo "current_sha=$GITHUB_SHA"
+            echo "salts_package=1.8.3"
+            echo "salts_utils_package=4.1.3"
+            echo "fixture_contract=term/vote/commit+snapshot+membership+retained-log-suffix"
+          } | tee artifacts/upgrade-provenance.txt
+
+      - name: Upload real prior-release compatibility evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v020-upgrade-compat-${{ github.sha }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 30
