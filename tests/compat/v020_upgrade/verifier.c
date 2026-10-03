@@ -114,7 +114,7 @@ int main(int argc, char **argv)
     config.path_prefix = argv[1];
     config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
     config.max_transaction_bytes = 16U * 1024U;
-    config.max_live_segments = 4U;
+    config.max_segments = 4U;
     config.max_log_entries = 16U;
     config.max_snapshot_bytes = 1024U;
     config.create_if_missing = false;
