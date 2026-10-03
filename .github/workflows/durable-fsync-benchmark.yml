@@ -377,6 +377,79 @@ jobs:
           test -s artifacts/snapshot-catchup-variance.csv
           grep -q '^snapshot_wire_catchup,' artifacts/snapshot-catchup-variance.csv
 
+      - name: Enforce stable normalized performance guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import csv
+          import math
+
+          with open("artifacts/wal-fsync-summary.csv", newline="", encoding="utf-8") as handle:
+              rows = list(csv.DictReader(handle))
+          wal = {
+              int(row["batch_size"]): float(row["ns_per_op"])
+              for row in rows
+              if row["boundary"] == "wal_fsync"
+          }
+          required = {1, 4, 8, 16}
+          if set(wal) != required:
+              raise SystemExit(f"missing wal_fsync batches: {sorted(required - set(wal))}")
+
+          speedup_thresholds = {4: 2.0, 8: 4.0, 16: 8.0}
+          guard_rows = []
+          for batch, minimum in speedup_thresholds.items():
+              observed = wal[1] / wal[batch]
+              if not math.isfinite(observed) or observed < minimum:
+                  raise SystemExit(
+                      f"batch {batch} speedup {observed:.3f}x is below {minimum:.1f}x")
+              guard_rows.append({
+                  "guard": f"wal_batch{batch}_speedup",
+                  "observed": f"{observed:.6f}",
+                  "limit": f">={minimum:.1f}",
+                  "status": "pass",
+              })
+
+          with open("artifacts/snapshot-catchup-runs.csv", newline="", encoding="utf-8") as handle:
+              snapshots = list(csv.DictReader(handle))
+          if len(snapshots) != 5:
+              raise SystemExit(f"expected 5 snapshot catch-up runs, found {len(snapshots)}")
+
+          total_wire = {int(row["total_wire_bytes"]) for row in snapshots}
+          payload = {int(row["payload_bytes"]) for row in snapshots}
+          amplification = [float(row["wire_amplification"]) for row in snapshots]
+          if len(total_wire) != 1 or len(payload) != 1:
+              raise SystemExit(
+                  "snapshot wire accounting changed across identical repeated runs")
+          max_amp = max(amplification)
+          if not math.isfinite(max_amp) or max_amp > 1.01:
+              raise SystemExit(
+                  f"snapshot wire amplification {max_amp:.6f} exceeds 1.010000")
+          guard_rows.append({
+              "guard": "snapshot_wire_amplification",
+              "observed": f"{max_amp:.6f}",
+              "limit": "<=1.010000",
+              "status": "pass",
+          })
+          guard_rows.append({
+              "guard": "snapshot_wire_bytes_repeatable",
+              "observed": str(next(iter(total_wire))),
+              "limit": "identical_across_5_runs",
+              "status": "pass",
+          })
+
+          with open("artifacts/performance-guards.csv", "w",
+                    newline="", encoding="utf-8") as handle:
+              writer = csv.DictWriter(
+                  handle, fieldnames=["guard", "observed", "limit", "status"])
+              writer.writeheader()
+              writer.writerows(guard_rows)
+          PY
+          test -s artifacts/performance-guards.csv
+          cat artifacts/performance-guards.csv >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "Absolute hosted-runner latency remains evidence-only; p95/p99 and ReadIndex latency are not hard-gated." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Record benchmark environment
         shell: bash
         run: |
@@ -425,6 +498,12 @@ jobs:
             echo "### Snapshot wire catch-up repeated-run variance"
             echo '~~~csv'
             cat artifacts/snapshot-catchup-variance.csv
+            echo '~~~'
+
+            echo
+            echo "### Stable normalized performance guards"
+            echo '~~~csv'
+            cat artifacts/performance-guards.csv
             echo '~~~'
           } >> "$GITHUB_STEP_SUMMARY"
 
