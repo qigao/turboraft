@@ -89,6 +89,7 @@ jobs:
               "libuv",
               "kcp",
               "boringssl",
+              "gmssl",
               "miniaudio",
               "lua",
               { "name": "zeromq", "default-features": false },
