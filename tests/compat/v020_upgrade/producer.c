@@ -1,4 +1,5 @@
 #include <turboraft/raft_wal_storage.h>
+#include <turboraft/raft_wire_codec.h>
 
 #include <salts_error.h>
 
@@ -21,6 +22,54 @@ static tr_raft_entry_t make_entry(tr_raft_index_t index,
     entry.data_length = size;
     memcpy(entry.data, text, size);
     return entry;
+}
+
+static int write_wire_fixture(const char *prefix)
+{
+    tr_raft_wire_codec_t *codec = NULL;
+    tr_raft_wire_metadata_t metadata;
+    tr_raft_message_t message;
+    uint8_t frame[TR_RAFT_WIRE_MAX_FRAME_SIZE];
+    char path[1024];
+    size_t frame_size = 0U;
+    FILE *output;
+    int result;
+
+    memset(&metadata, 0, sizeof(metadata));
+    memset(&message, 0, sizeof(message));
+    metadata.cluster_id.bytes[0] = 0x42U;
+    metadata.cluster_id.bytes[15] = 0xa5U;
+    metadata.group_id = 100U;
+    metadata.message_id = 55U;
+
+    message.type = TR_RAFT_MSG_APPEND_REQUEST;
+    message.from = 1U;
+    message.to = 2U;
+    message.term = 3U;
+    message.leader_commit = 2U;
+    message.previous_log_index = 1U;
+    message.previous_log_term = 1U;
+    message.entry_count = 1U;
+    message.entries[0] = make_entry(2U, 2U, 42U, "wire");
+
+    result = tr_raft_wire_codec_create(&codec);
+    if (result != SALTS_OK) return result;
+    result = tr_raft_wire_encode(codec, &metadata, &message, frame,
+                                 sizeof(frame), &frame_size);
+    tr_raft_wire_codec_destroy(codec);
+    if (result != SALTS_OK) return result;
+
+    if (snprintf(path, sizeof(path), "%s.wire.bin", prefix) <= 0) {
+        return SALTS_EINVAL;
+    }
+    output = fopen(path, "wb");
+    if (output == NULL) return SALTS_EIO;
+    if (fwrite(frame, 1U, frame_size, output) != frame_size) {
+        (void)fclose(output);
+        return SALTS_EIO;
+    }
+    if (fclose(output) != 0) return SALTS_EIO;
+    return SALTS_OK;
 }
 
 static int fail(const char *stage, int result)
@@ -85,6 +134,9 @@ int main(int argc, char **argv)
 
     result = tr_raft_wal_storage_close(storage);
     if (result != SALTS_OK) return fail("close", result);
+
+    result = write_wire_fixture(argv[1]);
+    if (result != SALTS_OK) return fail("wire", result);
 
     printf("producer=v0.2.0 term=2 voted_for=1 commit=3 snapshot=2/2 "
            "transition=7 suffix_index=3\n");
