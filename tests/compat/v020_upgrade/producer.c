@@ -92,10 +92,13 @@ int main(int argc, char **argv)
     tr_raft_entry_t entries[3];
     int result;
 
-    if (argc != 2 || argv[1][0] == '\0') {
-        fprintf(stderr, "usage: %s <wal-prefix>\n", argv[0]);
+    const char *producer_label;
+
+    if ((argc != 2 && argc != 3) || argv[1][0] == '\0') {
+        fprintf(stderr, "usage: %s <wal-prefix> [producer-label]\n", argv[0]);
         return 2;
     }
+    producer_label = argc == 3 ? argv[2] : "fixture-producer";
 
     memset(&config, 0, sizeof(config));
     config.path_prefix = argv[1];
@@ -138,7 +141,7 @@ int main(int argc, char **argv)
     result = write_wire_fixture(argv[1]);
     if (result != SALTS_OK) return fail("wire", result);
 
-    printf("producer=v0.2.0 term=2 voted_for=1 commit=3 snapshot=2/2 "
-           "transition=7 suffix_index=3\n");
+    printf("producer=%s term=2 voted_for=1 commit=3 snapshot=2/2 "
+           "transition=7 suffix_index=3\n", producer_label);
     return 0;
 }
