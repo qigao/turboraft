@@ -10,7 +10,6 @@
 #include "turboraft_wire_v3_tbe.h"
 
 #include <salts_error.h>
-#include <cstl/byte_buffer.h>
 #include <cstl/vec.h>
 
 #include <stdlib.h>
@@ -21,6 +20,19 @@ static const uint8_t TR_RAFT_WIRE_MAGIC[4] = {'T', 'R', 'F', 'T'};
 struct tr_raft_wire_codec {
     DataBind *binding;
 };
+
+typedef struct tr_wire_var_data_view {
+    const uint8_t *data;
+    size_t size;
+} tr_wire_var_data_view_t;
+
+static const uint8_t *tr_wire_var_data_end(
+    const tr_wire_var_data_view_t *value)
+{
+    return value == NULL || value->data == NULL
+               ? NULL
+               : value->data + value->size;
+}
 
 static void tr_put_u16(uint8_t *output, uint16_t value)
 {
@@ -257,10 +269,11 @@ static int tr_wire_v3_from_message(RaftWireMessageV3_t *wire,
         &wire->entry3_command_id, &wire->entry4_command_id,
         &wire->entry5_command_id, &wire->entry6_command_id,
         &wire->entry7_command_id, &wire->entry8_command_id};
-    stl_byte_buffer *entry_data[TR_RAFT_MAX_APPEND_ENTRIES] = {
-        &wire->entry1_data, &wire->entry2_data, &wire->entry3_data,
-        &wire->entry4_data, &wire->entry5_data, &wire->entry6_data,
-        &wire->entry7_data, &wire->entry8_data};
+    vec_t *entry_data[TR_RAFT_MAX_APPEND_ENTRIES] = {
+        &wire->entry1_data.raw, &wire->entry2_data.raw,
+        &wire->entry3_data.raw, &wire->entry4_data.raw,
+        &wire->entry5_data.raw, &wire->entry6_data.raw,
+        &wire->entry7_data.raw, &wire->entry8_data.raw};
     size_t index;
 
     wire->message_type = (uint8_t) message->type;
@@ -287,13 +300,14 @@ static int tr_wire_v3_from_message(RaftWireMessageV3_t *wire,
         *entry_indices[index] = message->entries[index].index;
         *entry_terms[index] = message->entries[index].term;
         *entry_commands[index] = message->entries[index].command_id;
-        result = tr_raft_stl_status_to_error(stl_byte_buffer_resize(
-            entry_data[index], message->entries[index].data_length));
+        result = tr_raft_stl_status_to_error(
+            vec_resize(entry_data[index],
+                       message->entries[index].data_length));
         if (result != SALTS_OK) {
             return result;
         }
         if (message->entries[index].data_length != 0U) {
-            memcpy(stl_byte_buffer_data(entry_data[index]),
+            memcpy(vec_data(entry_data[index]),
                    message->entries[index].data,
                    message->entries[index].data_length);
         }
@@ -412,7 +426,7 @@ typedef struct tr_wire_v3_fields {
     uint64_t entry_terms[TR_RAFT_MAX_APPEND_ENTRIES];
     uint64_t entry_commands[TR_RAFT_MAX_APPEND_ENTRIES];
     /* Borrowed from the immutable frame and consumed before decode returns. */
-    DataBindBinaryVarData entry_data[TR_RAFT_MAX_APPEND_ENTRIES];
+    tr_wire_var_data_view_t entry_data[TR_RAFT_MAX_APPEND_ENTRIES];
 } tr_wire_v3_fields_t;
 
 static bool tr_wire_v3_read_fields(const uint8_t *payload,
@@ -477,17 +491,25 @@ static bool tr_wire_v3_read_fields(const uint8_t *payload,
     fields->entry_commands[7] =
         RaftWireMessageV3_entry8_command_id_get(&view);
 
-    if (!RaftWireMessageV3_entry1_data(&view, &fields->entry_data[0]) ||
-        !RaftWireMessageV3_entry2_data(&view, &fields->entry_data[1]) ||
-        !RaftWireMessageV3_entry3_data(&view, &fields->entry_data[2]) ||
-        !RaftWireMessageV3_entry4_data(&view, &fields->entry_data[3]) ||
-        !RaftWireMessageV3_entry5_data(&view, &fields->entry_data[4]) ||
-        !RaftWireMessageV3_entry6_data(&view, &fields->entry_data[5]) ||
-        !RaftWireMessageV3_entry7_data(&view, &fields->entry_data[6]) ||
-        !RaftWireMessageV3_entry8_data(&view, &fields->entry_data[7])) {
+    if (!RaftWireMessageV3_entry1_data(
+            &view, (void *)&fields->entry_data[0]) ||
+        !RaftWireMessageV3_entry2_data(
+            &view, (void *)&fields->entry_data[1]) ||
+        !RaftWireMessageV3_entry3_data(
+            &view, (void *)&fields->entry_data[2]) ||
+        !RaftWireMessageV3_entry4_data(
+            &view, (void *)&fields->entry_data[3]) ||
+        !RaftWireMessageV3_entry5_data(
+            &view, (void *)&fields->entry_data[4]) ||
+        !RaftWireMessageV3_entry6_data(
+            &view, (void *)&fields->entry_data[5]) ||
+        !RaftWireMessageV3_entry7_data(
+            &view, (void *)&fields->entry_data[6]) ||
+        !RaftWireMessageV3_entry8_data(
+            &view, (void *)&fields->entry_data[7])) {
         return false;
     }
-    return data_bind_binary_wire_var_data_end(&fields->entry_data[7]) ==
+    return tr_wire_var_data_end(&fields->entry_data[7]) ==
            payload + payload_length;
 }
 
@@ -623,7 +645,7 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
 {
     InstallSnapshotChunk_builder_t builder;
     InstallSnapshotChunk_view_t view;
-    DataBindBinaryVarData digest;
+    tr_wire_var_data_view_t digest;
     uint8_t encoded_configuration[TR_RAFT_CONF_MAX_ENCODED_SIZE];
     size_t encoded_configuration_size = 0U;
     size_t expected_prefix_payload_length;
@@ -698,11 +720,11 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
         !InstallSnapshotChunk_view_bind(
             &view, payload,
             output_capacity - TR_RAFT_WIRE_HEADER_SIZE) ||
-        !InstallSnapshotChunk_snapshot_digest(&view, &digest)) {
+        !InstallSnapshotChunk_snapshot_digest(&view, (void *)&digest)) {
         return SALTS_EPROTO;
     }
 
-    chunk_length_prefix = (uint8_t *)data_bind_binary_wire_var_data_end(&digest);
+    chunk_length_prefix = (uint8_t *)tr_wire_var_data_end(&digest);
     if (chunk_length_prefix < payload ||
         (size_t)(chunk_length_prefix - payload) >
             output_capacity - TR_RAFT_WIRE_HEADER_SIZE ||
@@ -721,9 +743,7 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
         return SALTS_EPROTO;
     }
     payload_length = prefix_payload_length + chunk->data_length;
-    data_bind_binary_wire_write_u32(
-        chunk_length_prefix, TurboRaftWire_WIRE_BIG_ENDIAN,
-        (uint32_t)chunk->data_length);
+    tr_put_u32(chunk_length_prefix, (uint32_t)chunk->data_length);
     tr_wire_write_envelope(output, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK,
                            payload_length, metadata);
     return SALTS_OK;
@@ -779,9 +799,9 @@ int tr_raft_wire_decode_snapshot_chunk(
     tr_raft_snapshot_chunk_t *chunk)
 {
     InstallSnapshotChunk_view_t wire;
-    DataBindBinaryVarData digest;
-    DataBindBinaryVarData configuration;
-    DataBindBinaryVarData data;
+    tr_wire_var_data_view_t digest;
+    tr_wire_var_data_view_t configuration;
+    tr_wire_var_data_view_t data;
     uint32_t payload_length;
 
     if (codec == NULL || codec->binding == NULL || frame == NULL ||
@@ -796,10 +816,11 @@ int tr_raft_wire_decode_snapshot_chunk(
     }
     if (!InstallSnapshotChunk_view_bind(
             &wire, frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length) ||
-        !InstallSnapshotChunk_snapshot_configuration(&wire, &configuration) ||
-        !InstallSnapshotChunk_snapshot_digest(&wire, &digest) ||
-        !InstallSnapshotChunk_chunk_data(&wire, &data) ||
-        data_bind_binary_wire_var_data_end(&data) != frame + frame_length) {
+        !InstallSnapshotChunk_snapshot_configuration(
+            &wire, (void *)&configuration) ||
+        !InstallSnapshotChunk_snapshot_digest(&wire, (void *)&digest) ||
+        !InstallSnapshotChunk_chunk_data(&wire, (void *)&data) ||
+        tr_wire_var_data_end(&data) != frame + frame_length) {
         return SALTS_EPROTO;
     }
     if (InstallSnapshotChunk_done_get(&wire) > 1U ||
@@ -841,11 +862,11 @@ int tr_raft_wire_encode_snapshot_ack(
     size_t output_capacity,
     size_t *output_length)
 {
-    InstallSnapshotAck_t wire;
-    DataBindError error = DATA_BIND_ERROR_INIT;
-    DataBindStatus status;
-    size_t payload_length = 0U;
-    int result;
+    const size_t payload_length =
+        InstallSnapshotAck_BLOCK_LENGTH + sizeof(uint32_t) +
+        TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE;
+    InstallSnapshotAck_builder_t builder;
+    uint8_t *payload;
 
     if (output_length != NULL) {
         *output_length = 0U;
@@ -856,41 +877,31 @@ int tr_raft_wire_encode_snapshot_ack(
         output_length == NULL) {
         return SALTS_EINVAL;
     }
-    if (output_capacity < TR_RAFT_WIRE_HEADER_SIZE) {
-        *output_length = TR_RAFT_WIRE_HEADER_SIZE;
+    *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
+    if (payload_length >
+            tr_wire_payload_limit(TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK) ||
+        output_capacity < *output_length) {
         return SALTS_ENOSPC;
     }
 
-    InstallSnapshotAck_init(&wire);
-    wire.from_node = ack->from;
-    wire.to_node = ack->to;
-    wire.term = ack->term;
-    wire.snapshot_index = ack->snapshot_index;
-    wire.snapshot_size = ack->snapshot_size;
-    wire.next_offset = ack->next_offset;
-    wire.accepted = ack->accepted ? 1U : 0U;
-    result = tr_raft_stl_status_to_error(stl_byte_buffer_resize(
-        &wire.snapshot_digest, TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE));
-    if (result == SALTS_OK) {
-        memcpy(stl_byte_buffer_data(&wire.snapshot_digest), ack->snapshot_digest,
-               TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE);
-    }
-    if (result != SALTS_OK) {
-        InstallSnapshotAck_clear(&wire);
-        return result;
-    }
-
-    status = InstallSnapshotAck_to_bin_into(
-        &wire, output + TR_RAFT_WIRE_HEADER_SIZE,
-        output_capacity - TR_RAFT_WIRE_HEADER_SIZE,
-        &payload_length, &error);
-    InstallSnapshotAck_clear(&wire);
-    *output_length = TR_RAFT_WIRE_HEADER_SIZE + payload_length;
-    if (status != DATA_BIND_OK) {
-        return *output_length > output_capacity ? SALTS_ENOSPC : SALTS_EPROTO;
-    }
-    if (payload_length >
-        tr_wire_payload_limit(TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK)) {
+    payload = output + TR_RAFT_WIRE_HEADER_SIZE;
+    if (!InstallSnapshotAck_builder_bind(
+            &builder, payload,
+            output_capacity - TR_RAFT_WIRE_HEADER_SIZE) ||
+        !InstallSnapshotAck_from_node_set(&builder, ack->from) ||
+        !InstallSnapshotAck_to_node_set(&builder, ack->to) ||
+        !InstallSnapshotAck_term_set(&builder, ack->term) ||
+        !InstallSnapshotAck_snapshot_index_set(
+            &builder, ack->snapshot_index) ||
+        !InstallSnapshotAck_snapshot_size_set(
+            &builder, ack->snapshot_size) ||
+        !InstallSnapshotAck_next_offset_set(
+            &builder, ack->next_offset) ||
+        !InstallSnapshotAck_accepted_set(
+            &builder, ack->accepted ? 1U : 0U) ||
+        !InstallSnapshotAck_snapshot_digest_set(
+            &builder, ack->snapshot_digest,
+            TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE)) {
         return SALTS_EPROTO;
     }
 
@@ -906,11 +917,9 @@ int tr_raft_wire_decode_snapshot_ack(
     tr_raft_wire_metadata_t *metadata,
     tr_raft_snapshot_ack_t *ack)
 {
-    InstallSnapshotAck_t wire;
-    DataBindError error = DATA_BIND_ERROR_INIT;
+    InstallSnapshotAck_view_t wire;
+    tr_wire_var_data_view_t digest;
     uint32_t payload_length;
-    size_t digest_length;
-    DataBindStatus status;
 
     if (codec == NULL || codec->binding == NULL || frame == NULL ||
         metadata == NULL || ack == NULL ||
@@ -919,36 +928,25 @@ int tr_raft_wire_decode_snapshot_ack(
     }
     if (tr_wire_read_envelope(
             frame, frame_length, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK,
-            metadata, &payload_length) != SALTS_OK) {
-        return SALTS_EPROTO;
-    }
-
-    InstallSnapshotAck_init(&wire);
-    status = InstallSnapshotAck_from_bin(
-        codec->binding, &wire, frame + TR_RAFT_WIRE_HEADER_SIZE,
-        payload_length, &error);
-    if (status != DATA_BIND_OK) {
-        InstallSnapshotAck_clear(&wire);
-        return SALTS_EPROTO;
-    }
-    digest_length = stl_byte_buffer_size(&wire.snapshot_digest);
-    if (wire.accepted > 1U ||
-        digest_length != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) {
-        InstallSnapshotAck_clear(&wire);
+            metadata, &payload_length) != SALTS_OK ||
+        !InstallSnapshotAck_view_bind(
+            &wire, frame + TR_RAFT_WIRE_HEADER_SIZE, payload_length) ||
+        !InstallSnapshotAck_snapshot_digest(&wire, (void *)&digest) ||
+        tr_wire_var_data_end(&digest) != frame + frame_length ||
+        InstallSnapshotAck_accepted_get(&wire) > 1U ||
+        digest.size != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) {
         return SALTS_EPROTO;
     }
 
     memset(ack, 0, sizeof(*ack));
-    ack->from = wire.from_node;
-    ack->to = wire.to_node;
-    ack->term = wire.term;
-    ack->snapshot_index = wire.snapshot_index;
-    ack->snapshot_size = wire.snapshot_size;
-    ack->next_offset = wire.next_offset;
-    ack->accepted = wire.accepted != 0U;
-    memcpy(ack->snapshot_digest, stl_byte_buffer_data(&wire.snapshot_digest),
-           digest_length);
-    InstallSnapshotAck_clear(&wire);
+    ack->from = InstallSnapshotAck_from_node_get(&wire);
+    ack->to = InstallSnapshotAck_to_node_get(&wire);
+    ack->term = InstallSnapshotAck_term_get(&wire);
+    ack->snapshot_index = InstallSnapshotAck_snapshot_index_get(&wire);
+    ack->snapshot_size = InstallSnapshotAck_snapshot_size_get(&wire);
+    ack->next_offset = InstallSnapshotAck_next_offset_get(&wire);
+    ack->accepted = InstallSnapshotAck_accepted_get(&wire) != 0U;
+    memcpy(ack->snapshot_digest, digest.data, digest.size);
     return tr_snapshot_ack_valid(ack) ? SALTS_OK : SALTS_EPROTO;
 }
 
