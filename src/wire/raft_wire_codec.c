@@ -10,6 +10,7 @@
 #include "turboraft_wire_v3_tbe.h"
 
 #include <salts_error.h>
+#include <cstl/byte_buffer.h>
 #include <cstl/vec.h>
 
 #include <stdlib.h>
@@ -256,7 +257,7 @@ static int tr_wire_v3_from_message(RaftWireMessageV3_t *wire,
         &wire->entry3_command_id, &wire->entry4_command_id,
         &wire->entry5_command_id, &wire->entry6_command_id,
         &wire->entry7_command_id, &wire->entry8_command_id};
-    tbe_bytes_t *entry_data[TR_RAFT_MAX_APPEND_ENTRIES] = {
+    stl_byte_buffer *entry_data[TR_RAFT_MAX_APPEND_ENTRIES] = {
         &wire->entry1_data, &wire->entry2_data, &wire->entry3_data,
         &wire->entry4_data, &wire->entry5_data, &wire->entry6_data,
         &wire->entry7_data, &wire->entry8_data};
@@ -286,13 +287,13 @@ static int tr_wire_v3_from_message(RaftWireMessageV3_t *wire,
         *entry_indices[index] = message->entries[index].index;
         *entry_terms[index] = message->entries[index].term;
         *entry_commands[index] = message->entries[index].command_id;
-        result = tr_raft_stl_status_to_error(vec_resize(
-            &entry_data[index]->raw, message->entries[index].data_length));
+        result = tr_raft_stl_status_to_error(stl_byte_buffer_resize(
+            entry_data[index], message->entries[index].data_length));
         if (result != SALTS_OK) {
             return result;
         }
         if (message->entries[index].data_length != 0U) {
-            memcpy(tbe_bytes_t_data(entry_data[index]),
+            memcpy(stl_byte_buffer_data(entry_data[index]),
                    message->entries[index].data,
                    message->entries[index].data_length);
         }
@@ -411,7 +412,7 @@ typedef struct tr_wire_v3_fields {
     uint64_t entry_terms[TR_RAFT_MAX_APPEND_ENTRIES];
     uint64_t entry_commands[TR_RAFT_MAX_APPEND_ENTRIES];
     /* Borrowed from the immutable frame and consumed before decode returns. */
-    tbe_var_data_t entry_data[TR_RAFT_MAX_APPEND_ENTRIES];
+    DataBindBinaryVarData entry_data[TR_RAFT_MAX_APPEND_ENTRIES];
 } tr_wire_v3_fields_t;
 
 static bool tr_wire_v3_read_fields(const uint8_t *payload,
@@ -486,7 +487,7 @@ static bool tr_wire_v3_read_fields(const uint8_t *payload,
         !RaftWireMessageV3_entry8_data(&view, &fields->entry_data[7])) {
         return false;
     }
-    return tbe_wire_var_data_end(&fields->entry_data[7]) ==
+    return data_bind_binary_wire_var_data_end(&fields->entry_data[7]) ==
            payload + payload_length;
 }
 
@@ -622,7 +623,7 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
 {
     InstallSnapshotChunk_builder_t builder;
     InstallSnapshotChunk_view_t view;
-    tbe_var_data_t digest;
+    DataBindBinaryVarData digest;
     uint8_t encoded_configuration[TR_RAFT_CONF_MAX_ENCODED_SIZE];
     size_t encoded_configuration_size = 0U;
     size_t expected_prefix_payload_length;
@@ -701,7 +702,7 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
         return SALTS_EPROTO;
     }
 
-    chunk_length_prefix = (uint8_t *)tbe_wire_var_data_end(&digest);
+    chunk_length_prefix = (uint8_t *)data_bind_binary_wire_var_data_end(&digest);
     if (chunk_length_prefix < payload ||
         (size_t)(chunk_length_prefix - payload) >
             output_capacity - TR_RAFT_WIRE_HEADER_SIZE ||
@@ -720,9 +721,9 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
         return SALTS_EPROTO;
     }
     payload_length = prefix_payload_length + chunk->data_length;
-    tbe_wire_write_u32(chunk_length_prefix,
-                       TurboRaftWire_WIRE_BIG_ENDIAN,
-                       (uint32_t)chunk->data_length);
+    data_bind_binary_wire_write_u32(
+        chunk_length_prefix, TurboRaftWire_WIRE_BIG_ENDIAN,
+        (uint32_t)chunk->data_length);
     tr_wire_write_envelope(output, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK,
                            payload_length, metadata);
     return SALTS_OK;
@@ -778,9 +779,9 @@ int tr_raft_wire_decode_snapshot_chunk(
     tr_raft_snapshot_chunk_t *chunk)
 {
     InstallSnapshotChunk_view_t wire;
-    tbe_var_data_t digest;
-    tbe_var_data_t configuration;
-    tbe_var_data_t data;
+    DataBindBinaryVarData digest;
+    DataBindBinaryVarData configuration;
+    DataBindBinaryVarData data;
     uint32_t payload_length;
 
     if (codec == NULL || codec->binding == NULL || frame == NULL ||
@@ -798,7 +799,7 @@ int tr_raft_wire_decode_snapshot_chunk(
         !InstallSnapshotChunk_snapshot_configuration(&wire, &configuration) ||
         !InstallSnapshotChunk_snapshot_digest(&wire, &digest) ||
         !InstallSnapshotChunk_chunk_data(&wire, &data) ||
-        tbe_wire_var_data_end(&data) != frame + frame_length) {
+        data_bind_binary_wire_var_data_end(&data) != frame + frame_length) {
         return SALTS_EPROTO;
     }
     if (InstallSnapshotChunk_done_get(&wire) > 1U ||
@@ -868,10 +869,10 @@ int tr_raft_wire_encode_snapshot_ack(
     wire.snapshot_size = ack->snapshot_size;
     wire.next_offset = ack->next_offset;
     wire.accepted = ack->accepted ? 1U : 0U;
-    result = tr_raft_stl_status_to_error(vec_resize(
-        &wire.snapshot_digest.raw, TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE));
+    result = tr_raft_stl_status_to_error(stl_byte_buffer_resize(
+        &wire.snapshot_digest, TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE));
     if (result == SALTS_OK) {
-        memcpy(tbe_bytes_t_data(&wire.snapshot_digest), ack->snapshot_digest,
+        memcpy(stl_byte_buffer_data(&wire.snapshot_digest), ack->snapshot_digest,
                TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE);
     }
     if (result != SALTS_OK) {
@@ -930,7 +931,7 @@ int tr_raft_wire_decode_snapshot_ack(
         InstallSnapshotAck_clear(&wire);
         return SALTS_EPROTO;
     }
-    digest_length = tbe_bytes_t_size(&wire.snapshot_digest);
+    digest_length = stl_byte_buffer_size(&wire.snapshot_digest);
     if (wire.accepted > 1U ||
         digest_length != TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) {
         InstallSnapshotAck_clear(&wire);
@@ -945,7 +946,7 @@ int tr_raft_wire_decode_snapshot_ack(
     ack->snapshot_size = wire.snapshot_size;
     ack->next_offset = wire.next_offset;
     ack->accepted = wire.accepted != 0U;
-    memcpy(ack->snapshot_digest, tbe_bytes_t_data(&wire.snapshot_digest),
+    memcpy(ack->snapshot_digest, stl_byte_buffer_data(&wire.snapshot_digest),
            digest_length);
     InstallSnapshotAck_clear(&wire);
     return tr_snapshot_ack_valid(ack) ? SALTS_OK : SALTS_EPROTO;
