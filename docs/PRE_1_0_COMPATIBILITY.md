@@ -146,6 +146,19 @@ The existing single-owner Core/Service rule, Ready ownership, storage
 transaction boundary, reliable-local-queue transport admission rule, and
 snapshot source/sink lifetime rules are therefore compatibility surface.
 
+The current public callback surface is also retained in machine-readable form
+at `share/turboraft/abi/PUBLIC_CALLBACK_CONTRACTS.json` in packaged SDKs.
+Callbacks are grouped into semantic families so repeated callback-table fields
+share one owner/borrowing/re-entry/failure contract without duplicating prose.
+Native SDK qualification rediscovers callback typedefs and function-pointer
+fields from the **installed public headers** and requires exact manifest
+coverage. A newly installed callback therefore fails qualification until it is
+explicitly assigned a contract family.
+
+This manifest records the current pre-1.0 surface. It is compatibility evidence,
+not a claim that every current callback signature is already frozen as the 1.0
+ABI.
+
 ## Error compatibility
 
 TurboRaft returns Salts status codes. After the 1.0 baseline:
@@ -255,8 +268,9 @@ true:
 
 - [ ] every installed public header is classified as opaque, frozen-layout, or
       explicit version+size;
-- [ ] every public callback documents owner, borrowing, retention, re-entry,
-      and failure semantics;
+- [x] every current public callback is covered by the packaged callback
+      contract manifest with owner, borrowing, retention, re-entry, failure,
+      and release semantics;
 - [x] `tr_raft_runtime_t` uses an opaque create/destroy handle;
 - [x] current packaged SDKs capture public enum numeric inventories;
 - [x] Linux and Windows packaged SDKs produce a retained symbol inventory;

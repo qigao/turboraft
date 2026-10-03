@@ -667,6 +667,9 @@ install(
   PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/tools/turboraft_incident_bundle.py"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/tools")
 install(
+  FILES "${CMAKE_CURRENT_SOURCE_DIR}/docs/PUBLIC_CALLBACK_CONTRACTS.json"
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/abi")
+install(
   EXPORT TurboRaftTargets
   FILE TurboRaftTargets.cmake
   NAMESPACE TurboRaft::

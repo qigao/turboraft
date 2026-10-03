@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "status": "pre-1.0-current-surface",
+  "note": "This manifest classifies the current public callback surface. It is retained compatibility evidence, not the frozen 1.0 baseline.",
+  "families": {
+    "runtime_storage_transaction": {
+      "owner": "Invoked synchronously by the single Runtime/Service owner while processing one outstanding Ready.",
+      "borrow": "The callback context is borrowed for the Runtime lifetime. Entry arrays and other pointer inputs are borrowed only for the callback duration.",
+      "retain": "Borrowed TurboRaft input pointers must not be retained. The storage backend may retain only its own copied transaction state until commit or rollback.",
+      "reentry": "Must not re-enter the same Runtime, Service, or Core while the callback is active.",
+      "failure": "A non-success storage step means the current durability sequence did not complete. Runtime does not advance Core or apply the FSM past an unproven durability boundary; rollback is best-effort and its error is reported separately.",
+      "release": "TurboRaft receives no owned resource from these callbacks; the backend owns and releases its context and transaction resources."
+    },
+    "runtime_transport_admission": {
+      "owner": "Invoked synchronously by the Runtime/Service owner.",
+      "borrow": "Message and snapshot request pointers are borrowed only for the callback duration.",
+      "retain": "On SALTS_OK the transport must have made an independent local admission/copy sufficient for the caller to release the input. The input pointer itself must not be retained.",
+      "reentry": "Must not re-enter the same Runtime, Service, or Core while admission is in progress.",
+      "failure": "SALTS_OK means reliable local admission, not remote delivery. SALTS_ENOSPC is capacity backpressure where the Service contract permits retry/pause; other non-success values are fail-fast transport errors.",
+      "release": "After SALTS_OK the transport owns its admitted copy/queue item and releases it according to the transport contract."
+    },
+    "runtime_state_machine_apply": {
+      "owner": "Invoked synchronously by the Runtime/Service owner only after the corresponding storage durability sequence succeeds.",
+      "borrow": "The committed entry array is borrowed only for the callback duration.",
+      "retain": "The callback must not retain TurboRaft entry pointers; copy application data if later use is required.",
+      "reentry": "Must not re-enter the same Runtime, Service, or Core while apply is active.",
+      "failure": "Non-success faults the current Runtime/Service apply path and does not advance the public applied boundary.",
+      "release": "No resource ownership is transferred to TurboRaft."
+    },
+    "async_apply_state_machine": {
+      "owner": "Invoked synchronously by the single ApplyRuntime owner.",
+      "borrow": "try_apply borrows the entry only for the call. poll_settlement writes into caller-owned output storage.",
+      "retain": "ACCEPTED requires the state machine to own an independent copy. FULL transfers no ownership. TurboRaft does not retain callback-owned settlement storage.",
+      "reentry": "Must not re-enter the same ApplyRuntime or its Core while either callback is active.",
+      "failure": "FULL authorizes exact admission retry. PENDING settlement authorizes exact retry of the same token. Other settlements are terminal. Callback non-success outside these typed outcomes faults the ApplyRuntime.",
+      "release": "The state machine releases any independently copied accepted entry and settlement resources on its side; no pointer returned by poll_settlement is retained by TurboRaft."
+    },
+    "cflow_decode": {
+      "owner": "Invoked synchronously by the CFlow state-machine adapter on its owner thread.",
+      "borrow": "The Raft entry is borrowed only for the decoder call; out_event is caller-owned output storage.",
+      "retain": "Decoder scratch and the entry pointer must not be retained. CFlow copies the bounded event payload before admission returns.",
+      "reentry": "Must not re-enter the same CFlow adapter/ApplyRuntime while decoding.",
+      "failure": "Any non-success decode result rejects the entry and is propagated through the state-machine admission path.",
+      "release": "No resource ownership is transferred; variable-length commands must be represented by bounded self-contained event data."
+    },
+    "control_audit_sink": {
+      "owner": "Invoked synchronously on the thread that emits the control audit event.",
+      "borrow": "The audit event pointer is borrowed only for the sink call.",
+      "retain": "The sink must copy the event if it needs data after return.",
+      "reentry": "Must not recursively emit through the same audit object from the sink.",
+      "failure": "For required audit sinks, non-success is propagated. For optional sinks, non-success is counted as a dropped audit event and the control path continues.",
+      "release": "No resource ownership is transferred."
+    },
+    "control_status_provider": {
+      "owner": "Invoked by the standalone CHttp/CRPC owner thread servicing the control request.",
+      "borrow": "The provider receives caller-owned output status storage and no retainable TurboRaft pointer.",
+      "retain": "The provider must not retain the output pointer. If Raft belongs to another owner, status must be copied through an executor/mailbox.",
+      "reentry": "Must not directly re-enter a single-owner Raft Service owned by another thread; recursive entry through the same ControlPlane request is unsupported.",
+      "failure": "Non-success makes the status request unavailable and is translated to the control-plane error response.",
+      "release": "No resource ownership is transferred."
+    },
+    "immutable_source": {
+      "owner": "read_at/release are invoked synchronously by the owning snapshot/data sender on its single owner thread.",
+      "borrow": "read_at receives a borrowed bounded output buffer for the call. The source context remains owned by the transferred source descriptor until release.",
+      "retain": "read_at must not retain the output buffer. A successfully transferred source may retain its own context until the matching release callback.",
+      "reentry": "Must not re-enter the same sender/manager while read_at or release is active.",
+      "failure": "A read_at non-success aborts/fails the current transfer according to the sender contract. release is terminal and cannot fail.",
+      "release": "Source ownership transfers on successful source admission; release is invoked exactly once when that ownership ends."
+    },
+    "stream_sink": {
+      "owner": "begin/write/commit/abort are invoked synchronously by the owning receiver on its single owner thread.",
+      "borrow": "Configuration/digest/data pointers are borrowed only for each callback duration.",
+      "retain": "The sink may copy/stage bytes into its own storage but must not retain TurboRaft input pointers.",
+      "reentry": "Must not re-enter the same receiver while a sink callback is active.",
+      "failure": "Non-success from begin/write/commit fails the receive operation. commit SALTS_OK is the visibility/completion boundary; abort discards any incomplete staging.",
+      "release": "The sink owns and releases its internal staging resources; TurboRaft transfers no input pointer ownership."
+    },
+    "service_snapshot_buffered": {
+      "owner": "Invoked synchronously by the single Service owner during automatic snapshot processing.",
+      "borrow": "create receives a borrowed output buffer; store receives borrowed configuration/data for the call.",
+      "retain": "The callbacks must not retain TurboRaft-provided buffers, configuration pointers, or data pointers.",
+      "reentry": "Must not re-enter the same Service/Core while snapshot callbacks are active.",
+      "failure": "store must make the snapshot durable before SALTS_OK. Non-success prevents Core compaction/ack past the snapshot boundary and follows Service fault handling.",
+      "release": "No resource ownership is transferred."
+    },
+    "service_snapshot_source": {
+      "owner": "Invoked synchronously by the single Service owner.",
+      "borrow": "source_store borrows the source descriptor and configuration only for the call.",
+      "retain": "source_create SALTS_OK transfers one owned immutable source to Service. source_store must not retain the source after return.",
+      "reentry": "Must not re-enter the same Service/Core while source_create/source_store is active.",
+      "failure": "source_store must make the snapshot durable before SALTS_OK. Failed creation transfers no usable source; failed store does not make the snapshot authoritative.",
+      "release": "Service invokes the source release callback exactly once after source_store returns, regardless of store success or failure."
+    },
+    "service_journal_compact": {
+      "owner": "Invoked synchronously by the Service owner only after the corresponding snapshot is durable.",
+      "borrow": "The callback context is borrowed by Service; index/term are values.",
+      "retain": "No TurboRaft pointer is available to retain.",
+      "reentry": "Must not re-enter the same Service/Core.",
+      "failure": "SALTS_EIO keeps the exact snapshot index/term pending for retry. Any other non-success faults Service without compacting Core.",
+      "release": "No resource ownership is transferred."
+    },
+    "snapshot_manager_enqueue": {
+      "owner": "Invoked synchronously by the SnapshotManager owner while scheduling peer payloads.",
+      "borrow": "The payload pointer is borrowed only for the callback duration.",
+      "retain": "SALTS_OK requires independent local admission/copy; the payload pointer itself must not be retained.",
+      "reentry": "Must not re-enter the same SnapshotManager during enqueue.",
+      "failure": "SALTS_ENOSPC represents bounded transport backpressure; other non-success values fail the manager operation.",
+      "release": "After successful admission the transport owns and releases its queued copy."
+    },
+    "snapshot_manager_buffered_provider": {
+      "owner": "Invoked synchronously by the SnapshotManager owner when a peer requires a snapshot.",
+      "borrow": "Output point/buffer storage is owned by the manager for the call.",
+      "retain": "The provider must not retain manager-owned output storage after return.",
+      "reentry": "Must not re-enter the same SnapshotManager.",
+      "failure": "Non-success means no buffered snapshot is admitted for the request.",
+      "release": "No resource ownership is transferred."
+    },
+    "snapshot_manager_source_provider": {
+      "owner": "Invoked synchronously by the SnapshotManager owner when a peer requires a database-scale snapshot.",
+      "borrow": "out_point/out_source are caller-owned output storage.",
+      "retain": "SALTS_OK returns an owned immutable source descriptor. Ownership transfers into the peer sender only when the request is admitted.",
+      "reentry": "Must not re-enter the same SnapshotManager/sender during provider execution.",
+      "failure": "Non-success transfers no source ownership and the snapshot request is not admitted.",
+      "release": "Once admitted, the peer sender owns the source and eventually calls its release callback exactly once."
+    },
+    "snapshot_manager_complete": {
+      "owner": "Invoked synchronously by the SnapshotManager owner after the remote peer acknowledges the complete snapshot.",
+      "borrow": "Only value arguments and borrowed context are supplied.",
+      "retain": "No TurboRaft pointer is available to retain.",
+      "reentry": "Must not re-enter the same SnapshotManager.",
+      "failure": "Non-success is propagated as completion failure; it does not revoke the already received remote acknowledgement.",
+      "release": "No resource ownership is transferred."
+    },
+    "snapshot_install": {
+      "owner": "Invoked synchronously by the SnapshotReceiver owner after a complete buffered snapshot passes validation.",
+      "borrow": "Configuration and snapshot data are borrowed only for the install call.",
+      "retain": "The callback must copy any data needed after return and must not retain TurboRaft input pointers.",
+      "reentry": "Must not re-enter the same SnapshotReceiver or owning Service during installation.",
+      "failure": "SALTS_OK is the installed/visible boundary for the buffered path. Non-success leaves the receive result uninstalled.",
+      "release": "No resource ownership is transferred."
+    },
+    "transport_payload_handler": {
+      "owner": "Invoked synchronously by tr_raft_transport_feed on the caller/TransportSession owner thread.",
+      "borrow": "Decoded payload values and nested views are borrowed only for the callback duration.",
+      "retain": "The handler must copy payload data needed after return.",
+      "reentry": "Must not re-enter the same TransportSession feed path while the callback is active.",
+      "failure": "The first non-success handler result is propagated from feed and the payload is not reported as successfully consumed.",
+      "release": "No resource ownership is transferred."
+    },
+    "text_executor_sink": {
+      "owner": "Invoked synchronously on the thread executing the parsed text plan.",
+      "borrow": "Command/frame/status/member/progress views are borrowed only for the callback duration.",
+      "retain": "Callbacks must copy any view needed after return.",
+      "reentry": "Recursive execution of the same executor/service operation is unsupported; Service-backed query callbacks must respect the single-owner Service rule.",
+      "failure": "The first non-success callback result is returned unchanged and stops plan execution.",
+      "release": "No resource ownership is transferred."
+    },
+    "replay_driver": {
+      "owner": "Invoked synchronously by the single replay driver execution thread.",
+      "borrow": "Committed entry arrays and output tick storage are borrowed for the callback duration.",
+      "retain": "The apply callback must copy entries needed later; the timeout callback must not retain out_ticks.",
+      "reentry": "Must not re-enter the same replay driver.",
+      "failure": "A non-success timeout/apply callback aborts the current replay action/run and is propagated.",
+      "release": "No resource ownership is transferred."
+    },
+    "replay_executor": {
+      "owner": "Invoked synchronously in replay plan order on the caller thread.",
+      "borrow": "Action/payload/receipt views are borrowed only for the callback duration.",
+      "retain": "Callbacks must copy borrowed action/payload/receipt data needed later.",
+      "reentry": "Recursive execution of the same replay executor is unsupported.",
+      "failure": "The first callback failure is returned unchanged and stops execution; unknown request ids and duplicate ids use the documented deterministic errors.",
+      "release": "Receipts are executor-owned values; no pointer/resource ownership is transferred."
+    }
+  },
+  "callbacks": {
+    "tr_raft_entry_state_machine_v1_t.try_apply": "async_apply_state_machine",
+    "tr_raft_entry_state_machine_v1_t.poll_settlement": "async_apply_state_machine",
+    "tr_raft_cflow_decode_entry_fn": "cflow_decode",
+    "tr_raft_control_audit_sink_fn": "control_audit_sink",
+    "tr_raft_control_status_provider_fn": "control_status_provider",
+    "tr_raft_data_stream_source_read_at_fn": "immutable_source",
+    "tr_raft_data_stream_source_release_fn": "immutable_source",
+    "tr_raft_data_stream_begin_fn": "stream_sink",
+    "tr_raft_data_stream_write_fn": "stream_sink",
+    "tr_raft_data_stream_commit_fn": "stream_sink",
+    "tr_raft_data_stream_abort_fn": "stream_sink",
+    "tr_raft_storage_t.begin": "runtime_storage_transaction",
+    "tr_raft_storage_t.write_hard_state": "runtime_storage_transaction",
+    "tr_raft_storage_t.truncate_log": "runtime_storage_transaction",
+    "tr_raft_storage_t.append_log": "runtime_storage_transaction",
+    "tr_raft_storage_t.write_commit_index": "runtime_storage_transaction",
+    "tr_raft_storage_t.commit": "runtime_storage_transaction",
+    "tr_raft_storage_t.rollback": "runtime_storage_transaction",
+    "tr_raft_transport_t.enqueue": "runtime_transport_admission",
+    "tr_raft_transport_t.enqueue_snapshot": "runtime_transport_admission",
+    "tr_raft_state_machine_t.apply_batch": "runtime_state_machine_apply",
+    "tr_raft_snapshot_create_fn": "service_snapshot_buffered",
+    "tr_raft_snapshot_store_fn": "service_snapshot_buffered",
+    "tr_raft_snapshot_source_create_fn": "service_snapshot_source",
+    "tr_raft_snapshot_source_store_fn": "service_snapshot_source",
+    "tr_raft_snapshot_journal_compact_fn": "service_journal_compact",
+    "tr_raft_snapshot_manager_payload_enqueue_fn": "snapshot_manager_enqueue",
+    "tr_raft_snapshot_provider_fn": "snapshot_manager_buffered_provider",
+    "tr_raft_snapshot_source_provider_fn": "snapshot_manager_source_provider",
+    "tr_raft_snapshot_complete_fn": "snapshot_manager_complete",
+    "tr_raft_snapshot_install_fn": "snapshot_install",
+    "tr_raft_snapshot_source_read_at_fn": "immutable_source",
+    "tr_raft_snapshot_source_release_fn": "immutable_source",
+    "tr_raft_snapshot_stream_begin_fn": "stream_sink",
+    "tr_raft_snapshot_stream_write_fn": "stream_sink",
+    "tr_raft_snapshot_stream_finish_fn": "stream_sink",
+    "tr_raft_snapshot_stream_abort_fn": "stream_sink",
+    "tr_raft_transport_payload_handler_fn": "transport_payload_handler",
+    "tr_text_protocol_debug_frame_fn": "text_executor_sink",
+    "tr_text_query_status_fn": "text_executor_sink",
+    "tr_text_query_members_fn": "text_executor_sink",
+    "tr_text_query_progress_fn": "text_executor_sink",
+    "tr_text_query_service_status_fn": "text_executor_sink",
+    "tr_text_query_service_member_fn": "text_executor_sink",
+    "tr_text_query_service_progress_fn": "text_executor_sink",
+    "tr_replay_driver_timeout_fn": "replay_driver",
+    "tr_replay_driver_apply_fn": "replay_driver",
+    "tr_text_replay_submit_fn": "replay_executor",
+    "tr_text_replay_poll_fn": "replay_executor",
+    "tr_text_replay_tick_fn": "replay_executor"
+  }
+}
