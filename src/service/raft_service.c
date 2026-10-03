@@ -1,5 +1,7 @@
 #include <turboraft/raft_service.h>
 
+#include "raft_service_internal.h"
+
 #include <salts_error.h>
 
 #include <stdlib.h>
@@ -38,6 +40,9 @@ struct tr_raft_service {
     size_t max_completed_reads;
     bool faulted;
     int cause;
+    tr_raft_service_stage_alloc_fn stage_allocate;
+    tr_raft_service_stage_free_fn stage_deallocate;
+    void *stage_allocator_context;
 };
 
 static void tr_service_prepare_ready(
@@ -70,6 +75,32 @@ static bool tr_service_delivery_empty(
     const tr_raft_service_peer_delivery_t *delivery)
 {
     return delivery->message_count == 0U && !delivery->snapshot_pending;
+}
+
+static void *tr_service_default_stage_allocate(
+    void *context, size_t count, size_t size)
+{
+    (void)context;
+    return calloc(count, size);
+}
+
+static void tr_service_default_stage_deallocate(
+    void *context, void *memory)
+{
+    (void)context;
+    free(memory);
+}
+
+static void tr_service_release_delivery_messages(
+    tr_raft_service_t *service,
+    tr_raft_service_peer_delivery_t *delivery)
+{
+    if (delivery->messages == NULL) {
+        return;
+    }
+    service->stage_deallocate(
+        service->stage_allocator_context, delivery->messages);
+    delivery->messages = NULL;
 }
 
 static tr_raft_service_peer_delivery_t *tr_service_find_delivery(
@@ -110,7 +141,7 @@ static tr_raft_service_peer_delivery_t *tr_service_find_delivery(
     if (free_slot == NULL) {
         return NULL;
     }
-    free(free_slot->messages);
+    tr_service_release_delivery_messages(service, free_slot);
     memset(free_slot, 0, sizeof(*free_slot));
     free_slot->node_id = peer_id;
     free_slot->last_error = SALTS_OK;
@@ -147,12 +178,37 @@ static bool tr_service_has_pending_transport(
     return false;
 }
 
+int tr_raft_service_set_stage_allocator_for_test(
+    tr_raft_service_t *service,
+    tr_raft_service_stage_alloc_fn allocate,
+    tr_raft_service_stage_free_fn deallocate,
+    void *context)
+{
+    if (service == NULL || ((allocate == NULL) != (deallocate == NULL))) {
+        return SALTS_EINVAL;
+    }
+    if (tr_service_has_pending_transport(service)) {
+        return SALTS_EBUSY;
+    }
+    if (allocate == NULL) {
+        service->stage_allocate = tr_service_default_stage_allocate;
+        service->stage_deallocate = tr_service_default_stage_deallocate;
+        service->stage_allocator_context = NULL;
+    } else {
+        service->stage_allocate = allocate;
+        service->stage_deallocate = deallocate;
+        service->stage_allocator_context = context;
+    }
+    return SALTS_OK;
+}
+
 static void tr_service_clear_pending_transport(tr_raft_service_t *service)
 {
     size_t index;
 
     for (index = 0U; index < TR_RAFT_MAX_MEMBERS; ++index) {
-        free(service->deliveries[index].messages);
+        tr_service_release_delivery_messages(
+            service, &service->deliveries[index]);
     }
     memset(service->deliveries, 0, sizeof(service->deliveries));
 }
@@ -181,14 +237,17 @@ static int tr_service_pause_delivery(
 }
 
 static int tr_service_stage_message(
+    tr_raft_service_t *service,
     tr_raft_service_peer_delivery_t *delivery,
     const tr_raft_message_t *message)
 {
     size_t slot;
 
     if (delivery->messages == NULL) {
-        delivery->messages = (tr_raft_message_t *)calloc(
-            TR_RAFT_MAX_VOTERS, sizeof(*delivery->messages));
+        delivery->messages = (tr_raft_message_t *)
+            service->stage_allocate(
+                service->stage_allocator_context,
+                TR_RAFT_MAX_VOTERS, sizeof(*delivery->messages));
         if (delivery->messages == NULL) {
             return SALTS_ENOMEM;
         }
@@ -229,7 +288,7 @@ static int tr_service_enqueue_message(
     }
     delivery = tr_service_find_delivery(service, message->to, false);
     if (delivery != NULL && delivery->paused) {
-        return tr_service_stage_message(delivery, message);
+        return tr_service_stage_message(service, delivery, message);
     }
 
     result = service->transport.enqueue(
@@ -249,7 +308,7 @@ static int tr_service_enqueue_message(
     if (result != SALTS_OK) {
         return result;
     }
-    return tr_service_stage_message(delivery, message);
+    return tr_service_stage_message(service, delivery, message);
 }
 
 static int tr_service_enqueue_snapshot(
@@ -299,7 +358,7 @@ static int tr_service_drain_delivery(
     result = tr_raft_core_peer_paused(
         service->core, delivery->node_id, &core_paused);
     if (result == SALTS_ENOENT) {
-        free(delivery->messages);
+        tr_service_release_delivery_messages(service, delivery);
         memset(delivery, 0, sizeof(*delivery));
         return SALTS_OK;
     }
@@ -352,8 +411,7 @@ static int tr_service_drain_delivery(
         }
         delivery->paused = false;
         delivery->last_error = SALTS_OK;
-        free(delivery->messages);
-        delivery->messages = NULL;
+        tr_service_release_delivery_messages(service, delivery);
     }
     return SALTS_OK;
 }
@@ -730,6 +788,9 @@ int tr_raft_service_create(
     if (service == NULL) {
         return SALTS_ENOMEM;
     }
+    service->stage_allocate = tr_service_default_stage_allocate;
+    service->stage_deallocate = tr_service_default_stage_deallocate;
+    service->stage_allocator_context = NULL;
     service->storage = config->storage;
     service->transport = config->transport;
     service->state_machine = config->state_machine;
