@@ -116,7 +116,7 @@ jobs:
             --triplet=x64-linux \
             --only-binarycaching
 
-      - name: Build producer against real v0.2.0 SDK
+      - name: Build producer and verifier against real v0.2.0 SDK
         shell: bash
         env:
           TURBORAFT_ROOT: ${{ env.PRIOR_TURBORAFT_ROOT }}
@@ -129,19 +129,20 @@ jobs:
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR"
           cmake --build build/v020-producer \
-            --target turboraft_v020_fixture_producer --parallel 2
+            --target turboraft_v020_fixture_producer \
+                     turboraft_v020_fixture_verifier --parallel 2
 
-      - name: Produce prior-release durable fixture
+      - name: Produce prior-release durable and wire fixture
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifacts/v020-fixture
+          mkdir -p artifacts/prior-to-current
           export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           build/v020-producer/turboraft_v020_fixture_producer \
-            "$GITHUB_WORKSPACE/artifacts/v020-fixture/raft" \
+            "$GITHUB_WORKSPACE/artifacts/prior-to-current/raft" v0.2.0 \
             | tee artifacts/v020-producer.txt
-          find artifacts/v020-fixture -maxdepth 1 -type f -printf '%f %s bytes\n' \
-            | sort | tee artifacts/v020-fixture-files.txt
+          find artifacts/prior-to-current -maxdepth 1 -type f -printf '%f %s bytes\n' \
+            | sort | tee artifacts/prior-to-current-files.txt
 
       - name: Build current storage-dev SDK
         shell: bash
@@ -166,7 +167,7 @@ jobs:
           test -f "$current/lib/cmake/TurboRaft/TurboRaftConfig.cmake"
           echo "CURRENT_TURBORAFT_ROOT=$current" >> "$GITHUB_ENV"
 
-      - name: Build current verifier
+      - name: Build current producer and verifier
         shell: bash
         env:
           TURBORAFT_ROOT: ${{ env.CURRENT_TURBORAFT_ROOT }}
@@ -179,22 +180,45 @@ jobs:
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR"
           cmake --build build/current-verifier \
-            --target turboraft_v020_fixture_verifier --parallel 2
+            --target turboraft_v020_fixture_producer \
+                     turboraft_v020_fixture_verifier --parallel 2
 
-      - name: Verify current recovery of v0.2.0 durable state
+      - name: Verify current recovery of v0.2.0 durable and wire state
         shell: bash
         run: |
           set -euo pipefail
           export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           build/current-verifier/turboraft_v020_fixture_verifier \
-            "$GITHUB_WORKSPACE/artifacts/v020-fixture/raft" \
-            | tee artifacts/current-verifier.txt
+            "$GITHUB_WORKSPACE/artifacts/prior-to-current/raft" current \
+            | tee artifacts/current-verifies-v020.txt
+
+      - name: Produce current durable and wire fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/current-to-prior
+          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          build/current-verifier/turboraft_v020_fixture_producer \
+            "$GITHUB_WORKSPACE/artifacts/current-to-prior/raft" current \
+            | tee artifacts/current-producer.txt
+          find artifacts/current-to-prior -maxdepth 1 -type f -printf '%f %s bytes\n' \
+            | sort | tee artifacts/current-to-prior-files.txt
+
+      - name: Verify v0.2.0 recovery of current durable and wire state
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          build/v020-producer/turboraft_v020_fixture_verifier \
+            "$GITHUB_WORKSPACE/artifacts/current-to-prior/raft" v0.2.0 \
+            | tee artifacts/v020-verifies-current.txt
           {
             echo "prior_release=v0.2.0"
             echo "current_sha=$GITHUB_SHA"
             echo "salts_package=1.8.3"
             echo "salts_utils_package=4.1.3"
-            echo "fixture_contract=term/vote/commit+snapshot+membership+retained-log-suffix+wire-v6"
+            echo "forward_contract=v0.2.0->current:durable+wire-v6"
+            echo "reverse_contract=current->v0.2.0:durable+wire-v6"
           } | tee artifacts/upgrade-provenance.txt
 
       - name: Upload real prior-release compatibility evidence
