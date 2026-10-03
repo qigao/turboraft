@@ -7,6 +7,7 @@ on:
       - "benchmarks/proposal_path/**"
       - "benchmarks/storage_ops/**"
       - "benchmarks/read_index/**"
+      - "benchmarks/snapshot_catchup/**"
       - ".github/workflows/durable-fsync-benchmark.yml"
   push:
     branches: [master]
@@ -15,6 +16,7 @@ on:
       - "benchmarks/proposal_path/**"
       - "benchmarks/storage_ops/**"
       - "benchmarks/read_index/**"
+      - "benchmarks/snapshot_catchup/**"
       - ".github/workflows/durable-fsync-benchmark.yml"
   workflow_dispatch:
 
@@ -181,6 +183,14 @@ jobs:
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"
           cmake --build build/read-index --parallel 2
 
+          cmake -S benchmarks/snapshot_catchup -B build/snapshot-catchup -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"
+          cmake --build build/snapshot-catchup --parallel 2
+
       - name: Run retained fsync distribution benchmark
         shell: bash
         run: |
@@ -284,6 +294,88 @@ jobs:
           grep -q '^read_index_idle,' artifacts/read-index-variance.csv
           grep -q '^read_index_write_load,' artifacts/read-index-variance.csv
 
+      - name: Run retained snapshot wire catch-up variance benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          for run in 1 2 3 4 5; do
+            build/snapshot-catchup/turboraft_snapshot_catchup_benchmark \
+              > "artifacts/snapshot-catchup-run-$run.csv"
+            test -s "artifacts/snapshot-catchup-run-$run.csv"
+            grep -q '^snapshot_wire_catchup,' "artifacts/snapshot-catchup-run-$run.csv"
+          done
+
+          python3 - <<'PY'
+          import csv
+          import glob
+          import statistics
+
+          rows = []
+          for path in sorted(glob.glob("artifacts/snapshot-catchup-run-*.csv")):
+              run = int(path.rsplit("-", 1)[1].split(".", 1)[0])
+              with open(path, newline="", encoding="utf-8") as handle:
+                  row = next(csv.DictReader(handle))
+                  row["run"] = run
+                  rows.append(row)
+
+          fields = [
+              "run", "phase", "payload_bytes", "chunks",
+              "chunk_wire_bytes", "ack_wire_bytes", "total_wire_bytes",
+              "wire_amplification", "duration_ns", "throughput_mib_s",
+              "user_cpu_ns", "sys_cpu_ns", "max_rss_kb", "fd_count",
+              "max_inflight_chunks"
+          ]
+          with open("artifacts/snapshot-catchup-runs.csv", "w",
+                    newline="", encoding="utf-8") as handle:
+              writer = csv.DictWriter(handle, fieldnames=fields)
+              writer.writeheader()
+              for row in sorted(rows, key=lambda value: value["run"]):
+                  writer.writerow({field: row[field] for field in fields})
+
+          throughputs = [float(row["throughput_mib_s"]) for row in rows]
+          durations = [int(row["duration_ns"]) for row in rows]
+          total_wire = [int(row["total_wire_bytes"]) for row in rows]
+          amplification = [float(row["wire_amplification"]) for row in rows]
+
+          def cv(values):
+              mean = statistics.mean(values)
+              return statistics.pstdev(values) / mean if mean else 0.0
+
+          with open("artifacts/snapshot-catchup-variance.csv", "w",
+                    newline="", encoding="utf-8") as handle:
+              fields = [
+                  "phase", "runs",
+                  "throughput_min_mib_s", "throughput_median_mib_s",
+                  "throughput_max_mib_s", "throughput_cv",
+                  "duration_min_ns", "duration_median_ns", "duration_max_ns",
+                  "total_wire_bytes_min", "total_wire_bytes_max",
+                  "wire_amplification_min", "wire_amplification_max"
+              ]
+              writer = csv.DictWriter(handle, fieldnames=fields)
+              writer.writeheader()
+              writer.writerow({
+                  "phase": "snapshot_wire_catchup",
+                  "runs": len(rows),
+                  "throughput_min_mib_s": f"{min(throughputs):.2f}",
+                  "throughput_median_mib_s":
+                      f"{statistics.median(throughputs):.2f}",
+                  "throughput_max_mib_s": f"{max(throughputs):.2f}",
+                  "throughput_cv": f"{cv(throughputs):.6f}",
+                  "duration_min_ns": min(durations),
+                  "duration_median_ns": int(statistics.median(durations)),
+                  "duration_max_ns": max(durations),
+                  "total_wire_bytes_min": min(total_wire),
+                  "total_wire_bytes_max": max(total_wire),
+                  "wire_amplification_min": f"{min(amplification):.6f}",
+                  "wire_amplification_max": f"{max(amplification):.6f}",
+              })
+          PY
+
+          test -s artifacts/snapshot-catchup-runs.csv
+          test -s artifacts/snapshot-catchup-variance.csv
+          grep -q '^snapshot_wire_catchup,' artifacts/snapshot-catchup-variance.csv
+
       - name: Record benchmark environment
         shell: bash
         run: |
@@ -321,6 +413,17 @@ jobs:
             echo "### ReadIndex repeated-run variance"
             echo '~~~csv'
             cat artifacts/read-index-variance.csv
+            echo '~~~'
+
+            echo
+            echo "### Snapshot wire catch-up runs"
+            echo '~~~csv'
+            cat artifacts/snapshot-catchup-runs.csv
+            echo '~~~'
+            echo
+            echo "### Snapshot wire catch-up repeated-run variance"
+            echo '~~~csv'
+            cat artifacts/snapshot-catchup-variance.csv
             echo '~~~'
           } >> "$GITHUB_STEP_SUMMARY"
 
