@@ -147,6 +147,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/bin:$PATH"
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           current="$GITHUB_WORKSPACE/stage/current"
           cmake -S . -B build/current-storage -G Ninja \
             -DTURBORAFT_BUILD_PROFILE=storage-dev \
