@@ -42,10 +42,13 @@ silently creating an empty store. After recovery, compare term, commit index,
 applied snapshot boundary, and persisted membership before allowing the node to
 rejoin peer traffic.
 
-The in-process and multiprocess chaos suites already qualify the
-prepare/close/reopen/resume handoff, including injected reopen failure. Issue
-#88 remains open until a retained release-qualified drill copies the durable
-set into a distinct fresh-process path and proves rejoin/catch-up.
+The in-process and multiprocess chaos suites qualify the
+prepare/close/reopen/resume handoff, including injected reopen failure. The
+retained release-qualified fresh-process restore drill landed via #98 under
+completed issue #88: it copies a quiesced authoritative durable set into a
+distinct path, opens with `create_if_missing=false`, rejects an incomplete
+copy, proves the remaining quorum can continue while the restored node is
+offline, and then proves rejoin/catch-up/convergence from fresh Raft traffic.
 
 ## Certificate rotation
 
@@ -129,11 +132,15 @@ baseline:
 - restore/open failure, missing manifest for a high-sequence copy, or durable
   metadata checksum failure.
 
-Latency/throughput/lag thresholds must not be invented here. Numeric p95/p99
-proposal, ReadIndex, snapshot, and commit/applied-lag thresholds are owned by
-the measured baseline work in #87. Until that evidence exists, alert on
-correctness faults and report lag/queue distributions without a fabricated
-fixed SLO.
+Latency/throughput/lag thresholds must not be invented here. The retained
+baseline work in completed issue #87 and `docs/PERFORMANCE_SLOS.md` defines
+the current policy: only stable normalized/protocol metrics are hard release
+guards. Absolute hosted-runner fsync, ReadIndex, snapshot, checkpoint, and
+resource values remain evidence-only because cross-run variance is not
+actionable enough for fixed CI or paging thresholds. Operational alerting
+should therefore page on correctness/fault conditions above and report
+lag/queue/latency distributions unless a deployment-specific threshold has its
+own measured production rationale.
 
 ## Incident bundle
 
