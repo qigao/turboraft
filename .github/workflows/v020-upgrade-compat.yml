@@ -194,7 +194,7 @@ jobs:
             echo "current_sha=$GITHUB_SHA"
             echo "salts_package=1.8.3"
             echo "salts_utils_package=4.1.3"
-            echo "fixture_contract=term/vote/commit+snapshot+membership+retained-log-suffix"
+            echo "fixture_contract=term/vote/commit+snapshot+membership+retained-log-suffix+wire-v6"
           } | tee artifacts/upgrade-provenance.txt
 
       - name: Upload real prior-release compatibility evidence
