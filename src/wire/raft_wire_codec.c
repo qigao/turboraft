@@ -623,6 +623,8 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
     size_t *out_frame_length)
 {
     InstallSnapshotChunk_builder_t builder;
+    InstallSnapshotChunk_view_t view;
+    DataBindBinaryVarData digest;
     uint8_t encoded_configuration[TR_RAFT_CONF_MAX_ENCODED_SIZE];
     size_t encoded_configuration_size = 0U;
     size_t expected_prefix_payload_length;
@@ -693,14 +695,16 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
             &builder, encoded_configuration, encoded_configuration_size) ||
         !InstallSnapshotChunk_snapshot_digest_set(
             &builder, chunk->snapshot_digest,
-            TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE)) {
+            TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE) ||
+        !InstallSnapshotChunk_view_bind(
+            &view, payload,
+            output_capacity - TR_RAFT_WIRE_HEADER_SIZE) ||
+        !InstallSnapshotChunk_snapshot_digest(&view, &digest)) {
         return SALTS_EPROTO;
     }
 
     chunk_length_prefix =
-        payload + InstallSnapshotChunk_BLOCK_LENGTH +
-        sizeof(uint32_t) + encoded_configuration_size +
-        sizeof(uint32_t) + TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE;
+        (uint8_t *)data_bind_binary_wire_var_data_end(&digest);
     if (chunk_length_prefix < payload ||
         (size_t)(chunk_length_prefix - payload) >
             output_capacity - TR_RAFT_WIRE_HEADER_SIZE ||
@@ -719,7 +723,9 @@ int tr_raft_wire_encode_snapshot_chunk_prefix(
         return SALTS_EPROTO;
     }
     payload_length = prefix_payload_length + chunk->data_length;
-    tr_put_u32(chunk_length_prefix, (uint32_t)chunk->data_length);
+    data_bind_binary_wire_write_u32(
+        chunk_length_prefix, TurboRaftWire_WIRE_BIG_ENDIAN,
+        (uint32_t)chunk->data_length);
     tr_wire_write_envelope(output, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK,
                            payload_length, metadata);
     return SALTS_OK;
