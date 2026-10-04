@@ -22,6 +22,7 @@ jobs:
       source_version: ${{ steps.meta.outputs.source_version }}
       package_version: ${{ steps.meta.outputs.package_version }}
       tag: ${{ steps.meta.outputs.tag }}
+      release_notes_file: ${{ steps.meta.outputs.release_notes_file }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,6 +37,8 @@ jobs:
           manifest_version="$(python3 -c 'import json; print(json.load(open("vcpkg.json", encoding="utf-8"))["version-semver"])')"
           test "$manifest_version" = "$source_version"
           tag="v$source_version"
+          release_notes_file="docs/RELEASE_NOTES_${source_version//./_}.md"
+          test -f "$release_notes_file"
           if [[ "${{ inputs.publish }}" == "true" ]]; then
             if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
               test "$GITHUB_REF_NAME" = "$tag"
@@ -51,6 +54,7 @@ jobs:
           echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
           echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_notes_file=$release_notes_file" >> "$GITHUB_OUTPUT"
 
   linux:
     name: Linux x64 SDK
@@ -489,6 +493,10 @@ jobs:
     if: inputs.publish
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: turboraft-native-nuget
@@ -510,11 +518,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.metadata.outputs.tag }}
           VERSION: ${{ needs.metadata.outputs.source_version }}
+          RELEASE_NOTES_FILE: ${{ needs.metadata.outputs.release_notes_file }}
         run: |
           set -euo pipefail
           pkg="dist/TurboRaft.Native.${{ needs.metadata.outputs.package_version }}.nupkg"
+          test -f "$RELEASE_NOTES_FILE"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "TurboRaft $VERSION" \
+              --notes-file "$RELEASE_NOTES_FILE"
             gh release upload "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY"               --target "${{ inputs.source_sha }}" --title "TurboRaft $VERSION" --generate-notes
+            gh release create "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY" \
+              --target "${{ inputs.source_sha }}" \
+              --title "TurboRaft $VERSION" \
+              --notes-file "$RELEASE_NOTES_FILE"
           fi
