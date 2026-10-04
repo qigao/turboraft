@@ -4,7 +4,11 @@ on:
   pull_request:
     branches: [master]
     paths:
+      - "tools/turboraft_compat_check.c"
       - "tests/compat/v020_upgrade/**"
+      - "tests/compat/v020_downgrade/**"
+      - "CMakeLists.txt"
+      - "docs/PRE_1_0_COMPATIBILITY.md"
       - ".github/workflows/v020-upgrade-compat.yml"
   workflow_dispatch:
 
@@ -79,9 +83,47 @@ jobs:
             test -d "$root"
           done
           echo "PRIOR_TURBORAFT_ROOT=$packages/turboraft.native/0.2.0/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_ROOT=$packages/salts.native/1.8.3/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/4.1.3/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "OLD_SALTS_ROOT=$packages/salts.native/1.8.3/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "OLD_SALTS_UTILS_ROOT=$packages/saltsutils.native/4.1.3/sdk/linux-x64" >> "$GITHUB_ENV"
           echo "PRIOR_PACKAGES=$packages" >> "$GITHUB_ENV"
+
+      - name: Restore current released Salts SDKs
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/NuGet-current.config"
+          project="$RUNNER_TEMP/turboraft-current-deps.csproj"
+          packages="$RUNNER_TEMP/turboraft-current-deps"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
+            </ItemGroup>
+          </Project>
+          EOF
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          sdk_root() {
+            local package="$1" rid="$2" roots=()
+            while IFS= read -r root; do roots+=("$root"); done < <(
+              find "$packages/$package" -mindepth 3 -maxdepth 3 -type d -path "*/sdk/$rid" -print
+            )
+            [ "${#roots[@]}" -eq 1 ] || { echo "expected one $package SDK, found ${#roots[@]}" >&2; return 1; }
+            printf '%s' "${roots[0]}"
+          }
+          current_salts="$(sdk_root salts.native linux-x64)"
+          current_utils="$(sdk_root saltsutils.native linux-x64)"
+          echo "CURRENT_SALTS_ROOT=$current_salts" >> "$GITHUB_ENV"
+          echo "CURRENT_SALTS_UTILS_ROOT=$current_utils" >> "$GITHUB_ENV"
+          echo "CURRENT_SALTS_VERSION=$(basename "$(dirname "$(dirname "$current_salts")")")" >> "$GITHUB_ENV"
+          echo "CURRENT_SALTS_UTILS_VERSION=$(basename "$(dirname "$(dirname "$current_utils")")")" >> "$GITHUB_ENV"
 
       - name: Restore native link dependencies
         shell: bash
@@ -103,6 +145,7 @@ jobs:
               "libuv",
               "kcp",
               "boringssl",
+              "gmssl",
               "miniaudio",
               "lua",
               { "name": "zeromq", "default-features": false },
@@ -120,6 +163,8 @@ jobs:
         shell: bash
         env:
           TURBORAFT_ROOT: ${{ env.PRIOR_TURBORAFT_ROOT }}
+          SALTS_ROOT: ${{ env.OLD_SALTS_ROOT }}
+          SALTS_UTILS_ROOT: ${{ env.OLD_SALTS_UTILS_ROOT }}
         run: |
           set -euo pipefail
           cmake -S tests/compat/v020_upgrade -B build/v020-producer -G Ninja \
@@ -137,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/prior-to-current
-          export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$OLD_SALTS_UTILS_ROOT/lib:$OLD_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           build/v020-producer/turboraft_v020_fixture_producer \
             "$GITHUB_WORKSPACE/artifacts/prior-to-current/raft" v0.2.0 \
             | tee artifacts/v020-producer.txt
@@ -148,8 +193,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/bin:$PATH"
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export SALTS_ROOT="$CURRENT_SALTS_ROOT"
+          export SALTS_UTILS_ROOT="$CURRENT_SALTS_UTILS_ROOT"
+          export PATH="$CURRENT_SALTS_UTILS_ROOT/bin:$CURRENT_SALTS_ROOT/bin:$PATH"
+          export LD_LIBRARY_PATH="$CURRENT_SALTS_UTILS_ROOT/lib:$CURRENT_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           current="$GITHUB_WORKSPACE/stage/current"
           cmake -S . -B build/current-storage -G Ninja \
             -DTURBORAFT_BUILD_PROFILE=storage-dev \
@@ -165,12 +212,15 @@ jobs:
             -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
           cmake --build build/current-storage --target install --parallel 2
           test -f "$current/lib/cmake/TurboRaft/TurboRaftConfig.cmake"
+          test -x "$current/bin/turboraft_compat_check"
           echo "CURRENT_TURBORAFT_ROOT=$current" >> "$GITHUB_ENV"
 
       - name: Build current producer and verifier
         shell: bash
         env:
           TURBORAFT_ROOT: ${{ env.CURRENT_TURBORAFT_ROOT }}
+          SALTS_ROOT: ${{ env.CURRENT_SALTS_ROOT }}
+          SALTS_UTILS_ROOT: ${{ env.CURRENT_SALTS_UTILS_ROOT }}
         run: |
           set -euo pipefail
           cmake -S tests/compat/v020_upgrade -B build/current-verifier -G Ninja \
@@ -183,11 +233,27 @@ jobs:
             --target turboraft_v020_fixture_producer \
                      turboraft_v020_fixture_verifier --parallel 2
 
+      - name: Build current downgrade fixtures
+        shell: bash
+        env:
+          TURBORAFT_ROOT: ${{ env.CURRENT_TURBORAFT_ROOT }}
+          SALTS_ROOT: ${{ env.CURRENT_SALTS_ROOT }}
+          SALTS_UTILS_ROOT: ${{ env.CURRENT_SALTS_UTILS_ROOT }}
+        run: |
+          set -euo pipefail
+          cmake -S tests/compat/v020_downgrade -B build/compat-downgrade -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR"
+          cmake --build build/compat-downgrade --parallel 2
+
       - name: Verify current recovery of v0.2.0 durable and wire state
         shell: bash
         run: |
           set -euo pipefail
-          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$CURRENT_SALTS_UTILS_ROOT/lib:$CURRENT_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           build/current-verifier/turboraft_v020_fixture_verifier \
             "$GITHUB_WORKSPACE/artifacts/prior-to-current/raft" current \
             | tee artifacts/current-verifies-v020.txt
@@ -197,29 +263,199 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/current-to-prior
-          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$CURRENT_SALTS_UTILS_ROOT/lib:$CURRENT_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           build/current-verifier/turboraft_v020_fixture_producer \
             "$GITHUB_WORKSPACE/artifacts/current-to-prior/raft" current \
             | tee artifacts/current-producer.txt
           find artifacts/current-to-prior -maxdepth 1 -type f -printf '%f %s bytes\n' \
             | sort | tee artifacts/current-to-prior-files.txt
 
-      - name: Verify v0.2.0 recovery of current durable and wire state
+      - name: Preflight current fixture before v0.2.0 verifier
         shell: bash
         run: |
           set -euo pipefail
-          export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$CURRENT_SALTS_UTILS_ROOT/lib:$CURRENT_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          mkdir -p artifacts/downgrade-preflight
+          prefix="$GITHUB_WORKSPACE/artifacts/current-to-prior/raft"
+          find "$(dirname "$prefix")" -maxdepth 1 -type f -name 'raft*' -print0 \
+            | sort -z | xargs -0 sha256sum > artifacts/downgrade-preflight/positive-before.sha256
+          "$CURRENT_TURBORAFT_ROOT/bin/turboraft_compat_check" downgrade \
+            --target v0.2.0 \
+            --path-prefix "$prefix" \
+            --legacy-max-segments 4 \
+            --legacy-segment-bytes 65536 \
+            --legacy-max-transaction-bytes 16384 \
+            --legacy-max-log-entries 16 \
+            --legacy-max-snapshot-bytes 1024 \
+            | tee artifacts/downgrade-preflight/positive.json
+          grep -F '"compatible":true' artifacts/downgrade-preflight/positive.json
+          find "$(dirname "$prefix")" -maxdepth 1 -type f -name 'raft*' -print0 \
+            | sort -z | xargs -0 sha256sum > artifacts/downgrade-preflight/positive-after.sha256
+          diff -u artifacts/downgrade-preflight/positive-before.sha256 \
+                  artifacts/downgrade-preflight/positive-after.sha256
+
+      - name: Verify v0.2.0 recovery only after successful preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$PRIOR_TURBORAFT_ROOT/lib:$OLD_SALTS_UTILS_ROOT/lib:$OLD_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           build/v020-producer/turboraft_v020_fixture_verifier \
             "$GITHUB_WORKSPACE/artifacts/current-to-prior/raft" v0.2.0 \
             | tee artifacts/v020-verifies-current.txt
           {
             echo "prior_release=v0.2.0"
             echo "current_sha=$GITHUB_SHA"
-            echo "salts_package=1.8.3"
-            echo "salts_utils_package=4.1.3"
+            echo "prior_salts=1.8.3"
+            echo "prior_salts_utils=4.1.3"
+            echo "current_salts=$CURRENT_SALTS_VERSION"
+            echo "current_salts_utils=$CURRENT_SALTS_UTILS_VERSION"
+            echo "legacy_max_segments=4"
+            echo "legacy_segment_bytes=65536"
+            echo "legacy_max_transaction_bytes=16384"
+            echo "legacy_max_log_entries=16"
+            echo "legacy_max_snapshot_bytes=1024"
             echo "forward_contract=v0.2.0->current:durable+wire-v6"
-            echo "reverse_contract=current->v0.2.0:durable+wire-v6"
+            echo "reverse_contract=current->v0.2.0:preflight+durable+wire-v6"
           } | tee artifacts/upgrade-provenance.txt
+
+      - name: Reject incompatible downgrade fixtures without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$CURRENT_TURBORAFT_ROOT/lib:$CURRENT_SALTS_UTILS_ROOT/lib:$CURRENT_SALTS_ROOT/lib:$VCPKG_INSTALLED_DIR/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          root="$GITHUB_WORKSPACE/artifacts/downgrade-negative"
+          mkdir -p "$root" artifacts/downgrade-preflight
+
+          preflight_reject() {
+            local name="$1"
+            local prefix="$2"
+            local reason="$3"
+            local segment_bytes="${4:-65536}"
+            local transaction_bytes="${5:-16384}"
+            local max_log_entries="${6:-16}"
+            local max_snapshot_bytes="${7:-1024}"
+            local before="artifacts/downgrade-preflight/${name}-before.sha256"
+            local after="artifacts/downgrade-preflight/${name}-after.sha256"
+            local output="artifacts/downgrade-preflight/${name}.json"
+            find "$(dirname "$prefix")" -maxdepth 1 -type f -name 'raft*' -print0 \
+              | sort -z | xargs -0 sha256sum > "$before"
+            set +e
+            "$CURRENT_TURBORAFT_ROOT/bin/turboraft_compat_check" downgrade \
+              --target v0.2.0 \
+              --path-prefix "$prefix" \
+              --legacy-max-segments 4 \
+              --legacy-segment-bytes "$segment_bytes" \
+              --legacy-max-transaction-bytes "$transaction_bytes" \
+              --legacy-max-log-entries "$max_log_entries" \
+              --legacy-max-snapshot-bytes "$max_snapshot_bytes" > "$output"
+            rc=$?
+            set -e
+            test "$rc" -ne 0
+            grep -F '"compatible":false' "$output"
+            grep -F "\"reason\":\"${reason}\"" "$output"
+            find "$(dirname "$prefix")" -maxdepth 1 -type f -name 'raft*' -print0 \
+              | sort -z | xargs -0 sha256sum > "$after"
+            diff -u "$before" "$after"
+          }
+
+          mkdir -p "$root/high"
+          build/compat-downgrade/turboraft_v020_downgrade_fixture \
+            "$root/high/raft" high
+          preflight_reject high "$root/high/raft" range_outside_legacy_window
+
+          mkdir -p "$root/stale" "$root/seq2"
+          build/compat-downgrade/turboraft_v020_downgrade_fixture \
+            "$root/stale/raft" low
+          build/compat-downgrade/turboraft_v020_downgrade_fixture \
+            "$root/seq2/raft" seq2
+          cp "$root/seq2/raft.00000002.wal" "$root/stale/raft.00000002.wal"
+          preflight_reject stale-namespace "$root/stale/raft" manifest_legacy_namespace_mismatch
+
+          mkdir -p "$root/corrupt-manifest"
+          build/compat-downgrade/turboraft_v020_downgrade_fixture \
+            "$root/corrupt-manifest/raft" low
+          printf X | dd of="$root/corrupt-manifest/raft.manifest" bs=1 seek=0 conv=notrunc status=none
+          preflight_reject corrupt-manifest "$root/corrupt-manifest/raft" manifest_corrupt
+
+          mkdir -p "$root/manifest-version"
+          build/compat-downgrade/turboraft_v020_downgrade_fixture \
+            "$root/manifest-version/raft" low
+          printf '\002' | dd of="$root/manifest-version/raft.manifest" bs=1 seek=8 conv=notrunc status=none
+          preflight_reject manifest-version "$root/manifest-version/raft" manifest_version_unsupported
+
+          mkdir -p "$root/segment-version"
+          build/compat-downgrade/turboraft_v020_downgrade_fixture \
+            "$root/segment-version/raft" low
+          printf '\002' | dd of="$root/segment-version/raft.00000001.wal" bs=1 seek=8 conv=notrunc status=none
+          preflight_reject segment-version "$root/segment-version/raft" segment_version_unsupported
+
+          mkdir -p "$root/segment-size"
+          build/compat-downgrade/turboraft_v020_downgrade_fixture \
+            "$root/segment-size/raft" low
+          truncate -s 65537 "$root/segment-size/raft.00000001.wal"
+          preflight_reject segment-size "$root/segment-size/raft" segment_bytes_exceeded
+
+          # Real current WAL; only the advertised v0.2.0 replay limits change.
+          # These cases prove preflight cannot return compatible=true when the
+          # old binary would reject during WAL replay before serving traffic.
+          for name in transaction-limit log-limit snapshot-limit missing-snapshot corrupt-snapshot; do
+            mkdir -p "$root/$name"
+            cp -a "$GITHUB_WORKSPACE/artifacts/current-to-prior/." "$root/$name/"
+          done
+          preflight_reject transaction-limit "$root/transaction-limit/raft" transaction_bytes_exceeded 65536 48 16 1024
+          preflight_reject log-limit "$root/log-limit/raft" max_log_entries_exceeded 65536 16384 2 1024
+          preflight_reject snapshot-limit "$root/snapshot-limit/raft" max_snapshot_bytes_exceeded 65536 16384 16 1
+
+          rm "$root/missing-snapshot/raft.snapshot.2.2"
+          preflight_reject missing-snapshot "$root/missing-snapshot/raft" snapshot_missing
+
+          printf X | dd of="$root/corrupt-snapshot/raft.snapshot.2.2" bs=1 seek=48 conv=notrunc status=none
+          preflight_reject corrupt-snapshot "$root/corrupt-snapshot/raft" snapshot_checksum_mismatch
+
+          set +e
+          "$CURRENT_TURBORAFT_ROOT/bin/turboraft_compat_check" downgrade \
+            --path-prefix "$root/log-limit/raft" \
+            --legacy-max-segments 4 \
+            --legacy-segment-bytes 65536 \
+            --legacy-max-transaction-bytes 16384 \
+            --legacy-max-log-entries 16 \
+            --legacy-max-snapshot-bytes 1024 \
+            > artifacts/downgrade-preflight/missing-target.json
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+          grep -F '"reason":"invalid_arguments"' artifacts/downgrade-preflight/missing-target.json
+
+          long_prefix="$(python3 -c 'print("x" * 4096)')"
+          set +e
+          "$CURRENT_TURBORAFT_ROOT/bin/turboraft_compat_check" downgrade \
+            --target v0.2.0 \
+            --path-prefix "$long_prefix" \
+            --legacy-max-segments 4 \
+            --legacy-segment-bytes 65536 \
+            --legacy-max-transaction-bytes 16384 \
+            --legacy-max-log-entries 16 \
+            --legacy-max-snapshot-bytes 1024 \
+            > artifacts/downgrade-preflight/path-margin.json
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+          grep -F '"reason":"path_too_long"' artifacts/downgrade-preflight/path-margin.json
+
+          mkdir -p "$root/noaccess"
+          build/compat-downgrade/turboraft_v020_downgrade_fixture             "$root/noaccess/raft" low
+          find "$root/noaccess" -maxdepth 1 -type f -name 'raft*' -print0             | sort -z | xargs -0 sha256sum             > artifacts/downgrade-preflight/noaccess-before.sha256
+          chmod 000 "$root/noaccess"
+          set +e
+          "$CURRENT_TURBORAFT_ROOT/bin/turboraft_compat_check" downgrade             --target v0.2.0             --path-prefix "$root/noaccess/raft"             --legacy-max-segments 4             --legacy-segment-bytes 65536             --legacy-max-transaction-bytes 16384             --legacy-max-log-entries 16             --legacy-max-snapshot-bytes 1024             > artifacts/downgrade-preflight/noaccess.json
+          rc=$?
+          chmod 755 "$root/noaccess"
+          set -e
+          test "$rc" -ne 0
+          grep -F '"compatible":false' artifacts/downgrade-preflight/noaccess.json
+          grep -F '"reason":"manifest_io_error"' artifacts/downgrade-preflight/noaccess.json
+          find "$root/noaccess" -maxdepth 1 -type f -name 'raft*' -print0             | sort -z | xargs -0 sha256sum             > artifacts/downgrade-preflight/noaccess-after.sha256
+          diff -u artifacts/downgrade-preflight/noaccess-before.sha256                   artifacts/downgrade-preflight/noaccess-after.sha256
 
       - name: Upload real prior-release compatibility evidence
         uses: actions/upload-artifact@v4

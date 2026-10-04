@@ -322,6 +322,12 @@ target_link_libraries(turboraft_wal_storage
                       PUBLIC TurboRaft::Core
                       PRIVATE Salts::Core xxHash::xxhash OpenSSL::Crypto)
 
+add_executable(turboraft_compat_check tools/turboraft_compat_check.c)
+target_link_libraries(turboraft_compat_check
+                      PRIVATE Salts::Core OpenSSL::Crypto xxHash::xxhash)
+set_target_properties(turboraft_compat_check
+                      PROPERTIES FOLDER "TurboRaft/tools")
+
 endif()
 
 if(TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE)
@@ -666,6 +672,11 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/turboraft"
 install(
   PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/tools/turboraft_incident_bundle.py"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/tools")
+
+if(TARGET turboraft_compat_check)
+  install(TARGETS turboraft_compat_check
+          RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif()
 install(
   FILES "${CMAKE_CURRENT_SOURCE_DIR}/docs/PUBLIC_CALLBACK_CONTRACTS.json"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/abi")
