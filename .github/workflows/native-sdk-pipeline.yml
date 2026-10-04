@@ -36,8 +36,17 @@ jobs:
               test "$GITHUB_REF_NAME" = "$tag"
             else
               remote_sha="$(git ls-remote origin "refs/tags/$tag" | awk '{print $1}')"
-              test -n "$remote_sha"
-              test "$remote_sha" = "${{ inputs.source_sha }}"
+              if [[ -n "$remote_sha" ]]; then
+                test "$remote_sha" = "${{ inputs.source_sha }}"
+              else
+                # A merged release/* PR may atomically create its first tag in
+                # the publish job via gh release create --target source_sha.
+                test "$GITHUB_EVENT_NAME" = "pull_request"
+                test "${{ github.event.action }}" = "closed"
+                test "${{ github.event.pull_request.merged }}" = "true"
+                [[ "${{ github.event.pull_request.head.ref }}" == release/* ]]
+                test "${{ github.event.pull_request.merge_commit_sha }}" = "${{ inputs.source_sha }}"
+              fi
             fi
             package_version="$source_version"
           else
