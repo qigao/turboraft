@@ -1,24 +1,27 @@
-name: TurboRaft release PR publish
+name: TurboRaft release merge publish
 
 on:
-  pull_request:
-    types: [closed]
+  push:
+    branches: [master]
+    paths:
+      - "CMakeLists.txt"
+      - "vcpkg.json"
+      - ".github/workflows/native-sdk-pipeline.yml"
+      - ".github/workflows/native-sdk-release-pr.yml"
 
 permissions:
   contents: write
   packages: write
 
 concurrency:
-  group: turboraft-release-pr-${{ github.event.pull_request.number }}
+  group: turboraft-release-merge-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
   release:
-    if: >-
-      github.event.pull_request.merged == true &&
-      startsWith(github.event.pull_request.head.ref, 'release/')
+    if: startsWith(github.event.head_commit.message, 'release:')
     uses: ./.github/workflows/native-sdk-pipeline.yml
     with:
       publish: true
-      source_sha: ${{ github.event.pull_request.merge_commit_sha }}
+      source_sha: ${{ github.sha }}
     secrets: inherit
