@@ -58,14 +58,25 @@ For target v0.2.0:
   reject rollback;
 - every visible segment must use WAL format v1, carry the expected sequence and
   header checksum, and fit the deployed v0.2.0 `segment_bytes`;
-- unknown required manifest or segment versions fail as unsupported;
-- the other legacy replay limits are recorded in the machine-readable preflight
-  result and are exercised by the real v0.2.0 verifier in hosted qualification.
+- the preflight replays the v0.2.0 transaction envelope read-only: transaction
+  IDs/checksums, operation framing, sequential log indices, commit/truncate
+  constraints, configuration encoding, and the deployed
+  `max_transaction_bytes` / `max_log_entries` limits must all be accepted
+  by the old replay rules;
+- every WAL-referenced snapshot must exist at the v0.2.0 path, fit
+  `max_snapshot_bytes`, match its header/index/term/size, and reproduce both
+  the stored XXH3 checksum and any required SHA-256 digest;
+- v0.2.0's last-segment torn-tail tolerance is preserved by preflight so a
+  crash-truncated final frame that the old binary would ignore is not rejected;
+- unknown required manifest, segment, transaction, operation, configuration, or
+  snapshot formats fail before the old binary is started.
 
-A successful preflight is necessary but not sufficient evidence by itself: the
-supported release procedure also requires the same v0.2.0 replay limits used by
-qualification. Hosted compatibility CI invokes the real released v0.2.0
-verifier only after a successful preflight.
+A successful preflight is necessary but not sufficient evidence by itself:
+hosted qualification still invokes the real released v0.2.0 verifier after a
+successful preflight. The verifier is retained as independent positive evidence
+that the documented replay limits and durable bytes remain consumable by the
+actual released binary; it is not a substitute for preflight rejecting known
+old-replay failures.
 
 Compatibility qualification deliberately uses **two dependency epochs**. The
 real v0.2.0 producer/verifier runs with the released v0.2.0 dependency graph
