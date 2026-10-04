@@ -46,6 +46,61 @@ jobs:
           echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
           echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Verify unpinned first-party package inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import xml.etree.ElementTree as ET
+
+          project = ET.parse("packaging/nuget/TurboRaft.Native.csproj").getroot()
+          expected = {
+              "Salts.Native",
+              "SaltsUtils.Native",
+              "FlowMQ.Native",
+              "CHttp.Native",
+          }
+          refs = {}
+          for node in project.iter():
+              if not node.tag.endswith("PackageReference"):
+                  continue
+              package_id = node.attrib.get("Include")
+              if package_id in expected:
+                  refs.setdefault(package_id, []).append(node.attrib)
+
+          for package_id in sorted(expected):
+              entries = refs.get(package_id, [])
+              if len(entries) != 1:
+                  raise SystemExit(
+                      f"{package_id}: expected exactly one PackageReference, found {len(entries)}"
+                  )
+              entry = entries[0]
+              if entry.get("Version") != "*":
+                  raise SystemExit(
+                      f"{package_id}: producer package must use Version='*', got {entry.get('Version')!r}"
+                  )
+              if entry.get("PrivateAssets") != "all":
+                  raise SystemExit(
+                      f"{package_id}: producer package must remain build-only with PrivateAssets='all'"
+                  )
+
+          cmake = pathlib.Path("CMakeLists.txt").read_text(encoding="utf-8")
+          for package in ("Salts", "SaltsUtils", "FlowMQ"):
+              match = re.search(
+                  rf"find_package\s*\(\s*{re.escape(package)}\b([^)]*)\)",
+                  cmake,
+                  re.IGNORECASE | re.DOTALL,
+              )
+              if match is None:
+                  raise SystemExit(f"{package}: find_package call not found")
+              tail = match.group(1)
+              if re.search(r"\bEXACT\b|\b\d+(?:\.\d+)+\b", tail, re.IGNORECASE):
+                  raise SystemExit(
+                      f"{package}: consumer CMake discovery must not bind a version: {match.group(0)!r}"
+                  )
+          PY
 
   linux:
     name: Linux x64 SDK
