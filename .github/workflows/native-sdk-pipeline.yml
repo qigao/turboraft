@@ -41,11 +41,11 @@ jobs:
               else
                 # A merged release/* PR may atomically create its first tag in
                 # the publish job via gh release create --target source_sha.
-                test "$GITHUB_EVENT_NAME" = "pull_request"
-                test "${{ github.event.action }}" = "closed"
-                test "${{ github.event.pull_request.merged }}" = "true"
-                [[ "${{ github.event.pull_request.head.ref }}" == release/* ]]
-                test "${{ github.event.pull_request.merge_commit_sha }}" = "${{ inputs.source_sha }}"
+                test "$GITHUB_EVENT_NAME" = "push"
+                test "$GITHUB_REF_TYPE" = "branch"
+                test "$GITHUB_REF_NAME" = "master"
+                [[ "${{ github.event.head_commit.message }}" == release:* ]]
+                test "$GITHUB_SHA" = "${{ inputs.source_sha }}"
               fi
             fi
             package_version="$source_version"
