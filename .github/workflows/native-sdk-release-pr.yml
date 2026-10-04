@@ -1,0 +1,24 @@
+name: TurboRaft release PR publish
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: turboraft-release-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/')
+    uses: ./.github/workflows/native-sdk-pipeline.yml
+    with:
+      publish: true
+      source_sha: ${{ github.event.pull_request.merge_commit_sha }}
+    secrets: inherit
