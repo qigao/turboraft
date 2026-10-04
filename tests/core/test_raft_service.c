@@ -367,6 +367,61 @@ spec("raft service")
         check_equal(allocator.deallocation_count, 1U);
     }
 
+    it("keeps backup quiescent until staged peer transport drains")
+    {
+        const tr_raft_node_id_t voters[] = {1U, 2U, 3U};
+        tr_raft_service_config_t config;
+        tr_raft_service_t *service = NULL;
+        tr_raft_service_status_t status;
+        tr_raft_service_peer_delivery_status_t delivery;
+        tr_raft_tick_t tick = {3U, 4U};
+        service_test_state_t state;
+        service_stage_allocator_test_t allocator;
+
+        memset(&state, 0, sizeof(state));
+        memset(&allocator, 0, sizeof(allocator));
+        state.blocked_peer_id = 3U;
+        service_configure(&config, &state, voters, 3U);
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+        check_equal(tr_raft_service_set_stage_allocator_for_test(
+                        service, service_stage_test_allocate,
+                        service_stage_test_deallocate, &allocator),
+                    SALTS_OK);
+
+        check_equal(tr_raft_service_tick(service, &tick), SALTS_OK);
+        check_equal(allocator.allocation_count, 1U);
+        check_equal(allocator.deallocation_count, 0U);
+        check_equal(tr_raft_service_get_peer_delivery_status(
+                        service, 3U, &delivery), SALTS_OK);
+        check(delivery.paused);
+        check_equal(delivery.staged_message_count, 1U);
+
+        check_equal(tr_raft_service_prepare_backup(service), SALTS_EBUSY);
+        check_equal(allocator.deallocation_count, 0U);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check_false(status.backup_prepared);
+
+        state.blocked_peer_id = 0U;
+        check_equal(tr_raft_service_prepare_backup(service), SALTS_OK);
+        check_equal(allocator.deallocation_count, 1U);
+        check_equal(tr_raft_service_get_peer_delivery_status(
+                        service, 3U, &delivery), SALTS_OK);
+        check_false(delivery.paused);
+        check_equal(delivery.staged_message_count, 0U);
+        check_equal(delivery.last_error, SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check(status.backup_prepared);
+        check_equal(tr_raft_service_poll(service), SALTS_EBUSY);
+
+        check_equal(tr_raft_service_resume_backup(service, &config.storage),
+                    SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check_false(status.backup_prepared);
+
+        tr_raft_service_destroy(service);
+        check_equal(allocator.deallocation_count, 1U);
+    }
+
     it("bounds staged allocations across all remote voters")
     {
         tr_raft_node_id_t voters[TR_RAFT_MAX_MEMBERS];
@@ -412,6 +467,105 @@ spec("raft service")
 
         tr_raft_service_destroy(service);
         check_equal(allocator.deallocation_count, TR_RAFT_MAX_MEMBERS - 1U);
+    }
+
+    it("releases staged peer delivery once when membership removes the peer")
+    {
+        const tr_raft_node_id_t voters[] = {1U, 2U, 3U};
+        const tr_raft_node_id_t target_voters[] = {1U, 2U};
+        tr_raft_service_config_t config;
+        tr_raft_service_t *service = NULL;
+        tr_raft_service_status_t status;
+        tr_raft_service_peer_delivery_status_t delivery;
+        tr_raft_membership_change_t change;
+        tr_raft_message_t response;
+        tr_raft_tick_t election_tick = {3U, 4U};
+        tr_raft_tick_t heartbeat_tick = {1U, 4U};
+        service_test_state_t state;
+        service_stage_allocator_test_t allocator;
+        tr_raft_index_t joint_index;
+        tr_raft_index_t final_index;
+        size_t attempted_removed_peer;
+
+        memset(&state, 0, sizeof(state));
+        memset(&allocator, 0, sizeof(allocator));
+        state.blocked_peer_id = 3U;
+        service_configure(&config, &state, voters, 3U);
+        check_equal(tr_raft_service_create(&config, &service), SALTS_OK);
+        check_equal(tr_raft_service_set_stage_allocator_for_test(
+                        service, service_stage_test_allocate,
+                        service_stage_test_deallocate, &allocator),
+                    SALTS_OK);
+
+        check_equal(tr_raft_service_tick(service, &election_tick), SALTS_OK);
+        check_equal(allocator.allocation_count, 1U);
+        check_equal(allocator.deallocation_count, 0U);
+        check_equal(tr_raft_service_get_peer_delivery_status(
+                        service, 3U, &delivery), SALTS_OK);
+        check(delivery.paused);
+        check_equal(delivery.staged_message_count, 1U);
+
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_PRE_VOTE_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.campaign_term = 1U;
+        response.granted = true;
+        check_equal(tr_raft_service_step(service, &response), SALTS_OK);
+
+        response.type = TR_RAFT_MSG_VOTE_RESPONSE;
+        response.term = 1U;
+        check_equal(tr_raft_service_step(service, &response), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check_equal(status.core.role, TR_RAFT_LEADER);
+
+        memset(&change, 0, sizeof(change));
+        change.transition_id = 901U;
+        change.voters = target_voters;
+        change.voter_count = 2U;
+        check_equal(tr_raft_service_change_membership(service, &change),
+                    SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        joint_index = status.core.last_log_index;
+        check(joint_index != 0U);
+
+        memset(&response, 0, sizeof(response));
+        response.type = TR_RAFT_MSG_APPEND_RESPONSE;
+        response.from = 2U;
+        response.to = 1U;
+        response.term = status.core.term;
+        response.granted = true;
+        response.previous_log_index = joint_index - 1U;
+        response.match_index = joint_index;
+        check_equal(tr_raft_service_step(service, &response), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check_equal(status.core.commit_index, joint_index);
+        check(status.core.joint_configuration);
+
+        check_equal(tr_raft_service_tick(service, &heartbeat_tick), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        final_index = status.core.last_log_index;
+        check(final_index > joint_index);
+
+        response.term = status.core.term;
+        response.previous_log_index = final_index - 1U;
+        response.match_index = final_index;
+        check_equal(tr_raft_service_step(service, &response), SALTS_OK);
+        check_equal(tr_raft_service_status(service, &status), SALTS_OK);
+        check_equal(status.core.commit_index, final_index);
+        check_false(status.core.joint_configuration);
+        check_equal(status.core.voter_count, 2U);
+        check_equal(allocator.deallocation_count, 0U);
+
+        attempted_removed_peer = state.attempted_by_peer[3U];
+        check_equal(tr_raft_service_poll(service), SALTS_OK);
+        check_equal(allocator.deallocation_count, 1U);
+        check_equal(state.attempted_by_peer[3U], attempted_removed_peer);
+        check_equal(tr_raft_service_get_peer_delivery_status(
+                        service, 3U, &delivery), SALTS_ENOENT);
+
+        tr_raft_service_destroy(service);
+        check_equal(allocator.deallocation_count, 1U);
     }
 
     it("owns one staging allocation per peer pause generation")
