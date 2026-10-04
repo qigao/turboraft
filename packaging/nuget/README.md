@@ -7,11 +7,14 @@ Release-qualified SDK payloads:
 - `sdk/linux-x64`
 - `sdk/windows-x64`
 
-Exact first-party package dependencies:
+First-party package policy:
 
-- Salts.Native 1.8.3
-- SaltsUtils.Native 4.1.3
-- FlowMQ.Native 1.1.1
+- release builds restore the latest stable released Salts.Native,
+  SaltsUtils.Native, FlowMQ.Native, and CHttp.Native packages;
+- TurboRaft.Native does not publish fixed transitive versions for those
+  producer packages;
+- the release SDK manifest records the exact producer versions resolved for
+  qualification evidence.
 
 Installed CMake consumers require `SALTS_ROOT`, `SALTS_UTILS_ROOT`, and
 `TURBORAFT_ROOT`. Core links `Salts::DataBind`, which is supplied by the

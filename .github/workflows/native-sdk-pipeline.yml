@@ -10,11 +10,6 @@ on:
         required: true
         type: string
 
-env:
-  SALTS_SDK_VERSION: "1.8.3"
-  SALTS_UTILS_SDK_VERSION: "4.1.3"
-  FLOWMQ_SDK_VERSION: "1.1.1"
-
 jobs:
   metadata:
     runs-on: ubuntu-24.04
@@ -51,6 +46,61 @@ jobs:
           echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
           echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Verify unpinned first-party package inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import xml.etree.ElementTree as ET
+
+          project = ET.parse("packaging/nuget/TurboRaft.Native.csproj").getroot()
+          expected = {
+              "Salts.Native",
+              "SaltsUtils.Native",
+              "FlowMQ.Native",
+              "CHttp.Native",
+          }
+          refs = {}
+          for node in project.iter():
+              if not node.tag.endswith("PackageReference"):
+                  continue
+              package_id = node.attrib.get("Include")
+              if package_id in expected:
+                  refs.setdefault(package_id, []).append(node.attrib)
+
+          for package_id in sorted(expected):
+              entries = refs.get(package_id, [])
+              if len(entries) != 1:
+                  raise SystemExit(
+                      f"{package_id}: expected exactly one PackageReference, found {len(entries)}"
+                  )
+              entry = entries[0]
+              if entry.get("Version") != "*":
+                  raise SystemExit(
+                      f"{package_id}: producer package must use Version='*', got {entry.get('Version')!r}"
+                  )
+              if entry.get("PrivateAssets") != "all":
+                  raise SystemExit(
+                      f"{package_id}: producer package must remain build-only with PrivateAssets='all'"
+                  )
+
+          cmake = pathlib.Path("CMakeLists.txt").read_text(encoding="utf-8")
+          for package in ("Salts", "SaltsUtils", "FlowMQ"):
+              match = re.search(
+                  rf"find_package\s*\(\s*{re.escape(package)}\b([^)]*)\)",
+                  cmake,
+                  re.IGNORECASE | re.DOTALL,
+              )
+              if match is None:
+                  raise SystemExit(f"{package}: find_package call not found")
+              tail = match.group(1)
+              if re.search(r"\bEXACT\b|\b\d+(?:\.\d+)+\b", tail, re.IGNORECASE):
+                  raise SystemExit(
+                      f"{package}: consumer CMake discovery must not bind a version: {match.group(0)!r}"
+                  )
+          PY
 
   linux:
     name: Linux x64 SDK
@@ -86,15 +136,26 @@ jobs:
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json             --name github --username qigao --password "$GITHUB_TOKEN"             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/TurboRaft.Native.csproj             --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "FLOWMQ_ROOT=$packages/flowmq.native/$FLOWMQ_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          chttp_versions=("$packages/chttp.native"/*)
-          test "${#chttp_versions[@]}" -eq 1
-          chttp_pkg="${chttp_versions[0]}"
-          test -d "$chttp_pkg/sdk/linux-x64"
-          echo "CHTTP_ROOT=$chttp_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "CHTTP_SDK_VERSION=$(basename "$chttp_pkg")" >> "$GITHUB_ENV"
+          shopt -s nullglob
+          resolve_native_sdk() {
+            local package_id="$1"
+            local env_prefix="$2"
+            local package_dir="$packages/$package_id"
+            local versions=("$package_dir"/*)
+            if [[ "${#versions[@]}" -ne 1 ]]; then
+              echo "expected exactly one restored $package_id version, found ${#versions[@]}" >&2
+              exit 1
+            fi
+            local package_root="${versions[0]}"
+            local sdk_root="$package_root/sdk/linux-x64"
+            test -d "$sdk_root"
+            echo "${env_prefix}_ROOT=$sdk_root" >> "$GITHUB_ENV"
+            echo "${env_prefix}_SDK_VERSION=$(basename "$package_root")" >> "$GITHUB_ENV"
+          }
+          resolve_native_sdk salts.native SALTS
+          resolve_native_sdk saltsutils.native SALTS_UTILS
+          resolve_native_sdk flowmq.native FLOWMQ
+          resolve_native_sdk chttp.native CHTTP
       - name: Restore vcpkg dependencies cache-only
         shell: bash
         run: |
@@ -178,15 +239,19 @@ jobs:
           '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
           dotnet restore packaging/nuget/TurboRaft.Native.csproj --configfile $config --packages $packages
-          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "FLOWMQ_ROOT=$packages\flowmq.native\$env:FLOWMQ_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          $chttpVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "chttp.native") -Directory)
-          if ($chttpVersions.Count -ne 1) { throw "expected one CHttp.Native version, found $($chttpVersions.Count)" }
-          $chttpRoot = Join-Path $chttpVersions[0].FullName "sdk\windows-x64"
-          if (-not (Test-Path -LiteralPath $chttpRoot -PathType Container)) { throw "missing CHttp Windows SDK root: $chttpRoot" }
-          "CHTTP_ROOT=$chttpRoot" >> $env:GITHUB_ENV
-          "CHTTP_SDK_VERSION=$($chttpVersions[0].Name)" >> $env:GITHUB_ENV
+          function Export-NativeSdk([string]$PackageId, [string]$EnvPrefix) {
+            $packageDir = Join-Path $packages $PackageId
+            $versions = @(Get-ChildItem -LiteralPath $packageDir -Directory)
+            if ($versions.Count -ne 1) { throw "expected exactly one restored $PackageId version, found $($versions.Count)" }
+            $sdkRoot = Join-Path $versions[0].FullName "sdk\windows-x64"
+            if (-not (Test-Path -LiteralPath $sdkRoot -PathType Container)) { throw "missing $PackageId Windows SDK root: $sdkRoot" }
+            "${EnvPrefix}_ROOT=$sdkRoot" >> $env:GITHUB_ENV
+            "${EnvPrefix}_SDK_VERSION=$($versions[0].Name)" >> $env:GITHUB_ENV
+          }
+          Export-NativeSdk "salts.native" "SALTS"
+          Export-NativeSdk "saltsutils.native" "SALTS_UTILS"
+          Export-NativeSdk "flowmq.native" "FLOWMQ"
+          Export-NativeSdk "chttp.native" "CHTTP"
       - name: Restore vcpkg dependencies cache-only
         shell: pwsh
         run: |
@@ -287,6 +352,14 @@ jobs:
           nupkg="dist/TurboRaft.Native.${{ needs.metadata.outputs.package_version }}.nupkg"
           test -f "$nupkg"
           unzip -Z1 "$nupkg" > "$RUNNER_TEMP/turboraft-files.txt"
+          nuspec_path="$(grep -E '(^|/)TurboRaft\.Native\.nuspec$' "$RUNNER_TEMP/turboraft-files.txt")"
+          test -n "$nuspec_path"
+          unzip -p "$nupkg" "$nuspec_path" > "$RUNNER_TEMP/TurboRaft.Native.nuspec"
+          if grep -Eq '<dependency id="(Salts\.Native|SaltsUtils\.Native|FlowMQ\.Native|CHttp\.Native)"' "$RUNNER_TEMP/TurboRaft.Native.nuspec"; then
+            echo "TurboRaft.Native must not publish pinned first-party Native package dependencies" >&2
+            cat "$RUNNER_TEMP/TurboRaft.Native.nuspec" >&2
+            exit 1
+          fi
           for rid in linux-x64 windows-x64; do
             grep -Fx "sdk/$rid/lib/cmake/TurboRaft/TurboRaftConfig.cmake" "$RUNNER_TEMP/turboraft-files.txt"
             grep -Fx "sdk/$rid/share/turboraft/abi/public-abi.json" "$RUNNER_TEMP/turboraft-files.txt"
@@ -361,19 +434,34 @@ jobs:
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
               <PackageReference Include="TurboRaft.Native" Version="[${{ needs.metadata.outputs.package_version }}]" />
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
+              <PackageReference Include="FlowMQ.Native" Version="*" />
               <PackageReference Include="CHttp.Native" Version="*" />
             </ItemGroup>
           </Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "FLOWMQ_ROOT=$packages/flowmq.native/$FLOWMQ_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          chttp_versions=("$packages/chttp.native"/*)
-          test "${#chttp_versions[@]}" -eq 1
-          chttp_pkg="${chttp_versions[0]}"
-          test -d "$chttp_pkg/sdk/linux-x64"
-          echo "CHTTP_ROOT=$chttp_pkg/sdk/linux-x64" >> "$GITHUB_ENV"
+          shopt -s nullglob
+          resolve_native_sdk() {
+            local package_id="$1"
+            local env_prefix="$2"
+            local package_dir="$packages/$package_id"
+            local versions=("$package_dir"/*)
+            if [[ "${#versions[@]}" -ne 1 ]]; then
+              echo "expected exactly one restored $package_id version, found ${#versions[@]}" >&2
+              exit 1
+            fi
+            local package_root="${versions[0]}"
+            local sdk_root="$package_root/sdk/linux-x64"
+            test -d "$sdk_root"
+            echo "${env_prefix}_ROOT=$sdk_root" >> "$GITHUB_ENV"
+            echo "${env_prefix}_SDK_VERSION=$(basename "$package_root")" >> "$GITHUB_ENV"
+          }
+          resolve_native_sdk salts.native SALTS
+          resolve_native_sdk saltsutils.native SALTS_UTILS
+          resolve_native_sdk flowmq.native FLOWMQ
+          resolve_native_sdk chttp.native CHTTP
           echo "TURBORAFT_ROOT=$packages/turboraft.native/${{ needs.metadata.outputs.package_version }}/sdk/linux-x64" >> "$GITHUB_ENV"
       - name: Restore packed SDK on Windows
         if: matrix.os == 'windows'
@@ -393,17 +481,27 @@ jobs:
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
               <PackageReference Include="TurboRaft.Native" Version="[${{ needs.metadata.outputs.package_version }}]" />
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
+              <PackageReference Include="FlowMQ.Native" Version="*" />
               <PackageReference Include="CHttp.Native" Version="*" />
             </ItemGroup>
           </Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages
-          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "FLOWMQ_ROOT=$packages\flowmq.native\$env:FLOWMQ_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          $chttpVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "chttp.native") -Directory)
-          if ($chttpVersions.Count -ne 1) { throw "expected one CHttp.Native version, found $($chttpVersions.Count)" }
-          "CHTTP_ROOT=$(Join-Path $chttpVersions[0].FullName 'sdk\windows-x64')" >> $env:GITHUB_ENV
+          function Export-NativeSdk([string]$PackageId, [string]$EnvPrefix) {
+            $packageDir = Join-Path $packages $PackageId
+            $versions = @(Get-ChildItem -LiteralPath $packageDir -Directory)
+            if ($versions.Count -ne 1) { throw "expected exactly one restored $PackageId version, found $($versions.Count)" }
+            $sdkRoot = Join-Path $versions[0].FullName "sdk\windows-x64"
+            if (-not (Test-Path -LiteralPath $sdkRoot -PathType Container)) { throw "missing $PackageId Windows SDK root: $sdkRoot" }
+            "${EnvPrefix}_ROOT=$sdkRoot" >> $env:GITHUB_ENV
+            "${EnvPrefix}_SDK_VERSION=$($versions[0].Name)" >> $env:GITHUB_ENV
+          }
+          Export-NativeSdk "salts.native" "SALTS"
+          Export-NativeSdk "saltsutils.native" "SALTS_UTILS"
+          Export-NativeSdk "flowmq.native" "FLOWMQ"
+          Export-NativeSdk "chttp.native" "CHTTP"
           "TURBORAFT_ROOT=$packages\turboraft.native\${{ needs.metadata.outputs.package_version }}\sdk\windows-x64" >> $env:GITHUB_ENV
       - name: Restore qualification vcpkg dependencies
         shell: bash
