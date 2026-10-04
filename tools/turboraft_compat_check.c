@@ -1,10 +1,14 @@
+#include <turboraft/raft_core.h>
+
 #include <salts_error.h>
 #include <salts_fs.h>
 
+#include <openssl/sha.h>
 #include <xxhash.h>
 
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,10 +16,26 @@
 
 #define TR_COMPAT_WAL_FORMAT_VERSION 1U
 #define TR_COMPAT_SEGMENT_HEADER_SIZE 32U
+#define TR_COMPAT_TRANSACTION_HEADER_SIZE 48U
+#define TR_COMPAT_OPERATION_HEADER_SIZE 8U
+#define TR_COMPAT_SNAPSHOT_HEADER_SIZE 48U
 #define TR_COMPAT_MANIFEST_HEADER_SIZE 40U
 #define TR_COMPAT_SEGMENT_MAGIC "TRSEG001"
+#define TR_COMPAT_TRANSACTION_MAGIC "TRWAL001"
+#define TR_COMPAT_SNAPSHOT_MAGIC "TRSNP001"
 #define TR_COMPAT_MANIFEST_MAGIC "TRMAN001"
+#define TR_COMPAT_V020_MIN_SEGMENT_BYTES (64U * 1024U)
 #define TR_COMPAT_V020_MAX_SEGMENTS 65535U
+#define TR_COMPAT_V020_MAX_ENTRY_BYTES 512U
+#define TR_COMPAT_SNAPSHOT_DIGEST_SIZE 32U
+
+enum tr_compat_operation_type {
+    TR_COMPAT_OP_HARD_STATE = 1,
+    TR_COMPAT_OP_TRUNCATE = 2,
+    TR_COMPAT_OP_ENTRY = 3,
+    TR_COMPAT_OP_COMMIT_INDEX = 4,
+    TR_COMPAT_OP_SNAPSHOT = 5
+};
 
 typedef struct tr_compat_limits {
     uint64_t max_segments;
@@ -35,6 +55,16 @@ typedef struct tr_compat_result {
     uint64_t visible_last;
     tr_compat_limits_t limits;
 } tr_compat_result_t;
+
+typedef struct tr_compat_replay_state {
+    uint64_t term;
+    uint64_t commit_index;
+    uint64_t snapshot_index;
+    uint64_t last_transaction_id;
+    uint64_t *entry_terms;
+    size_t entry_count;
+    size_t entry_capacity;
+} tr_compat_replay_state_t;
 
 static uint32_t tr_get_u32(const uint8_t *input)
 {
@@ -73,25 +103,35 @@ static int tr_parse_u64(const char *value, uint64_t *out)
     return SALTS_OK;
 }
 
+static int tr_read_at_exact(salts_file_t file,
+                            uint64_t offset,
+                            uint8_t *data,
+                            size_t size)
+{
+    size_t used = 0U;
+
+    while (used < size) {
+        int count = salts_fs_pread(
+            file, (char *)data + used, size - used,
+            (int64_t)(offset + used));
+        if (count <= 0) {
+            return count < 0 ? count : SALTS_EIO;
+        }
+        used += (size_t)count;
+    }
+    return SALTS_OK;
+}
+
 static int tr_read_exact(const char *path, uint8_t *data, size_t size)
 {
     salts_file_t file;
-    size_t used = 0U;
-    int result = SALTS_OK;
+    int result;
 
     file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
     if (file == SALTS_INVALID_FILE) {
         return SALTS_EIO;
     }
-    while (used < size) {
-        int count = salts_fs_pread(
-            file, (char *)data + used, size - used, (int64_t)used);
-        if (count <= 0) {
-            result = count < 0 ? count : SALTS_EIO;
-            break;
-        }
-        used += (size_t)count;
-    }
+    result = tr_read_at_exact(file, 0U, data, size);
     {
         int close_result = salts_fs_close(file);
         if (result == SALTS_OK) {
@@ -114,6 +154,19 @@ static int tr_segment_path(const char *prefix, uint64_t sequence,
 {
     int written = snprintf(path, size, "%s.%08" PRIu64 ".wal",
                            prefix, sequence);
+    return written < 0 || (size_t)written >= size
+               ? SALTS_ENAMETOOLONG
+               : SALTS_OK;
+}
+
+static int tr_snapshot_path(const char *prefix,
+                            uint64_t index,
+                            uint64_t term,
+                            char *path,
+                            size_t size)
+{
+    int written = snprintf(path, size, "%s.snapshot.%" PRIu64 ".%" PRIu64,
+                           prefix, index, term);
     return written < 0 || (size_t)written >= size
                ? SALTS_ENAMETOOLONG
                : SALTS_OK;
@@ -237,7 +290,6 @@ static int tr_scan_legacy_window(const char *prefix, tr_compat_result_t *result)
 
     for (sequence = 1U; sequence <= result->limits.max_segments; ++sequence) {
         char path[SALTS_FS_MAX_PATH];
-        int exists;
         int rc = tr_segment_path(prefix, sequence, path, sizeof(path));
 
         if (rc != SALTS_OK) {
@@ -255,7 +307,6 @@ static int tr_scan_legacy_window(const char *prefix, tr_compat_result_t *result)
             result->reason = "segment_io_error";
             return rc;
         }
-        exists = 1;
         if (ended) {
             result->reason = "legacy_visible_range_not_contiguous";
             return SALTS_EPROTO;
@@ -287,6 +338,567 @@ static int tr_scan_legacy_window(const char *prefix, tr_compat_result_t *result)
         result->authoritative_last = result->visible_last;
     }
     return SALTS_OK;
+}
+
+static int tr_replay_reserve_terms(tr_compat_replay_state_t *state,
+                                   uint64_t max_log_entries,
+                                   size_t required,
+                                   const char **out_reason)
+{
+    size_t capacity;
+    uint64_t *next;
+
+    if ((uint64_t)required > max_log_entries) {
+        *out_reason = "max_log_entries_exceeded";
+        return SALTS_EPROTO;
+    }
+    if (required <= state->entry_capacity) {
+        return SALTS_OK;
+    }
+    capacity = state->entry_capacity == 0U ? 8U : state->entry_capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2U) {
+            *out_reason = "preflight_memory_error";
+            return SALTS_ENOMEM;
+        }
+        capacity *= 2U;
+    }
+    if ((uint64_t)capacity > max_log_entries) {
+        capacity = (size_t)max_log_entries;
+    }
+    if (capacity > SIZE_MAX / sizeof(*next)) {
+        *out_reason = "preflight_memory_error";
+        return SALTS_ENOMEM;
+    }
+    next = (uint64_t *)realloc(
+        state->entry_terms, capacity * sizeof(*next));
+    if (next == NULL) {
+        *out_reason = "preflight_memory_error";
+        return SALTS_ENOMEM;
+    }
+    state->entry_terms = next;
+    state->entry_capacity = capacity;
+    return SALTS_OK;
+}
+
+static int tr_validate_snapshot_file(
+    const char *prefix,
+    uint64_t index,
+    uint64_t term,
+    uint64_t expected_size,
+    uint64_t expected_checksum,
+    const uint8_t *expected_digest,
+    size_t expected_digest_size,
+    const char **out_reason)
+{
+    uint8_t header[TR_COMPAT_SNAPSHOT_HEADER_SIZE];
+    uint8_t buffer[8192];
+    char path[SALTS_FS_MAX_PATH];
+    salts_fs_stat_t stat;
+    salts_file_t file = SALTS_INVALID_FILE;
+    XXH3_state_t *xxh = NULL;
+    SHA256_CTX sha;
+    uint8_t digest[TR_COMPAT_SNAPSHOT_DIGEST_SIZE];
+    uint64_t offset = 0U;
+    int rc;
+
+    rc = tr_snapshot_path(prefix, index, term, path, sizeof(path));
+    if (rc != SALTS_OK) {
+        *out_reason = "path_too_long";
+        return rc;
+    }
+    rc = salts_fs_stat(path, &stat);
+    if (rc == -ENOENT) {
+        *out_reason = "snapshot_missing";
+        return SALTS_ENOENT;
+    }
+    if (rc != SALTS_OK) {
+        *out_reason = "snapshot_io_error";
+        return rc;
+    }
+    if (!stat.is_file ||
+        expected_size > UINT64_MAX - TR_COMPAT_SNAPSHOT_HEADER_SIZE ||
+        stat.size != TR_COMPAT_SNAPSHOT_HEADER_SIZE + expected_size) {
+        *out_reason = "snapshot_corrupt";
+        return SALTS_EPROTO;
+    }
+    file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
+    if (file == SALTS_INVALID_FILE) {
+        *out_reason = "snapshot_io_error";
+        return SALTS_EIO;
+    }
+    rc = tr_read_at_exact(file, 0U, header, sizeof(header));
+    if (rc != SALTS_OK) {
+        *out_reason = "snapshot_io_error";
+        (void)salts_fs_close(file);
+        return rc;
+    }
+    if (memcmp(header, TR_COMPAT_SNAPSHOT_MAGIC, 8U) != 0 ||
+        tr_get_u32(header + 8U) != TR_COMPAT_WAL_FORMAT_VERSION ||
+        tr_get_u32(header + 12U) != TR_COMPAT_SNAPSHOT_HEADER_SIZE ||
+        tr_get_u64(header + 16U) != index ||
+        tr_get_u64(header + 24U) != term ||
+        tr_get_u64(header + 32U) != expected_size ||
+        tr_get_u64(header + 40U) != expected_checksum) {
+        *out_reason = "snapshot_corrupt";
+        (void)salts_fs_close(file);
+        return SALTS_EPROTO;
+    }
+
+    xxh = XXH3_createState();
+    if (xxh == NULL || XXH3_64bits_reset(xxh) != XXH_OK ||
+        SHA256_Init(&sha) != 1) {
+        if (xxh != NULL) {
+            XXH3_freeState(xxh);
+        }
+        (void)salts_fs_close(file);
+        *out_reason = "preflight_memory_error";
+        return SALTS_ENOMEM;
+    }
+    while (offset < expected_size) {
+        uint64_t remaining = expected_size - offset;
+        size_t request = remaining > sizeof(buffer)
+                             ? sizeof(buffer)
+                             : (size_t)remaining;
+
+        rc = tr_read_at_exact(
+            file, TR_COMPAT_SNAPSHOT_HEADER_SIZE + offset,
+            buffer, request);
+        if (rc != SALTS_OK) {
+            *out_reason = "snapshot_io_error";
+            break;
+        }
+        if (XXH3_64bits_update(xxh, buffer, request) != XXH_OK ||
+            SHA256_Update(&sha, buffer, request) != 1) {
+            rc = SALTS_EIO;
+            *out_reason = "snapshot_io_error";
+            break;
+        }
+        offset += request;
+    }
+    if (rc == SALTS_OK &&
+        XXH3_64bits_digest(xxh) != expected_checksum) {
+        rc = SALTS_EPROTO;
+        *out_reason = "snapshot_checksum_mismatch";
+    }
+    if (rc == SALTS_OK) {
+        if (SHA256_Final(digest, &sha) != 1) {
+            rc = SALTS_EIO;
+            *out_reason = "snapshot_io_error";
+        } else if (expected_digest_size != 0U &&
+                   memcmp(digest, expected_digest,
+                          expected_digest_size) != 0) {
+            rc = SALTS_EPROTO;
+            *out_reason = "snapshot_digest_mismatch";
+        }
+    }
+    XXH3_freeState(xxh);
+    {
+        int close_result = salts_fs_close(file);
+        if (rc == SALTS_OK && close_result != SALTS_OK) {
+            rc = close_result;
+            *out_reason = "snapshot_io_error";
+        }
+    }
+    return rc;
+}
+
+static int tr_apply_payload(const char *prefix,
+                            const uint8_t *payload,
+                            size_t payload_size,
+                            tr_compat_replay_state_t *state,
+                            const tr_compat_limits_t *limits,
+                            const char **out_reason)
+{
+    size_t offset = 0U;
+
+    while (offset < payload_size) {
+        uint8_t type;
+        uint32_t size;
+        const uint8_t *data;
+        uint64_t last_index;
+
+        if (payload_size - offset < TR_COMPAT_OPERATION_HEADER_SIZE) {
+            *out_reason = "transaction_corrupt";
+            return SALTS_EPROTO;
+        }
+        type = payload[offset];
+        if (payload[offset + 1U] != 0U ||
+            payload[offset + 2U] != 0U ||
+            payload[offset + 3U] != 0U) {
+            *out_reason = "transaction_corrupt";
+            return SALTS_EPROTO;
+        }
+        size = tr_get_u32(payload + offset + 4U);
+        offset += TR_COMPAT_OPERATION_HEADER_SIZE;
+        if ((size_t)size > payload_size - offset) {
+            *out_reason = "transaction_corrupt";
+            return SALTS_EPROTO;
+        }
+        data = payload + offset;
+        if (state->snapshot_index >
+            UINT64_MAX - (uint64_t)state->entry_count) {
+            *out_reason = "wal_replay_incompatible";
+            return SALTS_EPROTO;
+        }
+        last_index = state->snapshot_index +
+                     (uint64_t)state->entry_count;
+
+        if (type == TR_COMPAT_OP_HARD_STATE) {
+            uint64_t term;
+
+            if (size != 16U) {
+                *out_reason = "transaction_corrupt";
+                return SALTS_EPROTO;
+            }
+            term = tr_get_u64(data);
+            if (term < state->term) {
+                *out_reason = "wal_replay_incompatible";
+                return SALTS_EPROTO;
+            }
+            state->term = term;
+        } else if (type == TR_COMPAT_OP_TRUNCATE) {
+            uint64_t from_index;
+
+            if (size != 8U) {
+                *out_reason = "transaction_corrupt";
+                return SALTS_EPROTO;
+            }
+            from_index = tr_get_u64(data);
+            if (from_index == 0U ||
+                from_index <= state->commit_index ||
+                from_index <= state->snapshot_index ||
+                from_index > last_index + 1U) {
+                *out_reason = "wal_replay_incompatible";
+                return SALTS_EPROTO;
+            }
+            state->entry_count =
+                (size_t)(from_index - state->snapshot_index - 1U);
+        } else if (type == TR_COMPAT_OP_ENTRY) {
+            uint32_t data_length;
+            uint64_t entry_index;
+            uint64_t entry_term;
+            int rc;
+
+            if (size < 32U) {
+                *out_reason = "transaction_corrupt";
+                return SALTS_EPROTO;
+            }
+            data_length = tr_get_u32(data + 24U);
+            if (tr_get_u32(data + 28U) != 0U ||
+                data_length > TR_COMPAT_V020_MAX_ENTRY_BYTES ||
+                size != 32U + data_length) {
+                *out_reason = "transaction_corrupt";
+                return SALTS_EPROTO;
+            }
+            if ((uint64_t)state->entry_count >=
+                limits->max_log_entries) {
+                *out_reason = "max_log_entries_exceeded";
+                return SALTS_EPROTO;
+            }
+            rc = tr_replay_reserve_terms(
+                state, limits->max_log_entries,
+                state->entry_count + 1U, out_reason);
+            if (rc != SALTS_OK) {
+                return rc;
+            }
+            entry_index = tr_get_u64(data);
+            entry_term = tr_get_u64(data + 8U);
+            if (entry_index != last_index + 1U ||
+                entry_term == 0U) {
+                *out_reason = "wal_replay_incompatible";
+                return SALTS_EPROTO;
+            }
+            state->entry_terms[state->entry_count++] = entry_term;
+        } else if (type == TR_COMPAT_OP_COMMIT_INDEX) {
+            uint64_t commit_index;
+
+            if (size != 8U) {
+                *out_reason = "transaction_corrupt";
+                return SALTS_EPROTO;
+            }
+            commit_index = tr_get_u64(data);
+            if (commit_index < state->commit_index ||
+                commit_index > last_index) {
+                *out_reason = "wal_replay_incompatible";
+                return SALTS_EPROTO;
+            }
+            state->commit_index = commit_index;
+        } else if (type == TR_COMPAT_OP_SNAPSHOT) {
+            uint64_t leader_term;
+            uint64_t snapshot_index;
+            uint64_t snapshot_term;
+            uint64_t snapshot_size;
+            uint64_t snapshot_checksum;
+            uint64_t commit_index;
+            uint32_t configuration_size;
+            uint32_t digest_size;
+            const uint8_t *snapshot_digest = NULL;
+            size_t suffix_offset = 0U;
+            size_t suffix_count = 0U;
+            tr_raft_conf_t configuration;
+            int rc;
+
+            if (size < 64U) {
+                *out_reason = "transaction_corrupt";
+                return SALTS_EPROTO;
+            }
+            leader_term = tr_get_u64(data);
+            snapshot_index = tr_get_u64(data + 8U);
+            snapshot_term = tr_get_u64(data + 16U);
+            snapshot_size = tr_get_u64(data + 24U);
+            snapshot_checksum = tr_get_u64(data + 32U);
+            commit_index = tr_get_u64(data + 40U);
+            configuration_size = tr_get_u32(data + 56U);
+            digest_size = tr_get_u32(data + 60U);
+            if ((digest_size != 0U &&
+                 digest_size != TR_COMPAT_SNAPSHOT_DIGEST_SIZE) ||
+                configuration_size > size - 64U ||
+                digest_size > size - 64U - configuration_size ||
+                size != 64U + configuration_size + digest_size ||
+                leader_term == 0U ||
+                snapshot_index == 0U ||
+                snapshot_term == 0U ||
+                snapshot_term > leader_term ||
+                leader_term < state->term ||
+                snapshot_index <= state->snapshot_index ||
+                commit_index < snapshot_index ||
+                (commit_index != snapshot_index &&
+                 commit_index > last_index)) {
+                *out_reason = "wal_replay_incompatible";
+                return SALTS_EPROTO;
+            }
+            if (snapshot_size > limits->max_snapshot_bytes) {
+                *out_reason = "max_snapshot_bytes_exceeded";
+                return SALTS_EPROTO;
+            }
+            if (digest_size != 0U) {
+                snapshot_digest =
+                    data + 64U + configuration_size;
+            }
+            memset(&configuration, 0, sizeof(configuration));
+            if (tr_raft_conf_decode(
+                    data + 64U, configuration_size,
+                    &configuration) != SALTS_OK) {
+                *out_reason = "configuration_incompatible";
+                return SALTS_EPROTO;
+            }
+            if (snapshot_index > state->snapshot_index &&
+                snapshot_index <= last_index) {
+                size_t match = (size_t)(
+                    snapshot_index - state->snapshot_index - 1U);
+
+                if (state->entry_terms[match] == snapshot_term) {
+                    suffix_offset = match + 1U;
+                    suffix_count =
+                        state->entry_count - suffix_offset;
+                }
+            }
+            rc = tr_validate_snapshot_file(
+                prefix, snapshot_index, snapshot_term,
+                snapshot_size, snapshot_checksum,
+                snapshot_digest, digest_size, out_reason);
+            if (rc != SALTS_OK) {
+                return rc;
+            }
+            if (suffix_count != 0U) {
+                memmove(
+                    state->entry_terms,
+                    state->entry_terms + suffix_offset,
+                    suffix_count * sizeof(state->entry_terms[0]));
+            }
+            state->entry_count = suffix_count;
+            state->snapshot_index = snapshot_index;
+            state->term = leader_term;
+            state->commit_index = commit_index;
+        } else {
+            *out_reason = "wal_operation_unsupported";
+            return SALTS_EPROTO;
+        }
+        offset += size;
+    }
+    return SALTS_OK;
+}
+
+static uint64_t tr_transaction_checksum(const uint8_t *header,
+                                        const uint8_t *payload,
+                                        size_t payload_size)
+{
+    uint64_t seed = tr_get_u64(header + 16U) ^
+                    tr_get_u64(header + 24U) ^
+                    tr_get_u64(header + 32U);
+
+    return XXH3_64bits_withSeed(payload, payload_size, seed);
+}
+
+static int tr_replay_segment(const char *prefix,
+                             uint64_t sequence,
+                             int is_first,
+                             int is_last,
+                             tr_compat_replay_state_t *state,
+                             const tr_compat_limits_t *limits,
+                             const char **out_reason)
+{
+    uint8_t segment_header[TR_COMPAT_SEGMENT_HEADER_SIZE];
+    char path[SALTS_FS_MAX_PATH];
+    salts_fs_stat_t stat;
+    salts_file_t file = SALTS_INVALID_FILE;
+    uint64_t offset = TR_COMPAT_SEGMENT_HEADER_SIZE;
+    int rc;
+
+    rc = tr_segment_path(prefix, sequence, path, sizeof(path));
+    if (rc != SALTS_OK) {
+        *out_reason = "path_too_long";
+        return rc;
+    }
+    rc = salts_fs_stat(path, &stat);
+    if (rc != SALTS_OK || !stat.is_file ||
+        stat.size < TR_COMPAT_SEGMENT_HEADER_SIZE ||
+        stat.size > limits->segment_bytes) {
+        *out_reason = "segment_corrupt";
+        return SALTS_EPROTO;
+    }
+    file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
+    if (file == SALTS_INVALID_FILE) {
+        *out_reason = "segment_io_error";
+        return SALTS_EIO;
+    }
+    rc = tr_read_at_exact(
+        file, 0U, segment_header, sizeof(segment_header));
+    if (rc != SALTS_OK) {
+        *out_reason = "segment_io_error";
+        (void)salts_fs_close(file);
+        return rc;
+    }
+    while (rc == SALTS_OK && offset < stat.size) {
+        uint8_t header[TR_COMPAT_TRANSACTION_HEADER_SIZE];
+        uint64_t transaction_id;
+        uint64_t previous_transaction_id;
+        uint64_t payload_size;
+        uint8_t *payload = NULL;
+        uint64_t remaining = stat.size - offset;
+
+        if (remaining < sizeof(header)) {
+            if (is_last) {
+                break;
+            }
+            *out_reason = "transaction_corrupt";
+            rc = SALTS_EPROTO;
+            break;
+        }
+        rc = tr_read_at_exact(file, offset, header, sizeof(header));
+        if (rc != SALTS_OK) {
+            *out_reason = "segment_io_error";
+            break;
+        }
+        if (memcmp(header, TR_COMPAT_TRANSACTION_MAGIC, 8U) != 0 ||
+            tr_get_u32(header + 8U) != TR_COMPAT_WAL_FORMAT_VERSION ||
+            tr_get_u32(header + 12U) !=
+                TR_COMPAT_TRANSACTION_HEADER_SIZE) {
+            *out_reason = "transaction_corrupt";
+            rc = SALTS_EPROTO;
+            break;
+        }
+        transaction_id = tr_get_u64(header + 16U);
+        previous_transaction_id = tr_get_u64(header + 24U);
+        payload_size = tr_get_u64(header + 32U);
+        if (is_first &&
+            offset == TR_COMPAT_SEGMENT_HEADER_SIZE &&
+            state->last_transaction_id == 0U &&
+            previous_transaction_id != 0U) {
+            state->last_transaction_id =
+                previous_transaction_id;
+        }
+        if (transaction_id != state->last_transaction_id + 1U ||
+            previous_transaction_id != state->last_transaction_id) {
+            *out_reason = "transaction_sequence_mismatch";
+            rc = SALTS_EPROTO;
+            break;
+        }
+        if (payload_size >
+            limits->max_transaction_bytes -
+                TR_COMPAT_TRANSACTION_HEADER_SIZE) {
+            *out_reason = "transaction_bytes_exceeded";
+            rc = SALTS_EPROTO;
+            break;
+        }
+        if (payload_size >
+            stat.size - offset - sizeof(header)) {
+            if (is_last) {
+                break;
+            }
+            *out_reason = "transaction_corrupt";
+            rc = SALTS_EPROTO;
+            break;
+        }
+        payload = (uint8_t *)malloc(
+            payload_size == 0U ? 1U : (size_t)payload_size);
+        if (payload == NULL) {
+            *out_reason = "preflight_memory_error";
+            rc = SALTS_ENOMEM;
+            break;
+        }
+        rc = tr_read_at_exact(
+            file, offset + sizeof(header),
+            payload, (size_t)payload_size);
+        if (rc != SALTS_OK) {
+            *out_reason = "segment_io_error";
+            free(payload);
+            break;
+        }
+        if (tr_get_u64(header + 40U) !=
+            tr_transaction_checksum(
+                header, payload, (size_t)payload_size)) {
+            *out_reason = "transaction_checksum_mismatch";
+            free(payload);
+            rc = SALTS_EPROTO;
+            break;
+        }
+        rc = tr_apply_payload(
+            prefix, payload, (size_t)payload_size,
+            state, limits, out_reason);
+        free(payload);
+        if (rc != SALTS_OK) {
+            break;
+        }
+        if (is_first &&
+            offset == TR_COMPAT_SEGMENT_HEADER_SIZE &&
+            previous_transaction_id != 0U &&
+            state->snapshot_index == 0U) {
+            *out_reason = "compacted_prefix_missing_snapshot";
+            rc = SALTS_EPROTO;
+            break;
+        }
+        state->last_transaction_id = transaction_id;
+        offset += sizeof(header) + payload_size;
+    }
+    (void)salts_fs_close(file);
+    return rc;
+}
+
+static int tr_validate_legacy_replay(
+    const char *prefix,
+    tr_compat_result_t *result)
+{
+    tr_compat_replay_state_t state;
+    uint64_t sequence;
+    int rc = SALTS_OK;
+
+    memset(&state, 0, sizeof(state));
+    for (sequence = result->visible_first;
+         sequence <= result->visible_last;
+         ++sequence) {
+        rc = tr_replay_segment(
+            prefix, sequence,
+            sequence == result->visible_first,
+            sequence == result->visible_last,
+            &state, &result->limits, &result->reason);
+        if (rc != SALTS_OK) {
+            break;
+        }
+    }
+    free(state.entry_terms);
+    return rc;
 }
 
 static void tr_print_json(const tr_compat_result_t *result)
@@ -395,10 +1007,15 @@ int main(int argc, char **argv)
     if (prefix == NULL || prefix[0] == '\0' ||
         result.limits.max_segments == 0U ||
         result.limits.max_segments > TR_COMPAT_V020_MAX_SEGMENTS ||
-        result.limits.segment_bytes < TR_COMPAT_SEGMENT_HEADER_SIZE ||
-        result.limits.max_transaction_bytes == 0U ||
-        result.limits.max_transaction_bytes > result.limits.segment_bytes ||
+        result.limits.segment_bytes < TR_COMPAT_V020_MIN_SEGMENT_BYTES ||
+        result.limits.segment_bytes > INT_MAX ||
+        result.limits.max_transaction_bytes <
+            TR_COMPAT_TRANSACTION_HEADER_SIZE ||
+        result.limits.max_transaction_bytes >
+            result.limits.segment_bytes -
+                TR_COMPAT_SEGMENT_HEADER_SIZE ||
         result.limits.max_log_entries == 0U ||
+        result.limits.max_log_entries > SIZE_MAX ||
         result.limits.max_snapshot_bytes == 0U) {
         tr_print_json(&result);
         return 1;
@@ -408,6 +1025,9 @@ int main(int argc, char **argv)
     rc = tr_read_manifest(prefix, &result);
     if (rc == SALTS_OK) {
         rc = tr_scan_legacy_window(prefix, &result);
+    }
+    if (rc == SALTS_OK) {
+        rc = tr_validate_legacy_replay(prefix, &result);
     }
     if (rc == SALTS_OK) {
         result.compatible = 1;
