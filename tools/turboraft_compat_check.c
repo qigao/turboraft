@@ -1,5 +1,3 @@
-#include <turboraft/raft_core.h>
-
 #include <salts_error.h>
 #include <salts_fs.h>
 
@@ -28,6 +26,15 @@
 #define TR_COMPAT_V020_MAX_SEGMENTS 65535U
 #define TR_COMPAT_V020_MAX_ENTRY_BYTES 512U
 #define TR_COMPAT_SNAPSHOT_DIGEST_SIZE 32U
+#define TR_COMPAT_CONF_CODEC_VERSION 1U
+#define TR_COMPAT_CONF_HEADER_SIZE 16U
+#define TR_COMPAT_CONF_MEMBER_SIZE 9U
+#define TR_COMPAT_CONF_MAX_MEMBERS 31U
+#define TR_COMPAT_CONF_JOINT 1U
+#define TR_COMPAT_CONF_FINAL 2U
+#define TR_COMPAT_CONF_OLD_VOTER 0x01U
+#define TR_COMPAT_CONF_NEW_VOTER 0x02U
+#define TR_COMPAT_CONF_LEARNER 0x04U
 
 enum tr_compat_operation_type {
     TR_COMPAT_OP_HARD_STATE = 1,
@@ -83,6 +90,92 @@ static uint64_t tr_get_u64(const uint8_t *input)
         value |= (uint64_t)input[index] << (index * 8U);
     }
     return value;
+}
+
+static uint64_t tr_get_be_u64(const uint8_t *input)
+{
+    uint64_t value = 0U;
+    size_t index;
+
+    for (index = 0U; index < 8U; ++index) {
+        value = (value << 8U) | input[index];
+    }
+    return value;
+}
+
+static int tr_validate_v020_configuration(const uint8_t *input,
+                                          size_t input_length)
+{
+    static const uint8_t magic[4] = {'T', 'R', 'C', 'F'};
+    const uint8_t voter_roles =
+        TR_COMPAT_CONF_OLD_VOTER | TR_COMPAT_CONF_NEW_VOTER;
+    const uint8_t all_roles =
+        voter_roles | TR_COMPAT_CONF_LEARNER;
+    uint64_t previous_node_id = 0U;
+    uint64_t transition_id;
+    size_t old_voter_count = 0U;
+    size_t new_voter_count = 0U;
+    size_t member_count;
+    uint8_t phase;
+    size_t expected_length;
+    size_t index;
+
+    if (input == NULL ||
+        input_length < TR_COMPAT_CONF_HEADER_SIZE ||
+        memcmp(input, magic, sizeof(magic)) != 0 ||
+        input[4] != TR_COMPAT_CONF_CODEC_VERSION ||
+        input[7] != 0U) {
+        return SALTS_EPROTO;
+    }
+    phase = input[5];
+    member_count = input[6];
+    if ((phase != TR_COMPAT_CONF_JOINT &&
+         phase != TR_COMPAT_CONF_FINAL) ||
+        member_count == 0U ||
+        member_count > TR_COMPAT_CONF_MAX_MEMBERS) {
+        return SALTS_EPROTO;
+    }
+    expected_length =
+        TR_COMPAT_CONF_HEADER_SIZE +
+        TR_COMPAT_CONF_MEMBER_SIZE * member_count;
+    if (input_length != expected_length) {
+        return SALTS_EPROTO;
+    }
+    transition_id = tr_get_be_u64(input + 8U);
+    if (phase == TR_COMPAT_CONF_JOINT &&
+        transition_id == 0U) {
+        return SALTS_EPROTO;
+    }
+    for (index = 0U; index < member_count; ++index) {
+        size_t offset =
+            TR_COMPAT_CONF_HEADER_SIZE +
+            TR_COMPAT_CONF_MEMBER_SIZE * index;
+        uint64_t node_id = tr_get_be_u64(input + offset);
+        uint8_t roles = input[offset + 8U];
+
+        if (node_id == 0U ||
+            (index != 0U && previous_node_id >= node_id) ||
+            roles == 0U ||
+            (roles & (uint8_t)~all_roles) != 0U ||
+            ((roles & TR_COMPAT_CONF_NEW_VOTER) != 0U &&
+             (roles & TR_COMPAT_CONF_LEARNER) != 0U)) {
+            return SALTS_EPROTO;
+        }
+        if (phase == TR_COMPAT_CONF_FINAL &&
+            roles != voter_roles &&
+            roles != TR_COMPAT_CONF_LEARNER) {
+            return SALTS_EPROTO;
+        }
+        old_voter_count +=
+            (roles & TR_COMPAT_CONF_OLD_VOTER) != 0U;
+        new_voter_count +=
+            (roles & TR_COMPAT_CONF_NEW_VOTER) != 0U;
+        previous_node_id = node_id;
+    }
+    return old_voter_count != 0U &&
+                   new_voter_count != 0U
+               ? SALTS_OK
+               : SALTS_EPROTO;
 }
 
 static int tr_parse_u64(const char *value, uint64_t *out)
@@ -636,7 +729,6 @@ static int tr_apply_payload(const char *prefix,
             const uint8_t *snapshot_digest = NULL;
             size_t suffix_offset = 0U;
             size_t suffix_count = 0U;
-            tr_raft_conf_t configuration;
             int rc;
 
             if (size < 64U) {
@@ -676,10 +768,8 @@ static int tr_apply_payload(const char *prefix,
                 snapshot_digest =
                     data + 64U + configuration_size;
             }
-            memset(&configuration, 0, sizeof(configuration));
-            if (tr_raft_conf_decode(
-                    data + 64U, configuration_size,
-                    &configuration) != SALTS_OK) {
+            if (tr_validate_v020_configuration(
+                    data + 64U, configuration_size) != SALTS_OK) {
                 *out_reason = "configuration_incompatible";
                 return SALTS_EPROTO;
             }
