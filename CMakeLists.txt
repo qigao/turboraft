@@ -324,7 +324,7 @@ target_link_libraries(turboraft_wal_storage
 
 add_executable(turboraft_compat_check tools/turboraft_compat_check.c)
 target_link_libraries(turboraft_compat_check
-                      PRIVATE Salts::Core xxHash::xxhash)
+                      PRIVATE TurboRaft::Core OpenSSL::Crypto xxHash::xxhash)
 set_target_properties(turboraft_compat_check
                       PROPERTIES FOLDER "TurboRaft/tools")
 
