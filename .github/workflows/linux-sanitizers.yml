@@ -23,6 +23,7 @@ env:
   CHTTP_REF: master
   ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+  TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:history_size=7
 
 jobs:
   sanitizer:
@@ -34,9 +35,11 @@ jobs:
       matrix:
         include:
           - name: asan
-            cmake_flags: -DENABLE_SANITIZER_ADDRESS=ON -DENABLE_SANITIZER_UNDEFINED=OFF
+            cmake_flags: -DENABLE_SANITIZER_ADDRESS=ON -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_SANITIZER_THREAD=OFF
           - name: ubsan
-            cmake_flags: -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=ON
+            cmake_flags: -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=ON -DENABLE_SANITIZER_THREAD=OFF
+          - name: tsan
+            cmake_flags: -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_SANITIZER_THREAD=ON
     env:
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}
       SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts
