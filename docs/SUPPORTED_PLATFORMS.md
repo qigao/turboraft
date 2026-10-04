@@ -21,11 +21,13 @@ same change.
 | Linux Release | `ubuntu-latest`, GCC (current hosted image) | current Salts `master`, SaltsUtils `master`, FlowMQ `main`, CHttp `master`; x64-linux vcpkg baseline below | configure/build, focused production integration, full CTest, SDK install, installed Core/CFlow/FlowMQ/ControlPlane consumers |
 | Linux ASan | `ubuntu-latest`, GCC Debug + AddressSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs are intentionally **not** ASan-instrumented so TurboRaft owns the sanitizer runtime | focused production gates + complete CTest inventory under ASan |
 | Linux UBSan | `ubuntu-latest`, GCC Debug + UndefinedBehaviorSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs are intentionally uninstrumented to avoid mixed sanitizer runtimes | focused production gates + complete CTest inventory under UBSan |
+| Linux TSan | `ubuntu-latest`, GCC Debug + ThreadSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs remain uninstrumented so TurboRaft owns the TSan runtime | focused production gates + complete CTest inventory under TSan |
 | Windows Release | `windows-2025`, x64 MSVC via `VsDevCmd` + Ninja using the shared v145 triplet | latest published Salts.Native / SaltsUtils.Native roots, current FlowMQ `main`, CHttp `master`, canonical shared-cache triplet | MSVC configure/build, focused production gates, full CTest, SDK install, installed Core/FlowMQ/ControlPlane consumers |
 
 Qualification evidence on 2026-09-23:
 
 - Linux ASan/UBSan: PR #60, sanitizer run `35808420578`.
+- Linux TSan: PR #122 initial qualification run `37168121161`, focused production gates and full CTest PASS with the hosted GCC/TSan runtime.
 - Windows MSVC Release: PR #61, Windows run `35810071848`.
 - Windows qualification includes the real FlowMQ/mTLS peer-service gate and
   the multi-process chaos test.
@@ -103,7 +105,7 @@ on POSIX and Windows paths.
 
 ## Sanitizer policy
 
-ASan and UBSan are release-blocking Linux gates.
+ASan, UBSan, and TSan are release-blocking Linux gates.
 
 Dependency Debug SDKs are built with their default ASan options explicitly
 disabled in the sanitizer workflow. Only the TurboRaft build receives the
@@ -111,9 +113,10 @@ matrix-selected sanitizer. This prevents an UBSan process from loading an
 ASan-instrumented first-party SDK and makes sanitizer failures attributable to
 the product under test.
 
-TSan is **not yet a release-blocking profile**. It may become one only after a
-hosted compiler/runtime combination proves stable enough that failures are
-actionable rather than runtime/toolchain noise.
+The hosted GCC/ThreadSanitizer combination is qualified by PR #122. TSan uses
+the same focused production gates and full CTest inventory as ASan/UBSan, with
+first-party dependency Debug SDKs left uninstrumented so reports are
+attributable to TurboRaft rather than mixed sanitizer runtimes.
 
 ## Not currently release-qualified
 
@@ -123,7 +126,6 @@ merge gates:
 
 - macOS;
 - Android;
-- Linux TSan;
 - compilers/toolchain versions older than the hosted matrix;
 - 32-bit targets;
 - non-x64 Windows targets.
@@ -138,7 +140,7 @@ The matrix maps directly to these workflows:
 
 - `.github/workflows/full-stack-acceptance.yml` — Linux Release and installed
   package contracts.
-- `.github/workflows/linux-sanitizers.yml` — Linux ASan/UBSan.
+- `.github/workflows/linux-sanitizers.yml` — Linux ASan/UBSan/TSan.
 - `.github/workflows/windows-msvc-release.yml` — Windows x64 MSVC Release.
 - `.github/workflows/cflow-orm-sqlite.yml` — SQLite/Orm application recovery
   qualification.
