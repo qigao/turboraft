@@ -331,6 +331,9 @@ jobs:
             local prefix="$2"
             local reason="$3"
             local segment_bytes="${4:-65536}"
+            local transaction_bytes="${5:-16384}"
+            local max_log_entries="${6:-16}"
+            local max_snapshot_bytes="${7:-1024}"
             local before="artifacts/downgrade-preflight/${name}-before.sha256"
             local after="artifacts/downgrade-preflight/${name}-after.sha256"
             local output="artifacts/downgrade-preflight/${name}.json"
@@ -342,9 +345,9 @@ jobs:
               --path-prefix "$prefix" \
               --legacy-max-segments 4 \
               --legacy-segment-bytes "$segment_bytes" \
-              --legacy-max-transaction-bytes 16384 \
-              --legacy-max-log-entries 16 \
-              --legacy-max-snapshot-bytes 1024 > "$output"
+              --legacy-max-transaction-bytes "$transaction_bytes" \
+              --legacy-max-log-entries "$max_log_entries" \
+              --legacy-max-snapshot-bytes "$max_snapshot_bytes" > "$output"
             rc=$?
             set -e
             test "$rc" -ne 0
@@ -391,6 +394,23 @@ jobs:
             "$root/segment-size/raft" low
           truncate -s 65537 "$root/segment-size/raft.00000001.wal"
           preflight_reject segment-size "$root/segment-size/raft" segment_bytes_exceeded
+
+          # Real current WAL; only the advertised v0.2.0 replay limits change.
+          # These cases prove preflight cannot return compatible=true when the
+          # old binary would reject during WAL replay before serving traffic.
+          for name in transaction-limit log-limit snapshot-limit missing-snapshot corrupt-snapshot; do
+            mkdir -p "$root/$name"
+            cp -a "$GITHUB_WORKSPACE/artifacts/current-to-prior/." "$root/$name/"
+          done
+          preflight_reject transaction-limit "$root/transaction-limit/raft" transaction_bytes_exceeded 65536 48 16 1024
+          preflight_reject log-limit "$root/log-limit/raft" max_log_entries_exceeded 65536 16384 2 1024
+          preflight_reject snapshot-limit "$root/snapshot-limit/raft" max_snapshot_bytes_exceeded 65536 16384 16 1
+
+          rm "$root/missing-snapshot/raft.snapshot.2.2"
+          preflight_reject missing-snapshot "$root/missing-snapshot/raft" snapshot_missing
+
+          printf X | dd of="$root/corrupt-snapshot/raft.snapshot.2.2" bs=1 seek=48 conv=notrunc status=none
+          preflight_reject corrupt-snapshot "$root/corrupt-snapshot/raft" snapshot_checksum_mismatch
 
           mkdir -p "$root/noaccess"
           build/compat-downgrade/turboraft_v020_downgrade_fixture             "$root/noaccess/raft" low
