@@ -1035,6 +1035,7 @@ int main(int argc, char **argv)
 {
     tr_compat_result_t result;
     const char *prefix = NULL;
+    int target_seen = 0;
     int index;
     int rc;
 
@@ -1055,6 +1056,7 @@ int main(int argc, char **argv)
         }
         value = argv[index];
         if (strcmp(name, "--target") == 0) {
+            target_seen = 1;
             if (strcmp(value, "v0.2.0") != 0) {
                 tr_print_json(&result);
                 return 1;
@@ -1094,7 +1096,8 @@ int main(int argc, char **argv)
         }
     }
 
-    if (prefix == NULL || prefix[0] == '\0' ||
+    if (!target_seen ||
+        prefix == NULL || prefix[0] == '\0' ||
         result.limits.max_segments == 0U ||
         result.limits.max_segments > TR_COMPAT_V020_MAX_SEGMENTS ||
         result.limits.segment_bytes < TR_COMPAT_V020_MIN_SEGMENT_BYTES ||
@@ -1107,6 +1110,11 @@ int main(int argc, char **argv)
         result.limits.max_log_entries == 0U ||
         result.limits.max_log_entries > SIZE_MAX ||
         result.limits.max_snapshot_bytes == 0U) {
+        tr_print_json(&result);
+        return 1;
+    }
+    if (strlen(prefix) >= SALTS_FS_MAX_PATH - 64U) {
+        result.reason = "path_too_long";
         tr_print_json(&result);
         return 1;
     }
