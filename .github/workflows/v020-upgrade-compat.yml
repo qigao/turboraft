@@ -412,6 +412,36 @@ jobs:
           printf X | dd of="$root/corrupt-snapshot/raft.snapshot.2.2" bs=1 seek=48 conv=notrunc status=none
           preflight_reject corrupt-snapshot "$root/corrupt-snapshot/raft" snapshot_checksum_mismatch
 
+          set +e
+          "$CURRENT_TURBORAFT_ROOT/bin/turboraft_compat_check" downgrade \
+            --path-prefix "$root/log-limit/raft" \
+            --legacy-max-segments 4 \
+            --legacy-segment-bytes 65536 \
+            --legacy-max-transaction-bytes 16384 \
+            --legacy-max-log-entries 16 \
+            --legacy-max-snapshot-bytes 1024 \
+            > artifacts/downgrade-preflight/missing-target.json
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+          grep -F '"reason":"invalid_arguments"' artifacts/downgrade-preflight/missing-target.json
+
+          long_prefix="$(python3 -c 'print("x" * 4096)')"
+          set +e
+          "$CURRENT_TURBORAFT_ROOT/bin/turboraft_compat_check" downgrade \
+            --target v0.2.0 \
+            --path-prefix "$long_prefix" \
+            --legacy-max-segments 4 \
+            --legacy-segment-bytes 65536 \
+            --legacy-max-transaction-bytes 16384 \
+            --legacy-max-log-entries 16 \
+            --legacy-max-snapshot-bytes 1024 \
+            > artifacts/downgrade-preflight/path-margin.json
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+          grep -F '"reason":"path_too_long"' artifacts/downgrade-preflight/path-margin.json
+
           mkdir -p "$root/noaccess"
           build/compat-downgrade/turboraft_v020_downgrade_fixture             "$root/noaccess/raft" low
           find "$root/noaccess" -maxdepth 1 -type f -name 'raft*' -print0             | sort -z | xargs -0 sha256sum             > artifacts/downgrade-preflight/noaccess-before.sha256
