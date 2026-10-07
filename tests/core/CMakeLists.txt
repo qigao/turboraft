@@ -181,28 +181,49 @@ target_link_libraries(turboraft_cflow_snapshot_replay_tests
 add_test(NAME turboraft.cflow_snapshot_replay
          COMMAND turboraft_cflow_snapshot_replay_tests)
 
-if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
+if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES OR TURBORAFT_ENABLE_ORM_LIVE_TESTS)
   if(NOT DEFINED ENV{TURBODB_ROOT} OR
      "$ENV{TURBODB_ROOT}" STREQUAL "" OR
      NOT IS_DIRECTORY "$ENV{TURBODB_ROOT}")
-    message(FATAL_ERROR
-            "TURBODB_ROOT must name the TurboDB install prefix when ORM SQLite fixtures are enabled")
+    message(FATAL_ERROR "TURBODB_ROOT must name the TurboDB 2.3.1+ SDK for ORM tests")
   endif()
-  find_package(TurboDB CONFIG REQUIRED
-               PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
-  if(NOT TARGET Orm::C)
-    message(FATAL_ERROR "The TurboDB install does not provide Orm::C")
+  file(TO_CMAKE_PATH "$ENV{TURBODB_ROOT}" _turboraft_turbodb_root)
+  unset(TurboDB_DIR CACHE)
+  unset(TurboDB_DIR)
+  find_package(TurboDB 2.3.1 CONFIG REQUIRED
+               PATHS "${_turboraft_turbodb_root}" NO_DEFAULT_PATH)
+  if(NOT TARGET Orm::C OR NOT IS_DIRECTORY "${TurboDB_DRIVER_DIR}")
+    message(FATAL_ERROR "TurboDB must export Orm::C and its driver deployment directory")
   endif()
-  add_executable(turboraft_cflow_orm_sqlite_recovery_tests
-                 test_raft_cflow_orm_sqlite_recovery.c)
-  target_link_libraries(
-    turboraft_cflow_orm_sqlite_recovery_tests
+  add_executable(turboraft_cflow_orm_recovery_tests
+                 test_raft_cflow_orm_recovery.c)
+  target_link_libraries(turboraft_cflow_orm_recovery_tests
     PRIVATE TurboRaft::CFlowStateMachine Orm::C Salts::Coroutine Salts::TinyTest)
-  add_test(NAME turboraft.cflow_orm_sqlite_recovery
-           COMMAND turboraft_cflow_orm_sqlite_recovery_tests)
-  set_tests_properties(turboraft.cflow_orm_sqlite_recovery
-                       PROPERTIES LABELS "orm;sqlite;recovery")
+  set(_turboraft_orm_drivers)
+  if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
+    list(APPEND _turboraft_orm_drivers sqlite)
+  endif()
+  if(TURBORAFT_ENABLE_ORM_LIVE_TESTS)
+    list(APPEND _turboraft_orm_drivers mysql postgresql)
+  endif()
+  foreach(_driver IN LISTS _turboraft_orm_drivers)
+    set(_plugin "${TurboDB_DRIVER_DIR}/turbodb_driver_${_driver}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    if(NOT EXISTS "${_plugin}")
+      message(FATAL_ERROR "Missing requested TurboDB ORM driver: ${_plugin}")
+    endif()
+    add_test(NAME turboraft.cflow_orm_${_driver}_recovery
+             COMMAND turboraft_cflow_orm_recovery_tests)
+    set_tests_properties(turboraft.cflow_orm_${_driver}_recovery PROPERTIES
+      ENVIRONMENT "TURBORAFT_ORM_DRIVER=${_driver};TURBORAFT_ORM_PLUGIN=${_plugin}"
+      TIMEOUT 90 LABELS "orm;${_driver};recovery")
+  endforeach()
+  unset(_plugin)
+  unset(_driver)
+  unset(_turboraft_orm_drivers)
+  unset(_turboraft_turbodb_root)
+endif()
 
+if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
   add_executable(turboraft_orm_sqlite_crash_node
                  ../chaos/raft_orm_sqlite_crash_node.c)
   target_link_libraries(turboraft_orm_sqlite_crash_node PRIVATE Orm::C)
@@ -213,12 +234,9 @@ if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
                         PRIVATE Salts::Core Salts::Platform Salts::TinyTest)
   add_test(NAME turboraft.orm_sqlite_crash
            COMMAND turboraft_orm_sqlite_crash_tests)
-  set_tests_properties(
-    turboraft.orm_sqlite_crash
-    PROPERTIES ENVIRONMENT
-               "TURBORAFT_ORM_SQLITE_CRASH_NODE=$<TARGET_FILE:turboraft_orm_sqlite_crash_node>"
-               TIMEOUT 60
-               LABELS "orm;sqlite;crash")
+  set_tests_properties(turboraft.orm_sqlite_crash PROPERTIES
+    ENVIRONMENT "TURBORAFT_ORM_SQLITE_CRASH_NODE=$<TARGET_FILE:turboraft_orm_sqlite_crash_node>;ORM_SQLITE_PLUGIN=${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_LIBRARY_SUFFIX}"
+    TIMEOUT 60 LABELS "orm;sqlite;crash")
 endif()
 
 add_executable(turboraft_service_tests test_raft_service.c)
@@ -569,28 +587,6 @@ if(TARGET turboraft_flowmq)
   set_tests_properties(turboraft.flowmq_peer_service PROPERTIES TIMEOUT 30)
 endif()
 
-if(TARGET turboraft_turbodb_redis_state_machine)
-  add_executable(turboraft_turbodb_redis_state_machine_tests
-                 test_turbodb_redis_state_machine.c)
-  target_link_libraries(turboraft_turbodb_redis_state_machine_tests
-                        PRIVATE TurboRaft::TurboDbRedisStateMachine
-                                Salts::TinyTest)
-  add_test(NAME turboraft.turbodb_redis_state_machine
-           COMMAND turboraft_turbodb_redis_state_machine_tests)
-
-  add_executable(turboraft_cflow_redis_recovery_tests
-                 test_raft_cflow_redis_recovery.c)
-  target_link_libraries(
-    turboraft_cflow_redis_recovery_tests
-    PRIVATE TurboRaft::CFlowStateMachine
-            TurboRaft::TurboDbRedisStateMachine
-            Salts::Coroutine
-            Salts::TinyTest)
-  add_test(NAME turboraft.cflow_redis_recovery
-           COMMAND turboraft_cflow_redis_recovery_tests)
-  set_tests_properties(turboraft.cflow_redis_recovery
-                       PROPERTIES LABELS "cflow;redis;recovery")
-endif()
 cmake_config_directory_targets(FOLDER "tests/core")
 add_executable(turboraft_multicore_tests test_raft_multicore.c)
 target_link_libraries(turboraft_multicore_tests PRIVATE TurboRaft::Multicore TurboRaft::FlowMQ Salts::TinyTest)

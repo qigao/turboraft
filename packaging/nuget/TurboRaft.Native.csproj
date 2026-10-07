@@ -18,6 +18,8 @@
     <PackageReference Include="SaltsUtils.Native" Version="*" PrivateAssets="all" />
     <PackageReference Include="FlowMQ.Native" Version="*" PrivateAssets="all" />
     <PackageReference Include="CHttp.Native" Version="*" PrivateAssets="all" />
+    <PackageReference Include="TurboDB.Native" Version="[2.3.1]" PrivateAssets="all"
+                      Condition="'$(TurboRaftRestoreOrm)' == 'true'" />
     <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="$(PackageRoot)/sdk/**/*" Pack="true" PackagePath="sdk/" />
   </ItemGroup>

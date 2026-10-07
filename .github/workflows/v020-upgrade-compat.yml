@@ -208,7 +208,6 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$current" \
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
             -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
-            -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=OFF \
             -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
           cmake --build build/current-storage --target install --parallel 2
           test -f "$current/lib/cmake/TurboRaft/TurboRaftConfig.cmake"

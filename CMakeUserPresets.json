@@ -153,7 +153,6 @@
         "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{FLOWMQ_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}"
       },
       "cacheVariables": {
-        "TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE": "ON",
         "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows",
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft/release"
       }
@@ -319,7 +318,8 @@
         "SALTS_ROOT": "$penv{SALTS_ROOT}",
         "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
         "FLOWMQ_ROOT": "$penv{FLOWMQ_ROOT}",
-        "CHTTP_ROOT": "$penv{CHTTP_ROOT}"
+        "CHTTP_ROOT": "$penv{CHTTP_ROOT}",
+        "TURBODB_ROOT": "$penv{TURBODB_ROOT}"
       },
       "cacheVariables": {
         "VCPKG_MANIFEST_MODE": true,
@@ -329,8 +329,8 @@
         "BUILD_TESTS": false,
         "BUILD_BENCHMARKS": false,
         "BUILD_EXAMPLES": false,
-        "TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE": false,
-        "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": false
+        "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": false,
+        "TURBORAFT_ENABLE_ORM_LIVE_TESTS": false
       }
     },
     {
@@ -385,7 +385,6 @@
         "BUILD_BENCHMARKS": false,
         "BUILD_EXAMPLES": false,
         "TURBORAFT_BUILD_FUZZERS": false,
-        "TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE": false,
         "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": false,
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft-storage/release"
       }
@@ -398,8 +397,7 @@
         "BUILD_TESTING": true,
         "BUILD_TESTS": false,
         "BUILD_BENCHMARKS": true,
-        "BUILD_EXAMPLES": true,
-        "TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE": false
+        "BUILD_EXAMPLES": true
       }
     },
     {
@@ -410,8 +408,33 @@
         "BUILD_TESTING": true,
         "BUILD_TESTS": false,
         "BUILD_BENCHMARKS": true,
-        "BUILD_EXAMPLES": true,
-        "TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE": false
+        "BUILD_EXAMPLES": true
+      }
+    },
+    {
+      "name": "win-orm-user",
+      "inherits": "win-release-user",
+      "binaryDir": "${sourceDir}/build/Msvc-Orm",
+      "cacheVariables": {
+        "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": true,
+        "TURBORAFT_ENABLE_ORM_LIVE_TESTS": false,
+        "BUILD_TESTING": true,
+        "BUILD_TESTS": true,
+        "BUILD_EXAMPLES": false,
+        "BUILD_BENCHMARKS": false
+      }
+    },
+    {
+      "name": "ci-linux-orm-user",
+      "inherits": "ci-linux-release-user",
+      "binaryDir": "${sourceDir}/.ci/build/turboraft-orm",
+      "cacheVariables": {
+        "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": true,
+        "TURBORAFT_ENABLE_ORM_LIVE_TESTS": true,
+        "BUILD_TESTING": true,
+        "BUILD_TESTS": true,
+        "BUILD_EXAMPLES": false,
+        "BUILD_BENCHMARKS": false
       }
     }
   ],
@@ -603,6 +626,28 @@
       "targets": [
         "install"
       ]
+    },
+    {
+      "name": "win-orm-user",
+      "configurePreset": "win-orm-user"
+    },
+    {
+      "name": "install-win-orm-user",
+      "configurePreset": "win-orm-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "ci-linux-orm-user",
+      "configurePreset": "ci-linux-orm-user"
+    },
+    {
+      "name": "install-ci-linux-orm-user",
+      "configurePreset": "ci-linux-orm-user",
+      "targets": [
+        "install"
+      ]
     }
   ],
   "testPresets": [
@@ -666,6 +711,31 @@
       "configurePreset": "linux-benchmarks-user",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "win-orm-user",
+      "configurePreset": "win-orm-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-linux-orm-user",
+      "configurePreset": "ci-linux-orm-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "label": "^orm$"
+        }
       },
       "execution": {
         "noTestsAction": "error"

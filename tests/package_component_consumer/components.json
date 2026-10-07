@@ -14,7 +14,6 @@
     {"name":"TextProtocolDebug","header":"turboraft/text_protocol_executor.h","profiles":["full"]},
     {"name":"ReplayDriver","header":"turboraft/text_replay_core_driver.h","profiles":["full"]},
     {"name":"FlowMQ","header":"turboraft/raft_flowmq_peer_service.h","profiles":["full"]},
-    {"name":"ControlPlane","header":"turboraft/raft_control_plane.h","profiles":["full"]},
-    {"name":"TurboDbRedisStateMachine","header":"turboraft/turbodb_redis_state_machine.h","profiles":["redis"]}
+    {"name":"ControlPlane","header":"turboraft/raft_control_plane.h","profiles":["full"]}
   ]
 }

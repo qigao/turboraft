@@ -23,12 +23,13 @@ CFlowStateMachine
 CFlow V5 exact macrostep settlement
         |
         +--> optional app-owned durable materialization
-             SQLite/Orm::C, Redis Lua, PostgreSQL, TidesDB,
-             file store, or no database
+             TurboDB 2.3.1+ / Orm::C
+             SQLite, MySQL, PostgreSQL
 ```
 
 TurboRaft Core remains consensus-only. It does not know SQL, ORM objects,
-Redis keys, application schemas, or business-state layouts. The legacy
+application schemas or business-state layouts. All database access belongs to
+TurboDB ORM; see [the database boundary](turbodb-orm-state-machine.md). The legacy
 synchronous `tr_raft_state_machine_t::apply_batch()` API remains available
 and unchanged.
 
@@ -120,17 +121,10 @@ CFlow macrostep
     -> Core ack_applied(index)
 ```
 
-This separation is demonstrated by both supported fixture families:
-
-- SQLite/Orm::C atomically commits domain state, exact entry identity, journal
-  payload, and durable applied marker;
-- Redis uses the existing Lua command-journal/identity/outbox contract on a
-  dedicated coroutine worker. A replay of the same exact entry is proven
-  REPLAYED without duplicating the outbox; a different payload at the same
-  index is a conflict and Core remains unapplied.
-
-PostgreSQL and TidesDB remain live backend qualification gates owned by the
-application/ORM layer. They are not Core dependencies.
+The same application-owned ORM recovery fixture runs against SQLite, MySQL and
+PostgreSQL. It commits domain rows, exact entry identity, journal payload and
+the durable applied marker in one transaction. Database drivers, SQL dialects,
+connections and transactions belong to TurboDB, not to Core or CFlow.
 
 ## Outcomes and error mapping
 
@@ -200,7 +194,7 @@ fact being tested:
 | Process dies before SQLite commit | transaction/journal/state are absent after reopen | `turboraft.orm_sqlite_crash` crash-before-commit child |
 | Process dies after SQLite commit | durable state/identity survive and reconcile APPLIED | `turboraft.orm_sqlite_crash` crash-after-commit child |
 | Host commit succeeds but reply is lost | durable identity proves APPLIED; no blind retry | `turboraft.cflow_orm_sqlite_recovery` fail-after-commit / unknown reply |
-| Redis exact entry is replayed after restart | Lua identity proves REPLAYED; outbox is not duplicated | `turboraft.cflow_redis_recovery` |
+| Conflicting payload at an existing index | exact identity mismatch leaves Core unapplied | `turboraft.cflow_orm_{sqlite,mysql,postgresql}_recovery` |
 | Durable app marker wins before Core applied ack | restart resumes after durable marker | `turboraft.apply_ack` durable-marker-before-Core-ack case |
 | Ready admitted but application not proven | volatile admission is forgotten and suffix replays | `turboraft.apply_ack` admitted-but-unapplied restart case |
 | Restart from snapshot plus committed suffix | reconstructed typed state and applied index equal uninterrupted execution | `turboraft.cflow_snapshot_replay` |
@@ -243,7 +237,7 @@ The process-local admitted cursor is never trusted across restart.
 ## Package and compatibility boundary
 
 `TurboRaft::CFlowStateMachine` is an optional exported component. Core-only
-consumers do not require CFlow, ORM, Redis, or TurboDB.
+consumers do not require CFlow, ORM or TurboDB.
 
 Installed-package CI independently configures both Core and CFlow consumers.
 The V1 asynchronous SPI is versioned. Existing synchronous
@@ -261,13 +255,11 @@ The v2 contract was closed incrementally:
   ownership, package contract;
 - PR #52: SQLite/Orm::C durable recovery and process crash cut-points;
 - PR #54: variable-length payload ownership/generation reuse;
-- PR #55: failure/shutdown settlement matrix;
-- PR #57: real Redis Lua async persistence/replay/conflict path.
+- PR #55: failure/shutdown settlement matrix.
 
-At PR #57 exact head
-`ee8269350d2bfddc5d1fb9b011a0ff018caf3f24`:
+The former PR #57 Redis integration was removed when the database boundary
+was unified on TurboDB ORM. It is no longer a supported package component.
 
-- Full TurboRaft stack acceptance `35801125437`: 58/58 Release CTest PASS;
-- CFlow ORM SQLite recovery `35801125405`: PASS;
-- CFlow Redis Lua recovery `35801125406`: existing Redis compatibility test
-  and new async recovery test both PASS against an isolated real Redis server.
+Current database qualification is `.github/workflows/cflow-orm.yml`, consuming
+TurboDB.Native 2.3.1 with the latest published Salts/SaltsUtils dependencies.
+Historical CI results do not qualify that SDK combination.

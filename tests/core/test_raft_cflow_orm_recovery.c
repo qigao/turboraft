@@ -138,15 +138,53 @@ static orm_status_t app_execute(
 
 static bool app_store_open(app_store_t *store, const char *filename)
 {
-    const char *plugin = getenv("ORM_SQLITE_PLUGIN");
+    const char *plugin = getenv("TURBORAFT_ORM_PLUGIN");
+    const char *driver = getenv("TURBORAFT_ORM_DRIVER");
     orm_runtime_config_t runtime_config;
     orm_driver_load_config_t load;
     orm_config_t config;
-    orm_option_t option;
+    orm_option_t options[8];
+    size_t option_count = 0U;
     orm_error_t error;
 
     if (store == NULL || filename == NULL || store->runtime != NULL ||
-        store->connection != NULL || plugin == NULL || plugin[0] == '\0') {
+        store->connection != NULL || plugin == NULL || plugin[0] == '\0' ||
+        driver == NULL) {
+        return false;
+    }
+    if (strcmp(driver, "sqlite") == 0) {
+        options[option_count++] = (orm_option_t){
+            orm_view("filename"), orm_view(filename)};
+    } else if (strcmp(driver, "postgresql") == 0) {
+        const char *conninfo = getenv("TURBORAFT_ORM_PG_CONNINFO");
+        if (conninfo == NULL || conninfo[0] == '\0') {
+            return false;
+        }
+        /* The isolated fixture uses libpq transport with explicit conninfo. */
+        options[option_count++] = (orm_option_t){
+            orm_view("turbodb_pg_transport"), orm_view("disabled")};
+        options[option_count++] = (orm_option_t){
+            orm_view("conninfo"), orm_view(conninfo)};
+    } else if (strcmp(driver, "mysql") == 0) {
+        static const char *keys[] = {
+            "host", "port", "username", "password", "database", "ca_file",
+            "server_name"};
+        static const char *variables[] = {
+            "ORM_MYSQL_HOST", "ORM_MYSQL_PORT", "ORM_MYSQL_USER",
+            "ORM_MYSQL_PASSWORD", "ORM_MYSQL_DATABASE", "ORM_MYSQL_CA_FILE",
+            "ORM_MYSQL_SERVER_NAME"};
+        size_t i;
+        for (i = 0U; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+            const char *value = getenv(variables[i]);
+            if (value == NULL || value[0] == '\0') {
+                return false;
+            }
+            options[option_count++] = (orm_option_t){
+                orm_view(keys[i]), orm_view(value)};
+        }
+        options[option_count++] = (orm_option_t){
+            orm_view("timeout_ms"), orm_view("5000")};
+    } else {
         return false;
     }
     orm_error_init(&error);
@@ -160,7 +198,7 @@ static bool app_store_open(app_store_t *store, const char *filename)
     load.struct_size = (uint32_t)sizeof(load);
     load.abi_version = ORM_RUNTIME_ABI_VERSION;
     load.module_path = orm_view(plugin);
-    load.expected_driver_id = orm_view("sqlite");
+    load.expected_driver_id = orm_view(driver);
     if (orm_runtime_load_driver(store->runtime, &load, &error) !=
         ORM_STATUS_OK) {
         (void)orm_runtime_close(store->runtime, &error);
@@ -170,11 +208,9 @@ static bool app_store_open(app_store_t *store, const char *filename)
     }
 
     orm_config(&config);
-    option.keyword = orm_view("filename");
-    option.value = orm_view(filename);
-    config.driver = orm_view("sqlite");
-    config.options = &option;
-    config.option_count = 1U;
+    config.driver = orm_view(driver);
+    config.options = options;
+    config.option_count = (uint32_t)option_count;
     if (orm_runtime_connect(store->runtime, &config, &store->connection,
                             &error) != ORM_STATUS_OK) {
         (void)orm_runtime_close(store->runtime, &error);
@@ -207,15 +243,19 @@ static void app_store_close(app_store_t *store)
 static bool app_store_create_schema(app_store_t *store)
 {
     static const char state_schema[] =
-        "create table app_state("
+        "create table turboraft_test_state("
         "singleton integer primary key check(singleton=1),"
-        "value integer not null,applied_index integer not null)";
+        "value bigint not null,applied_index bigint not null)";
     static const char state_seed[] =
-        "insert into app_state(singleton,value,applied_index) values(1,0,0)";
+        "insert into turboraft_test_state(singleton,value,applied_index) values(1,0,0)";
     static const char journal_schema[] =
-        "create table raft_journal("
-        "log_index integer primary key,term integer not null,"
-        "command_id integer not null,payload blob not null)";
+        "create table turboraft_test_journal("
+        "log_index bigint primary key,term bigint not null,"
+        "command_id bigint not null,payload blob not null)";
+    static const char pg_journal_schema[] =
+        "create table turboraft_test_journal("
+        "log_index bigint primary key,term bigint not null,"
+        "command_id bigint not null,payload bytea not null)";
     orm_error_t error;
 
     if (store == NULL || store->connection == NULL) {
@@ -226,7 +266,9 @@ static bool app_store_create_schema(app_store_t *store)
                        NULL, &error) == ORM_STATUS_OK &&
            app_execute(store->connection, NULL, state_seed, NULL, 0U,
                        NULL, &error) == ORM_STATUS_OK &&
-           app_execute(store->connection, NULL, journal_schema, NULL, 0U,
+           app_execute(store->connection, NULL,
+                       strcmp(getenv("TURBORAFT_ORM_DRIVER"), "postgresql") == 0
+                           ? pg_journal_schema : journal_schema, NULL, 0U,
                        NULL, &error) == ORM_STATUS_OK;
 }
 
@@ -244,10 +286,10 @@ static bool app_store_read_snapshot(app_store_t *store,
                                     app_store_snapshot_t *snapshot)
 {
     static const char state_sql[] =
-        "select value,applied_index from app_state where singleton=1";
-    static const char count_sql[] = "select count(*) from raft_journal";
+        "select value,applied_index from turboraft_test_state where singleton=1";
+    static const char count_sql[] = "select count(*) from turboraft_test_journal";
     static const char identity_sql[] =
-        "select term,command_id,payload from raft_journal where log_index=?1";
+        "select term,command_id,payload from turboraft_test_journal where log_index=?1";
     orm_result_t *result = NULL;
     orm_error_t error;
     orm_blob_t payload = {0};
@@ -323,12 +365,12 @@ static app_store_apply_result_t app_store_apply(
     int state)
 {
     static const char marker_sql[] =
-        "select applied_index from app_state where singleton=1";
+        "select applied_index from turboraft_test_state where singleton=1";
     static const char journal_sql[] =
-        "insert into raft_journal(log_index,term,command_id,payload) "
+        "insert into turboraft_test_journal(log_index,term,command_id,payload) "
         "values(?1,?2,?3,?4)";
     static const char state_sql[] =
-        "update app_state set value=?1,applied_index=?2 "
+        "update turboraft_test_state set value=?1,applied_index=?2 "
         "where singleton=1 and applied_index=?3";
     orm_transaction_t *transaction = NULL;
     orm_result_t *result = NULL;
@@ -397,7 +439,9 @@ static app_store_apply_result_t app_store_apply(
     }
     orm_result_destroy(result);
     result = NULL;
-    if (orm_transaction_commit(transaction, &error) != ORM_STATUS_OK) {
+    status = orm_transaction_commit(transaction, &error);
+    if (status != ORM_STATUS_OK) {
+        outcome = APP_STORE_COMMIT_UNKNOWN;
         goto cleanup;
     }
     committed = true;
@@ -410,8 +454,10 @@ static app_store_apply_result_t app_store_apply(
 
 cleanup:
     orm_result_destroy(result);
-    if (!committed) {
-        (void) orm_transaction_rollback(transaction, &error);
+    if (!committed && status != ORM_STATUS_COMMIT_UNKNOWN) {
+        if (orm_transaction_rollback(transaction, &error) != ORM_STATUS_OK) {
+            outcome = APP_STORE_COMMIT_UNKNOWN;
+        }
     }
     orm_transaction_destroy(transaction);
     return outcome;
@@ -789,7 +835,7 @@ static bool app_instance_destroy(app_cflow_fixture_t *fixture,
     return true;
 }
 
-spec("application-owned CFlow SQLite recovery")
+spec("application-owned CFlow TurboDB ORM recovery")
 {
     it("atomically rolls back or explicitly reconciles an exact durable entry")
     {
@@ -932,6 +978,19 @@ spec("application-owned CFlow SQLite recovery")
         check_equal(snapshot.journal_rows, 2U);
         check_true(app_identity_matches(&snapshot, &entries[1]));
 
+        /* A durable index alone cannot authorize replay acknowledgement. */
+        {
+            tr_raft_entry_t conflict = entries[1];
+            conflict.data[0] ^= 1U;
+            check_false(app_identity_matches(&snapshot, &conflict));
+            check_equal(tr_raft_apply_runtime_reconcile(
+                            runtime, &conflict, TR_RAFT_APPLY_OUTCOME_APPLIED,
+                            &result),
+                        SALTS_EPROTO);
+            check_equal(tr_raft_core_status(core, &core_status), SALTS_OK);
+            check_equal(core_status.applied_index, 1U);
+        }
+
         check_true(app_instance_init(&instance, &statechart, &executor,
                                      adapter, &binding, snapshot.value));
         check_equal(tr_raft_apply_runtime_reconcile(
@@ -942,6 +1001,9 @@ spec("application-owned CFlow SQLite recovery")
         check_equal(result.applied_through, 2U);
         check_equal(tr_raft_core_status(core, &core_status), SALTS_OK);
         check_equal(core_status.applied_index, 2U);
+        check_true(app_store_read_snapshot(&store, &snapshot));
+        check_equal(snapshot.value, 18);
+        check_equal(snapshot.journal_rows, 2U);
         check_false(atomic_load_explicit(&store.wrong_executor,
                                          memory_order_acquire));
 
@@ -953,6 +1015,16 @@ spec("application-owned CFlow SQLite recovery")
         check_true(cflow_executor_shutdown(&executor));
         cflow_executor_destroy(&executor);
         cflow_statechart_destroy(&statechart);
+        {
+            orm_error_t error;
+            orm_error_init(&error);
+            check_equal(app_execute(store.connection, NULL,
+                                    "drop table turboraft_test_journal", NULL, 0U,
+                                    NULL, &error), ORM_STATUS_OK);
+            check_equal(app_execute(store.connection, NULL,
+                                    "drop table turboraft_test_state", NULL, 0U,
+                                    NULL, &error), ORM_STATUS_OK);
+        }
         app_store_close(&store);
         check_equal(tt_remove_file(database_path), 0);
         free(database_path);

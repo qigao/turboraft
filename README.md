@@ -17,6 +17,11 @@ multiple groups to fixed owner threads, with bounded request/completion queues.
 see the [design and configuration contract](docs/DESIGN.md#optional-multicore-orchestration-130)
 and [durable counter example](examples/multicore_node.c).
 
+Application database writes use [TurboDB ORM 2.3.1+](docs/architecture/turbodb-orm-state-machine.md)
+for SQLite, MySQL and PostgreSQL. Applications own the schema and atomically
+commit business rows, entry identity and the applied marker through `Orm::C`.
+Raft Core owns consensus; it does not call database-native clients.
+
 ## Ownership model
 
 - `TurboRaft::Core` and `TurboRaft::Service` are single-owner state machines.
@@ -46,11 +51,13 @@ Configure requires active-profile installations provided through:
 - `SALTS_UTILS_ROOT`
 - `FLOWMQ_ROOT`
 - `CHTTP_ROOT` when building or consuming `TurboRaft::ControlPlane`
+- `TURBODB_ROOT` for the opt-in ORM recovery tests
 
 The supplied user presets resolve Debug and Release profiles independently and
 use `NO_DEFAULT_PATH` for first-party package discovery. Salts 2.1+ and
-SaltsUtils 4.2+ are required. Source integration gates follow current first-party
-branches; native package builds resolve current published SDKs and record the
+SaltsUtils 4.2+ are required. CI consumes published Salts/SaltsUtils SDKs;
+FlowMQ and CHttp source gates additionally follow their current branches.
+Native package builds resolve current published SDKs and record the
 resolved versions in each SDK manifest. FlowMQ must be built against the same
 Salts/SaltsUtils generation; an older SDK that imports `Salts::TbeSchema` is
 incompatible with SaltsUtils 4.2.

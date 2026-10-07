@@ -76,8 +76,8 @@ include(CTest)
 if(NOT TURBORAFT_PROFILE_FULL)
   if(BUILD_TESTING OR BUILD_TESTS OR BUILD_BENCHMARKS OR BUILD_EXAMPLES OR
      TURBORAFT_BUILD_FUZZERS OR
-     TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE OR
-     TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
+     TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES OR
+     TURBORAFT_ENABLE_ORM_LIVE_TESTS)
     message(FATAL_ERROR
             "TURBORAFT_BUILD_PROFILE=${TURBORAFT_BUILD_PROFILE} is a focused library profile; disable tests/benchmarks/examples/fuzzers/fixtures or use the full profile")
   endif()
@@ -344,30 +344,6 @@ target_link_libraries(turboraft_compat_check
 set_target_properties(turboraft_compat_check
                       PROPERTIES FOLDER "TurboRaft/tools")
 
-endif()
-
-if(TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE)
-  if(NOT DEFINED ENV{TURBODB_ROOT} OR
-     "$ENV{TURBODB_ROOT}" STREQUAL "" OR
-     NOT IS_DIRECTORY "$ENV{TURBODB_ROOT}")
-    message(FATAL_ERROR
-            "TURBODB_ROOT must name the TurboDB install prefix when Redis state machine support is enabled")
-  endif()
-  find_package(TurboDB CONFIG REQUIRED
-               PATHS "$ENV{TURBODB_ROOT}" NO_DEFAULT_PATH)
-  add_library(turboraft_turbodb_redis_state_machine STATIC
-              src/integrations/turbodb_redis_state_machine.c)
-  cmake_config_target(turboraft_turbodb_redis_state_machine
-                      NO_INSTALL
-                      ALIAS TurboRaft::TurboDbRedisStateMachine
-                      EXPORT_NAME TurboDbRedisStateMachine
-                      FOLDER "libraries/integrations")
-  target_include_directories(
-    turboraft_turbodb_redis_state_machine
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-  target_link_libraries(turboraft_turbodb_redis_state_machine
-                        PUBLIC TurboRaft::Core TurboDB::Redis)
 endif()
 
 if(TURBORAFT_PROFILE_STORAGE)
@@ -666,9 +642,6 @@ endif()
 if(TARGET turboraft_control_plane)
   list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_control_plane)
 endif()
-if(TARGET turboraft_turbodb_redis_state_machine)
-  list(APPEND TURBORAFT_INSTALL_TARGETS turboraft_turbodb_redis_state_machine)
-endif()
 set(TURBORAFT_HAVE_CNET OFF)
 if(TARGET turboraft_cnet)
   set(TURBORAFT_HAVE_CNET ON)
@@ -680,10 +653,6 @@ endif()
 set(TURBORAFT_HAVE_FLOWMQ OFF)
 if(TARGET turboraft_flowmq)
   set(TURBORAFT_HAVE_FLOWMQ ON)
-endif()
-set(TURBORAFT_HAVE_TURBODB_REDIS_STATE_MACHINE OFF)
-if(TARGET turboraft_turbodb_redis_state_machine)
-  set(TURBORAFT_HAVE_TURBODB_REDIS_STATE_MACHINE ON)
 endif()
 
 configure_package_config_file(

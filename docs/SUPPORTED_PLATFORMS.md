@@ -47,11 +47,13 @@ incompatible published SDKs fail explicitly; they do not trigger a source-build
 fallback. SaltsUtils 4.2.0 keeps runtime discovery with binding consumers, so
 TurboRaft can use DataBind without installing the VM runtimes.
 
-Redis qualification selects TurboDB's standalone Redis build with ORM, dbtools,
-SQL parser and TidesSQL disabled. SQLite qualification uses the current ORM
-build, which includes all native drivers; its cache restore therefore includes
-the producer's `libpq[core,zstd]` contract even though the exercised database is
-SQLite. The removed `ORM_BUILD_*_DRIVER` options no longer select that graph.
+Database qualification consumes the published `TurboDB.Native` 2.3.1 SDK,
+including its ORM driver modules, through the same restore action. It runs one
+application recovery implementation against SQLite, MySQL and PostgreSQL;
+SQLite also has process-crash cut-points. The job neither builds TurboDB master
+nor links native database clients. MySQL uses the producer's verified TLS test
+fixtures; PostgreSQL uses an isolated disposable loopback service. Generic
+`Orm::C` is the only application database API. Redis qualification was removed.
 
 The scheduled `extended-chaos.yml` campaign consumes the latest stable
 `Salts.Native`, `SaltsUtils.Native`, and `FlowMQ.Native` packages through the
@@ -81,7 +83,7 @@ The first-party dependency policy is:
 | Salts | latest published Salts.Native SDK | latest published Salts.Native SDK | `find_package(Salts CONFIG REQUIRED)` |
 | SaltsUtils | latest published SaltsUtils.Native SDK | latest published SaltsUtils.Native SDK | `find_package(SaltsUtils CONFIG REQUIRED)`; supplies `salts-idlc` |
 | FlowMQ | current `main` source for source integration; Native package qualification restores the latest stable released FlowMQ.Native package | current `main` source for source integration; Native package qualification restores the latest stable released FlowMQ.Native package | `find_package(FlowMQ 1.2.1 CONFIG REQUIRED)`; TLS certificate/HELLO identity contract is required |
-| TurboDB | not a Core dependency | not a Core dependency | only opt-in Redis/SQLite application qualification workflows |
+| TurboDB | not a Core dependency | not a Core dependency | TurboDB 2.3.1+ ORM; SQLite/MySQL/PostgreSQL recovery qualification |
 
 TurboRaft integrations use the published Salts / SaltsUtils dependency graph.
 FlowMQ and CHttp source qualification remains separate from their published
@@ -181,10 +183,8 @@ included in that inventory.
   package contracts.
 - `.github/workflows/linux-sanitizers.yml` — Linux ASan/UBSan/TSan.
 - `.github/workflows/windows-msvc-release.yml` — Windows x64 MSVC Release.
-- `.github/workflows/cflow-orm-sqlite.yml` — SQLite/Orm application recovery
-  qualification.
-- `.github/workflows/cflow-redis-lua.yml` — Redis/Lua application recovery
-  qualification.
+- `.github/workflows/cflow-orm.yml` — TurboDB ORM SQLite/MySQL/PostgreSQL
+  application recovery and SQLite process-crash qualification.
 
 A pull request that changes a supported dependency version, runner family,
 compiler profile, package root contract, or sanitizer policy must update this

@@ -12,6 +12,7 @@ PACKAGES = {
     "flowmq": ("FlowMQ.Native", "FLOWMQ"),
     "chttp": ("CHttp.Native", "CHTTP"),
     "turboraft": ("TurboRaft.Native", "TURBORAFT"),
+    "turbodb": ("TurboDB.Native", "TURBODB"),
 }
 
 
