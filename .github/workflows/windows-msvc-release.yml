@@ -35,10 +35,6 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
       - name: Checkout FlowMQ main
         uses: actions/checkout@v4
         with:
@@ -83,35 +79,11 @@ jobs:
           "CHTTP_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\chttp" >> $env:GITHUB_ENV
           "TURBORAFT_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\turboraft" >> $env:GITHUB_ENV
 
-      - name: Restore current published Salts Windows SDKs
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $config = Join-Path $env:RUNNER_TEMP "NuGet.Config"
-          $packages = Join-Path $env:RUNNER_TEMP "turboraft-windows-sdk-packages"
-          $project = Join-Path $env:RUNNER_TEMP "turboraft-windows-sdk.csproj"
-          '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
-          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
-          if ($LASTEXITCODE -ne 0) { throw "failed to configure GitHub Packages source" }
-          @'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          '@ | Set-Content -LiteralPath $project
-          Push-Location $env:RUNNER_TEMP
-          try {
-            dotnet add $project package Salts.Native
-            if ($LASTEXITCODE -ne 0) { throw "failed to resolve Salts.Native" }
-            dotnet add $project package SaltsUtils.Native
-            if ($LASTEXITCODE -ne 0) { throw "failed to resolve SaltsUtils.Native" }
-          }
-          finally { Pop-Location }
-          dotnet restore $project --configfile $config --packages $packages --no-cache
-          if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
-          python tools/ci/export_native_sdks.py --assets "$env:RUNNER_TEMP/obj/project.assets.json" --rid windows-x64 --packages salts salts-utils
-          if ($LASTEXITCODE -ne 0) { throw "native SDK resolution failed" }
+      - name: Restore published Salts SDKs
+        uses: ./.github/actions/setup-native-sdks
+        with:
+          rid: windows-x64
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify restored Salts SDK files
         shell: pwsh
@@ -149,7 +121,6 @@ jobs:
               "tree-sitter",
               "tree-sitter-c",
               "miniaudio",
-              "lua",
               { "name": "zeromq", "default-features": false },
               { "name": "xxhash", "version>=": "0.8.3" }
             ]

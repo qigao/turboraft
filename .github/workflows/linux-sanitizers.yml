@@ -17,8 +17,7 @@ permissions:
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_REF: master
-  SALTS_UTILS_REF: master
+
   FLOWMQ_REF: main
   CHTTP_REF: master
   ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
@@ -42,11 +41,10 @@ jobs:
             cmake_flags: -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_SANITIZER_THREAD=ON
     env:
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}
-      SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts
-      SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts-utils
+
       FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/flowmq
       CHTTP_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/chttp
-      LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/chttp/lib:${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/flowmq/lib:${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}/x64-linux/debug/lib:${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}/x64-linux/lib
+      LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/chttp/lib:${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/flowmq/lib:${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}/x64-linux/debug/lib:${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}/x64-linux/lib
     steps:
       - name: Checkout exact TurboRaft head
         uses: actions/checkout@v4
@@ -59,21 +57,11 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout Salts master
-        uses: actions/checkout@v4
+      - name: Restore published Salts SDKs
+        uses: ./.github/actions/setup-native-sdks
         with:
-          repository: qigao/salts
-          ref: ${{ env.SALTS_REF }}
-          path: .ci/src-${{ matrix.name }}/salts
-          persist-credentials: false
-
-      - name: Checkout SaltsUtils master
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          ref: ${{ env.SALTS_UTILS_REF }}
-          path: .ci/src-${{ matrix.name }}/salts-utils
-          persist-credentials: false
+          rid: linux-x64
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout FlowMQ main
         uses: actions/checkout@v4
@@ -122,8 +110,6 @@ jobs:
               "tree-sitter",
               "tree-sitter-c",
               "miniaudio",
-              "lua",
-              "quickjs-ng",
               { "name": "zeromq", "default-features": false },
               { "name": "xxhash", "version>=": "0.8.3" }
             ]
@@ -134,40 +120,6 @@ jobs:
             --x-install-root="$VCPKG_INSTALLED_DIR" \
             --only-binarycaching \
             --triplet=x64-linux
-
-      - name: Build and install Salts Debug
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake -S ".ci/src-${{ matrix.name }}/salts" \
-            -B ".ci/build-${{ matrix.name }}/salts" -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
-            -DENABLE_ASAN=OFF -DENABLE_SANITIZER_ADDRESS=OFF \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
-          cmake --build ".ci/build-${{ matrix.name }}/salts" --target install --parallel 2
-
-      - name: Build and install SaltsUtils Debug
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake -S ".ci/src-${{ matrix.name }}/salts-utils" \
-            -B ".ci/build-${{ matrix.name }}/salts-utils" -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
-            -DENABLE_ASAN=OFF -DENABLE_SANITIZER_ADDRESS=OFF \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
-            -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
-          cmake --build ".ci/build-${{ matrix.name }}/salts-utils" --target install --parallel 2
-          test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
 
       - name: Build and install CHttp Debug
         shell: bash

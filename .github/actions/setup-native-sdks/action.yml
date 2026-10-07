@@ -1,0 +1,27 @@
+name: Restore published native SDKs
+description: Restore current stable SDK inputs and export the selected package roots.
+inputs:
+  rid:
+    description: Native SDK runtime identifier
+    required: true
+  token:
+    description: GitHub Packages read token
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: "8.0.x"
+    - name: Restore latest stable Salts and SaltsUtils SDKs
+      shell: pwsh
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        SDK_RID: ${{ inputs.rid }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $packages = Join-Path $env:RUNNER_TEMP "turboraft-native-dependencies"
+        dotnet restore packaging/nuget/TurboRaft.Native.csproj --configfile cmake/native-sdk.nuget.config --packages $packages --no-cache --force-evaluate
+        if ($LASTEXITCODE -ne 0) { throw "native SDK restore failed" }
+        python tools/ci/export_native_sdks.py --assets packaging/nuget/obj/project.assets.json --rid $env:SDK_RID --packages salts salts-utils --runtime-paths
+        if ($LASTEXITCODE -ne 0) { throw "native SDK resolution failed" }

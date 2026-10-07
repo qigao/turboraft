@@ -6,10 +6,9 @@ compile. A platform or compiler not listed here is not necessarily unsupported
 by the code; it is simply not a production-readiness gate until a hosted
 workflow proves the same build, runtime, recovery, and package contracts.
 
-The executable source of truth is the workflow named in each row. Source
-integration gates follow current first-party branches; native package
-qualification resolves current stable SDK releases and records the actual
-versions in each SDK manifest. Changes to a
+The executable source of truth is the workflow named in each row. Integration gates restore current stable Salts and SaltsUtils SDKs;
+FlowMQ and CHttp source integrations still follow their current branches. Native
+package qualification records the actual resolved SDK versions in each manifest. Changes to a
 qualified compiler, operating system, dependency source, sanitizer, or package
 contract must update both this document and the corresponding workflow in the
 same change.
@@ -18,10 +17,10 @@ same change.
 
 | Profile | Runner / toolchain | Dependency contract | Required evidence |
 | --- | --- | --- | --- |
-| Linux Release | `ubuntu-latest`, GCC (current hosted image) | current Salts `master`, SaltsUtils `master`, FlowMQ `main`, CHttp `master`; x64-linux vcpkg baseline below | configure/build, full CTest once (including production integration), SDK install, installed Core/CFlow/FlowMQ/ControlPlane consumers |
-| Linux ASan | `ubuntu-latest`, GCC Debug + AddressSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs are intentionally **not** ASan-instrumented so TurboRaft owns the sanitizer runtime | complete CTest inventory once under ASan |
-| Linux UBSan | `ubuntu-latest`, GCC Debug + UndefinedBehaviorSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs are intentionally uninstrumented to avoid mixed sanitizer runtimes | complete CTest inventory once under UBSan |
-| Linux TSan | `ubuntu-latest`, GCC Debug + ThreadSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs remain uninstrumented so TurboRaft owns the TSan runtime | complete CTest inventory once under TSan |
+| Linux Release | `ubuntu-latest`, GCC (current hosted image) | latest published Salts.Native / SaltsUtils.Native SDKs, FlowMQ `main`, CHttp `master`; x64-linux vcpkg baseline below | configure/build, full CTest once (including production integration), SDK install, installed Core/CFlow/FlowMQ/ControlPlane consumers |
+| Linux ASan | `ubuntu-latest`, GCC Debug + AddressSanitizer | latest published Release Salts / SaltsUtils SDKs; source-built CHttp / FlowMQ Debug SDKs; dependencies remain uninstrumented | complete CTest inventory once under ASan |
+| Linux UBSan | `ubuntu-latest`, GCC Debug + UndefinedBehaviorSanitizer | latest published Release Salts / SaltsUtils SDKs; source-built CHttp / FlowMQ Debug SDKs; dependencies remain uninstrumented | complete CTest inventory once under UBSan |
+| Linux TSan | `ubuntu-latest`, GCC Debug + ThreadSanitizer | latest published Release Salts / SaltsUtils SDKs; source-built CHttp / FlowMQ Debug SDKs; dependencies remain uninstrumented | complete CTest inventory once under TSan |
 | Windows Release | `windows-2025`, x64 MSVC via `VsDevCmd` + Ninja using the shared v145 triplet | latest published Salts.Native / SaltsUtils.Native roots, current FlowMQ `main`, CHttp `master`, canonical shared-cache triplet | MSVC configure/build, full CTest once, SDK install, installed Core/FlowMQ/ControlPlane consumers |
 
 Qualification evidence on 2026-09-23:
@@ -36,11 +35,17 @@ Qualification evidence on 2026-09-23:
 
 ## First-party dependency contract
 
-Source-built SaltsUtils still compiles its Lua and QuickJS bindings. Linux
-source-integration jobs therefore restore `lua` and `quickjs-ng` as producer
-build dependencies; `quickjs-ng` supplies `qjsConfig.cmake`. Removing optional
-binding runtime discovery from the installed SDK does not remove these source
-build requirements. TurboRaft's own manifest does not depend on either runtime.
+Hosted source integrations and benchmarks consume the latest stable Salts and
+SaltsUtils Native SDKs through `.github/actions/setup-native-sdks`. Restore uses
+`--no-cache --force-evaluate` and the existing floating package references;
+`export_native_sdks.py` resolves exact roots and versions from NuGet assets and
+exports tool/runtime paths. Versions appear in the restore logs and benchmark
+evidence. Lua and QuickJS are neither built nor restored by these jobs.
+
+These jobs no longer rebuild the producers' optional bindings. Missing or
+incompatible published SDKs fail explicitly; they do not trigger a source-build
+fallback. SaltsUtils 4.2.0 keeps runtime discovery with binding consumers, so
+TurboRaft can use DataBind without installing the VM runtimes.
 
 The scheduled `extended-chaos.yml` campaign consumes the latest stable
 `Salts.Native`, `SaltsUtils.Native`, and `FlowMQ.Native` packages through the
@@ -67,14 +72,14 @@ The first-party dependency policy is:
 
 | Dependency | Linux hosted gates | Windows hosted gate | Public contract |
 | --- | --- | --- | --- |
-| Salts | current `master` source | latest published Salts.Native SDK | `find_package(Salts CONFIG REQUIRED)` |
-| SaltsUtils | current `master` source | latest published SaltsUtils.Native SDK | `find_package(SaltsUtils CONFIG REQUIRED)`; supplies `salts-idlc` |
+| Salts | latest published Salts.Native SDK | latest published Salts.Native SDK | `find_package(Salts CONFIG REQUIRED)` |
+| SaltsUtils | latest published SaltsUtils.Native SDK | latest published SaltsUtils.Native SDK | `find_package(SaltsUtils CONFIG REQUIRED)`; supplies `salts-idlc` |
 | FlowMQ | current `main` source for source integration; Native package qualification restores the latest stable released FlowMQ.Native package | current `main` source for source integration; Native package qualification restores the latest stable released FlowMQ.Native package | `find_package(FlowMQ 1.2.1 CONFIG REQUIRED)`; TLS certificate/HELLO identity contract is required |
 | TurboDB | not a Core dependency | not a Core dependency | only opt-in Redis/SQLite application qualification workflows |
 
-TurboRaft source integration intentionally follows current first-party
-branches. The native package pipeline remains on the last mutually compatible
-published SDK graph until all producers have published matching releases.
+TurboRaft integrations use the published Salts / SaltsUtils dependency graph.
+FlowMQ and CHttp source qualification remains separate from their published
+Native package qualification.
 Resolved package versions are release evidence, not a reason to add source-side
 compatibility fallbacks.
 
@@ -133,15 +138,15 @@ version in TurboRaft.
 
 ASan, UBSan, and TSan are release-blocking Linux gates.
 
-Dependency Debug SDKs are built with their default ASan options explicitly
-disabled in the sanitizer workflow. Only the TurboRaft build receives the
-matrix-selected sanitizer. This prevents an UBSan process from loading an
+Salts and SaltsUtils are uninstrumented published Release SDKs. CHttp and
+FlowMQ retain their source-built Debug SDKs with sanitizer options disabled.
+Only the TurboRaft Debug build receives the matrix-selected sanitizer. This prevents an UBSan process from loading an
 ASan-instrumented first-party SDK and makes sanitizer failures attributable to
 the product under test.
 
 The hosted GCC/ThreadSanitizer combination is qualified by PR #122. TSan uses
 the same full CTest inventory as ASan/UBSan, with
-first-party dependency Debug SDKs left uninstrumented so reports are
+all first-party dependency SDKs left uninstrumented so reports are
 attributable to TurboRaft rather than mixed sanitizer runtimes.
 
 ## Not currently release-qualified

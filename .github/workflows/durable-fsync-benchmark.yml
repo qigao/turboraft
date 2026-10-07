@@ -9,6 +9,10 @@ on:
       - "benchmarks/read_index/**"
       - "benchmarks/snapshot_catchup/**"
       - ".github/workflows/durable-fsync-benchmark.yml"
+      - ".github/actions/setup-native-sdks/**"
+      - "tools/ci/**"
+      - "cmake/native-sdk.nuget.config"
+      - "packaging/nuget/TurboRaft.Native.csproj"
   push:
     branches: [master]
     paths:
@@ -18,6 +22,10 @@ on:
       - "benchmarks/read_index/**"
       - "benchmarks/snapshot_catchup/**"
       - ".github/workflows/durable-fsync-benchmark.yml"
+      - ".github/actions/setup-native-sdks/**"
+      - "tools/ci/**"
+      - "cmake/native-sdk.nuget.config"
+      - "packaging/nuget/TurboRaft.Native.csproj"
   workflow_dispatch:
 
 permissions:
@@ -30,8 +38,7 @@ jobs:
     timeout-minutes: 60
     env:
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
-      SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
-      SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
+
     steps:
       - name: Checkout TurboRaft
         uses: actions/checkout@v4
@@ -44,21 +51,11 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout current Salts
-        uses: actions/checkout@v4
+      - name: Restore published Salts SDKs
+        uses: ./.github/actions/setup-native-sdks
         with:
-          repository: qigao/salts
-          ref: master
-          path: .ci/src/salts
-          persist-credentials: false
-
-      - name: Checkout current SaltsUtils
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          ref: master
-          path: .ci/src/salts-utils
-          persist-credentials: false
+          rid: linux-x64
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install host build tools
         shell: bash
@@ -90,8 +87,6 @@ jobs:
               "kcp",
               "gmssl",
               "miniaudio",
-              "lua",
-              "quickjs-ng",
               { "name": "zeromq", "default-features": false },
               { "name": "xxhash", "version>=": "0.8.3" }
             ]
@@ -102,39 +97,6 @@ jobs:
             --x-install-root="$install" \
             --triplet=x64-linux \
             --only-binarycaching
-
-      - name: Build and install current Salts
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake -S .ci/src/salts -B .ci/build/salts -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
-          cmake --build .ci/build/salts --target install --parallel 2
-          echo "SALTS_SOURCE_SHA=$(git -C .ci/src/salts rev-parse HEAD)" >> "$GITHUB_ENV"
-
-      - name: Build and install current SaltsUtils
-        shell: bash
-        run: |
-          set -euo pipefail
-          export PATH="$SALTS_ROOT/bin:$PATH"
-          cmake -S .ci/src/salts-utils -B .ci/build/salts-utils -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
-            -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
-          cmake --build .ci/build/salts-utils --target install --parallel 2
-          test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
-          echo "SALTS_UTILS_SOURCE_SHA=$(git -C .ci/src/salts-utils rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Build installed storage-dev SDK
         shell: bash
@@ -459,8 +421,8 @@ jobs:
             echo "runner=$RUNNER_NAME"
             echo "os=$RUNNER_OS"
             echo "arch=$RUNNER_ARCH"
-            echo "salts_sha=$SALTS_SOURCE_SHA"
-            echo "salts_utils_sha=$SALTS_UTILS_SOURCE_SHA"
+            echo "salts_sdk_version=$SALTS_SDK_VERSION"
+            echo "salts_utils_sdk_version=$SALTS_UTILS_SDK_VERSION"
             cmake --version | head -n 1
             cc --version | head -n 1
             uname -a

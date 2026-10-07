@@ -15,17 +15,15 @@ permissions:
 
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_REF: master
-  SALTS_UTILS_REF: master
+
   FLOWMQ_REF: main
   TURBODB_REF: master
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed_redis
-  SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/salts
-  SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/salts-utils
+
   FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/flowmq
   TURBODB_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/turbodb
   TURBORAFT_ROOT: ${{ github.workspace }}/.ci/pkgs-redis/turboraft
-  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-redis/turbodb/lib:${{ github.workspace }}/.ci/pkgs-redis/flowmq/lib:${{ github.workspace }}/.ci/pkgs-redis/salts-utils/lib:${{ github.workspace }}/.ci/pkgs-redis/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed_redis/x64-linux/lib
+  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs-redis/turbodb/lib:${{ github.workspace }}/.ci/pkgs-redis/flowmq/lib:${{ github.workspace }}/.ci/vcpkg_installed_redis/x64-linux/lib
 
 jobs:
   redis-recovery:
@@ -43,21 +41,11 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout Salts master
-        uses: actions/checkout@v4
+      - name: Restore published Salts SDKs
+        uses: ./.github/actions/setup-native-sdks
         with:
-          repository: qigao/salts
-          ref: ${{ env.SALTS_REF }}
-          path: .ci/src-redis/salts
-          persist-credentials: false
-
-      - name: Checkout SaltsUtils master
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          ref: ${{ env.SALTS_UTILS_REF }}
-          path: .ci/src-redis/salts-utils
-          persist-credentials: false
+          rid: linux-x64
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout FlowMQ main
         uses: actions/checkout@v4
@@ -104,8 +92,6 @@ jobs:
               "kcp",
               "gmssl",
               "miniaudio",
-              "lua",
-              "quickjs-ng",
               { "name": "zeromq", "default-features": false },
               { "name": "xxhash", "version>=": "0.8.3" }
             ]
@@ -116,36 +102,6 @@ jobs:
             --x-install-root="$VCPKG_INSTALLED_DIR" \
             --only-binarycaching \
             --triplet=x64-linux
-
-      - name: Build and install Salts master
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake -S .ci/src-redis/salts -B .ci/build-redis/salts -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
-            -DSALTS_ENABLE_EPOLL_READINESS=ON \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
-          cmake --build .ci/build-redis/salts --target install --parallel 2
-
-      - name: Build and install SaltsUtils master
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake -S .ci/src-redis/salts-utils -B .ci/build-redis/salts-utils -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
-            -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
-          cmake --build .ci/build-redis/salts-utils --target install --parallel 2
 
       - name: Build and install FlowMQ main
         shell: bash
