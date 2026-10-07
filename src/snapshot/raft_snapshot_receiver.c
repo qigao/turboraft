@@ -1,7 +1,7 @@
 #include <turboraft/raft_snapshot_receiver.h>
 
-#include <openssl/sha.h>
-#include <salts_error.h>
+#include <cmeta_crypto.h>
+#include <cmeta_error.h>
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -23,7 +23,7 @@ struct tr_raft_snapshot_receiver {
     uint64_t next_offset;
     uint8_t digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE];
     uint8_t *data;
-    SHA256_CTX sha256;
+    cmeta_sha256_stream *sha256;
     bool stream_started;
     bool active;
     bool completed;
@@ -136,7 +136,7 @@ static int tr_snapshot_receiver_start(
     receiver->data = data;
     receiver->active = true;
     receiver->completed = false;
-    if (SHA256_Init(&receiver->sha256) != 1) {
+    if (cmeta_sha256_stream_reset(receiver->sha256) != SALTS_OK) {
         tr_snapshot_receiver_clear_transfer(receiver);
         return SALTS_EPROTO;
     }
@@ -175,6 +175,7 @@ int tr_raft_snapshot_receiver_create(
     tr_raft_snapshot_receiver_t **out_receiver)
 {
     tr_raft_snapshot_receiver_t *receiver;
+    int result;
 
     if (out_receiver == NULL) {
         return SALTS_EINVAL;
@@ -202,6 +203,11 @@ int tr_raft_snapshot_receiver_create(
     if (receiver == NULL) {
         return SALTS_ENOMEM;
     }
+    result = cmeta_sha256_stream_create(&receiver->sha256);
+    if (result != SALTS_OK) {
+        free(receiver);
+        return result;
+    }
     receiver->self_id = config->self_id;
     receiver->max_snapshot_bytes = config->max_snapshot_bytes;
     receiver->max_buffered_snapshot_bytes =
@@ -220,6 +226,7 @@ void tr_raft_snapshot_receiver_destroy(
         return;
     }
     tr_snapshot_receiver_clear_transfer(receiver);
+    cmeta_sha256_stream_destroy(receiver->sha256);
     free(receiver);
 }
 
@@ -236,7 +243,7 @@ int tr_raft_snapshot_receiver_handle(
     const tr_raft_snapshot_chunk_t *chunk,
     tr_raft_snapshot_receive_result_t *out_result)
 {
-    uint8_t calculated_digest[SHA256_DIGEST_LENGTH];
+    uint8_t calculated_digest[SALTS_SHA256_DIGEST_BYTES];
     int result;
 
     if (receiver == NULL || chunk == NULL || out_result == NULL) {
@@ -281,8 +288,8 @@ int tr_raft_snapshot_receiver_handle(
         return SALTS_EPROTO;
     }
     if (chunk->data_length != 0U) {
-        if (SHA256_Update(&receiver->sha256, chunk->data,
-                          chunk->data_length) != 1) {
+        if (cmeta_sha256_stream_update(receiver->sha256, chunk->data,
+                                       chunk->data_length) != SALTS_OK) {
             out_result->ack.accepted = false;
             tr_snapshot_receiver_clear_transfer(receiver);
             return SALTS_EPROTO;
@@ -308,7 +315,7 @@ int tr_raft_snapshot_receiver_handle(
     if (!chunk->done) {
         return SALTS_OK;
     }
-    if (SHA256_Final(calculated_digest, &receiver->sha256) != 1 ||
+    if (cmeta_sha256_stream_finish(receiver->sha256, calculated_digest) != SALTS_OK ||
         memcmp(calculated_digest, receiver->digest,
                sizeof(receiver->digest)) != 0) {
         out_result->ack.accepted = false;

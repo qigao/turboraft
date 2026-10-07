@@ -3,7 +3,7 @@
 #include <turboraft/raft_wire_codec.h>
 
 #include <tinytest.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <string.h>
 

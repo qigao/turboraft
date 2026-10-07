@@ -17,8 +17,8 @@
 #endif
 #endif
 
-#include "tbe_wire.h"
-#if defined(TBE_WASM_GUEST)
+#include "data_bind_binary_wire.h"
+#if defined(DATA_BIND_BINARY_WASM_GUEST)
 static inline void *tbe_generated_memcpy(void *destination, const void *source, size_t size) {
     unsigned char *out = (unsigned char *)destination;
     const unsigned char *in = (const unsigned char *)source;
@@ -47,20 +47,23 @@ static inline size_t tbe_generated_strlen(const char *text) {
 #ifndef SALTS_UUID_H
 #define SALTS_UUID_H
 #define SALTS_UUID_SIZE 16U
-typedef struct salts_uuid_s {
+typedef struct cmeta_uuid_s {
     uint8_t bytes[SALTS_UUID_SIZE];
-} salts_uuid_t;
+} cmeta_uuid_t;
 #endif
 #else
 #include <string.h>
-#include "salts_uuid.h"
+#include <tstr.h>
+#include <cstl/byte_buffer.h>
+#include "cmeta_uuid.h"
 #define TBE_GENERATED_MEMCPY memcpy
 #define TBE_GENERATED_STRCMP strcmp
 #define TBE_GENERATED_STRLEN strlen
 #endif
 
-#include "tbe_typed.h"
-
+#include "data_bind_native_binding.h"
+#include <cstl/typed.h>
+#include <cmeta_cmeta_data.h>
 
 #ifndef TBE_SCHEMA_CODEC_V1_DEFINED
 #define TBE_SCHEMA_CODEC_V1_DEFINED
@@ -107,6 +110,22 @@ extern "C" {
 
 /* Schema TurboRaftWireV3  */
 enum { TurboRaftWireV3_WIRE_BIG_ENDIAN = 0 };
+struct cmeta_data_desc;
+/* Canonical generated record metadata. These are the same descriptors returned
+ * by *_cmeta_data(); typed CSTL record containers bind them directly. Call the
+ * accessor or record init before reading the exported graph, so its once
+ * initialization has published every field and generic argument. */
+
+
+TBE_GENERATED_API extern const cmeta_type_desc RaftWireMessageV3_CMETA_TYPE;
+TBE_GENERATED_API extern const cmeta_data_desc RaftWireMessageV3_CMETA_DATA;
+
+/** Borrow immutable native scalar/struct/enum metadata with static lifetime.
+ * Unsupported storage returns DATA_BIND_ERR_SCHEMA without changing *out.
+ * Wire/default/presence/fingerprint metadata stays in the schema overlay.
+ * This graph seam does not itself promise native decode/encode behavior. */
+TBE_GENERATED_API DataBindStatus RaftWireMessageV3_cmeta_data(const struct cmeta_data_desc **out, DataBindError *error);
+TBE_GENERATED_API const DataBindMessageNativeArtifact *RaftWireMessageV3_native_artifact(void);
 TBE_GENERATED_API DataBindStatus TurboRaftWireV3_codec_create(DataBind **out_codec, DataBindError *error);
 TBE_GENERATED_API const char *TurboRaftWireV3_schema_text(void);
 TBE_GENERATED_API const tbe_schema_codec_v1_t *TurboRaftWireV3_schema_codec(void);
@@ -207,24 +226,24 @@ typedef struct RaftWireMessageV3_s {
     /* size: 8 unsigned */
     uint64_t entry8_command_id;
     /* size:   */
-    tbe_bytes_t entry1_data;
+    stl_byte_buffer entry1_data;
     /* size:   */
-    tbe_bytes_t entry2_data;
+    stl_byte_buffer entry2_data;
     /* size:   */
-    tbe_bytes_t entry3_data;
+    stl_byte_buffer entry3_data;
     /* size:   */
-    tbe_bytes_t entry4_data;
+    stl_byte_buffer entry4_data;
     /* size:   */
-    tbe_bytes_t entry5_data;
+    stl_byte_buffer entry5_data;
     /* size:   */
-    tbe_bytes_t entry6_data;
+    stl_byte_buffer entry6_data;
     /* size:   */
-    tbe_bytes_t entry7_data;
+    stl_byte_buffer entry7_data;
     /* size:   */
-    tbe_bytes_t entry8_data;
+    stl_byte_buffer entry8_data;
 } RaftWireMessageV3_t;
 
-/** Owning lifecycle and schema serialization API; serialized buffers use tbe_typed_serialized_free. */
+/** Owning lifecycle and schema serialization API; serialized buffers use the DataBind generated-output release contract. */
 TBE_GENERATED_API void RaftWireMessageV3_init(RaftWireMessageV3_t *object);
 TBE_GENERATED_API void RaftWireMessageV3_clear(RaftWireMessageV3_t *object);
 TBE_GENERATED_API DataBindStatus RaftWireMessageV3_from_bin(DataBind *codec, RaftWireMessageV3_t *object, const void *data, size_t len, DataBindError *error);
@@ -232,8 +251,8 @@ TBE_GENERATED_API DataBindStatus RaftWireMessageV3_from_json(DataBind *codec, Ra
 TBE_GENERATED_API DataBindStatus RaftWireMessageV3_from_yaml(DataBind *codec, RaftWireMessageV3_t *object, const char *data, size_t len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus RaftWireMessageV3_from_csv(DataBind *codec, RaftWireMessageV3_t *object, const char *data, size_t len, size_t row, DataBindError *error);
 TBE_GENERATED_API DataBindStatus RaftWireMessageV3_from_xml(DataBind *codec, RaftWireMessageV3_t *object, const char *data, size_t len, DataBindError *error);
-TBE_GENERATED_API DataBindStatus RaftWireMessageV3_to_bin(const RaftWireMessageV3_t *object, uint8_t **out, size_t *out_len, DataBindError *error);
-TBE_GENERATED_API DataBindStatus RaftWireMessageV3_to_bin_into(const RaftWireMessageV3_t *object, uint8_t *output, size_t output_capacity, size_t *out_len, DataBindError *error);
+TBE_GENERATED_API DataBindStatus RaftWireMessageV3_to_bin(DataBind *codec, const RaftWireMessageV3_t *object, uint8_t **out, size_t *out_len, DataBindError *error);
+TBE_GENERATED_API DataBindStatus RaftWireMessageV3_to_bin_into(DataBind *codec, const RaftWireMessageV3_t *object, uint8_t *output, size_t output_capacity, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus RaftWireMessageV3_to_json(DataBind *codec, const RaftWireMessageV3_t *object, char **out, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus RaftWireMessageV3_to_yaml(DataBind *codec, const RaftWireMessageV3_t *object, char **out, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus RaftWireMessageV3_to_csv(DataBind *codec, const RaftWireMessageV3_t *object, char **out, size_t *out_len, DataBindError *error);
@@ -248,6 +267,7 @@ typedef struct RaftWireMessageV3_builder_s {
     uint8_t *data;
     size_t size;
 } RaftWireMessageV3_builder_t;
+
 
 
 enum { RaftWireMessageV3_BLOCK_LENGTH = 288 };
@@ -362,7 +382,7 @@ static inline bool RaftWireMessageV3_entry1_data_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                    data,
@@ -370,14 +390,14 @@ static inline bool RaftWireMessageV3_entry1_data_set(RaftWireMessageV3_builder_t
 }
 
 static inline bool RaftWireMessageV3_entry1_data(const RaftWireMessageV3_view_t *view,
-                                           tbe_var_data_t *value) {
+                                           DataBindBinaryVarData *value) {
     size_t payload_offset = RaftWireMessageV3_BLOCK_LENGTH;
 
     if (!view || !value || view->size < payload_offset) {
         return false;
     }
 
-    return tbe_wire_read_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_read_var_data(view->data + payload_offset,
                                   view->size - payload_offset,
                                   TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                   value);
@@ -388,7 +408,7 @@ static inline bool RaftWireMessageV3_entry2_data_set(RaftWireMessageV3_builder_t
                                                const void *data,
                                                size_t size) {
     RaftWireMessageV3_view_t read_view;
-    tbe_var_data_t previous;
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -402,13 +422,13 @@ static inline bool RaftWireMessageV3_entry2_data_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                    data,
@@ -416,8 +436,8 @@ static inline bool RaftWireMessageV3_entry2_data_set(RaftWireMessageV3_builder_t
 }
 
 static inline bool RaftWireMessageV3_entry2_data(const RaftWireMessageV3_view_t *view,
-                                           tbe_var_data_t *value) {
-    tbe_var_data_t previous;
+                                           DataBindBinaryVarData *value) {
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -429,13 +449,13 @@ static inline bool RaftWireMessageV3_entry2_data(const RaftWireMessageV3_view_t 
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_read_var_data(payload_data,
+    return data_bind_binary_wire_read_var_data(payload_data,
                                   view->size - payload_offset,
                                   TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                   value);
@@ -446,7 +466,7 @@ static inline bool RaftWireMessageV3_entry3_data_set(RaftWireMessageV3_builder_t
                                                const void *data,
                                                size_t size) {
     RaftWireMessageV3_view_t read_view;
-    tbe_var_data_t previous;
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -460,13 +480,13 @@ static inline bool RaftWireMessageV3_entry3_data_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                    data,
@@ -474,8 +494,8 @@ static inline bool RaftWireMessageV3_entry3_data_set(RaftWireMessageV3_builder_t
 }
 
 static inline bool RaftWireMessageV3_entry3_data(const RaftWireMessageV3_view_t *view,
-                                           tbe_var_data_t *value) {
-    tbe_var_data_t previous;
+                                           DataBindBinaryVarData *value) {
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -487,13 +507,13 @@ static inline bool RaftWireMessageV3_entry3_data(const RaftWireMessageV3_view_t 
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_read_var_data(payload_data,
+    return data_bind_binary_wire_read_var_data(payload_data,
                                   view->size - payload_offset,
                                   TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                   value);
@@ -504,7 +524,7 @@ static inline bool RaftWireMessageV3_entry4_data_set(RaftWireMessageV3_builder_t
                                                const void *data,
                                                size_t size) {
     RaftWireMessageV3_view_t read_view;
-    tbe_var_data_t previous;
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -518,13 +538,13 @@ static inline bool RaftWireMessageV3_entry4_data_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                    data,
@@ -532,8 +552,8 @@ static inline bool RaftWireMessageV3_entry4_data_set(RaftWireMessageV3_builder_t
 }
 
 static inline bool RaftWireMessageV3_entry4_data(const RaftWireMessageV3_view_t *view,
-                                           tbe_var_data_t *value) {
-    tbe_var_data_t previous;
+                                           DataBindBinaryVarData *value) {
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -545,13 +565,13 @@ static inline bool RaftWireMessageV3_entry4_data(const RaftWireMessageV3_view_t 
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_read_var_data(payload_data,
+    return data_bind_binary_wire_read_var_data(payload_data,
                                   view->size - payload_offset,
                                   TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                   value);
@@ -562,7 +582,7 @@ static inline bool RaftWireMessageV3_entry5_data_set(RaftWireMessageV3_builder_t
                                                const void *data,
                                                size_t size) {
     RaftWireMessageV3_view_t read_view;
-    tbe_var_data_t previous;
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -576,13 +596,13 @@ static inline bool RaftWireMessageV3_entry5_data_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                    data,
@@ -590,8 +610,8 @@ static inline bool RaftWireMessageV3_entry5_data_set(RaftWireMessageV3_builder_t
 }
 
 static inline bool RaftWireMessageV3_entry5_data(const RaftWireMessageV3_view_t *view,
-                                           tbe_var_data_t *value) {
-    tbe_var_data_t previous;
+                                           DataBindBinaryVarData *value) {
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -603,13 +623,13 @@ static inline bool RaftWireMessageV3_entry5_data(const RaftWireMessageV3_view_t 
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_read_var_data(payload_data,
+    return data_bind_binary_wire_read_var_data(payload_data,
                                   view->size - payload_offset,
                                   TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                   value);
@@ -620,7 +640,7 @@ static inline bool RaftWireMessageV3_entry6_data_set(RaftWireMessageV3_builder_t
                                                const void *data,
                                                size_t size) {
     RaftWireMessageV3_view_t read_view;
-    tbe_var_data_t previous;
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -634,13 +654,13 @@ static inline bool RaftWireMessageV3_entry6_data_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                    data,
@@ -648,8 +668,8 @@ static inline bool RaftWireMessageV3_entry6_data_set(RaftWireMessageV3_builder_t
 }
 
 static inline bool RaftWireMessageV3_entry6_data(const RaftWireMessageV3_view_t *view,
-                                           tbe_var_data_t *value) {
-    tbe_var_data_t previous;
+                                           DataBindBinaryVarData *value) {
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -661,13 +681,13 @@ static inline bool RaftWireMessageV3_entry6_data(const RaftWireMessageV3_view_t 
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_read_var_data(payload_data,
+    return data_bind_binary_wire_read_var_data(payload_data,
                                   view->size - payload_offset,
                                   TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                   value);
@@ -678,7 +698,7 @@ static inline bool RaftWireMessageV3_entry7_data_set(RaftWireMessageV3_builder_t
                                                const void *data,
                                                size_t size) {
     RaftWireMessageV3_view_t read_view;
-    tbe_var_data_t previous;
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -692,13 +712,13 @@ static inline bool RaftWireMessageV3_entry7_data_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                    data,
@@ -706,8 +726,8 @@ static inline bool RaftWireMessageV3_entry7_data_set(RaftWireMessageV3_builder_t
 }
 
 static inline bool RaftWireMessageV3_entry7_data(const RaftWireMessageV3_view_t *view,
-                                           tbe_var_data_t *value) {
-    tbe_var_data_t previous;
+                                           DataBindBinaryVarData *value) {
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -719,13 +739,13 @@ static inline bool RaftWireMessageV3_entry7_data(const RaftWireMessageV3_view_t 
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_read_var_data(payload_data,
+    return data_bind_binary_wire_read_var_data(payload_data,
                                   view->size - payload_offset,
                                   TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                   value);
@@ -736,7 +756,7 @@ static inline bool RaftWireMessageV3_entry8_data_set(RaftWireMessageV3_builder_t
                                                const void *data,
                                                size_t size) {
     RaftWireMessageV3_view_t read_view;
-    tbe_var_data_t previous;
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -750,13 +770,13 @@ static inline bool RaftWireMessageV3_entry8_data_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                    data,
@@ -764,8 +784,8 @@ static inline bool RaftWireMessageV3_entry8_data_set(RaftWireMessageV3_builder_t
 }
 
 static inline bool RaftWireMessageV3_entry8_data(const RaftWireMessageV3_view_t *view,
-                                           tbe_var_data_t *value) {
-    tbe_var_data_t previous;
+                                           DataBindBinaryVarData *value) {
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -777,13 +797,13 @@ static inline bool RaftWireMessageV3_entry8_data(const RaftWireMessageV3_view_t 
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_read_var_data(payload_data,
+    return data_bind_binary_wire_read_var_data(payload_data,
                                   view->size - payload_offset,
                                   TurboRaftWireV3_WIRE_BIG_ENDIAN,
                                   value);
@@ -797,12 +817,12 @@ static inline bool RaftWireMessageV3_message_type_set(RaftWireMessageV3_builder_
         return false;
     }
 
-    tbe_wire_write_u8(view->data + 0, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u8(view->data + 0, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint8_t RaftWireMessageV3_message_type_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u8(view->data + 0, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u8(view->data + 0, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -814,12 +834,12 @@ static inline bool RaftWireMessageV3_granted_set(RaftWireMessageV3_builder_t *vi
         return false;
     }
 
-    tbe_wire_write_u8(view->data + 1, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u8(view->data + 1, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint8_t RaftWireMessageV3_granted_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u8(view->data + 1, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u8(view->data + 1, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -831,12 +851,12 @@ static inline bool RaftWireMessageV3_reserved_set(RaftWireMessageV3_builder_t *v
         return false;
     }
 
-    tbe_wire_write_u16(view->data + 2, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u16(view->data + 2, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint16_t RaftWireMessageV3_reserved_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u16(view->data + 2, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u16(view->data + 2, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -848,12 +868,12 @@ static inline bool RaftWireMessageV3_entry_count_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u32(view->data + 4, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u32(view->data + 4, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint32_t RaftWireMessageV3_entry_count_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u32(view->data + 4, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u32(view->data + 4, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -865,12 +885,12 @@ static inline bool RaftWireMessageV3_from_node_set(RaftWireMessageV3_builder_t *
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 8, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 8, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_from_node_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 8, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 8, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -882,12 +902,12 @@ static inline bool RaftWireMessageV3_to_node_set(RaftWireMessageV3_builder_t *vi
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 16, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 16, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_to_node_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 16, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 16, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -899,12 +919,12 @@ static inline bool RaftWireMessageV3_term_set(RaftWireMessageV3_builder_t *view,
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 24, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 24, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 24, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 24, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -916,12 +936,12 @@ static inline bool RaftWireMessageV3_campaign_term_set(RaftWireMessageV3_builder
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 32, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 32, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_campaign_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 32, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 32, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -933,12 +953,12 @@ static inline bool RaftWireMessageV3_last_log_index_set(RaftWireMessageV3_builde
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 40, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 40, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_last_log_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 40, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 40, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -950,12 +970,12 @@ static inline bool RaftWireMessageV3_last_log_term_set(RaftWireMessageV3_builder
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 48, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 48, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_last_log_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 48, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 48, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -967,12 +987,12 @@ static inline bool RaftWireMessageV3_leader_commit_set(RaftWireMessageV3_builder
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 56, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 56, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_leader_commit_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 56, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 56, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -984,12 +1004,12 @@ static inline bool RaftWireMessageV3_previous_log_index_set(RaftWireMessageV3_bu
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 64, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 64, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_previous_log_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 64, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 64, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1001,12 +1021,12 @@ static inline bool RaftWireMessageV3_previous_log_term_set(RaftWireMessageV3_bui
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 72, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 72, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_previous_log_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 72, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 72, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1018,12 +1038,12 @@ static inline bool RaftWireMessageV3_match_index_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 80, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 80, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_match_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 80, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 80, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1035,12 +1055,12 @@ static inline bool RaftWireMessageV3_reject_hint_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 88, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 88, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_reject_hint_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 88, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 88, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1052,12 +1072,12 @@ static inline bool RaftWireMessageV3_entry1_index_set(RaftWireMessageV3_builder_
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 96, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 96, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry1_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 96, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 96, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1069,12 +1089,12 @@ static inline bool RaftWireMessageV3_entry1_term_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 104, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 104, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry1_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 104, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 104, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1086,12 +1106,12 @@ static inline bool RaftWireMessageV3_entry1_command_id_set(RaftWireMessageV3_bui
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 112, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 112, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry1_command_id_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 112, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 112, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1103,12 +1123,12 @@ static inline bool RaftWireMessageV3_entry2_index_set(RaftWireMessageV3_builder_
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 120, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 120, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry2_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 120, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 120, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1120,12 +1140,12 @@ static inline bool RaftWireMessageV3_entry2_term_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 128, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 128, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry2_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 128, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 128, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1137,12 +1157,12 @@ static inline bool RaftWireMessageV3_entry2_command_id_set(RaftWireMessageV3_bui
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 136, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 136, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry2_command_id_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 136, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 136, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1154,12 +1174,12 @@ static inline bool RaftWireMessageV3_entry3_index_set(RaftWireMessageV3_builder_
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 144, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 144, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry3_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 144, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 144, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1171,12 +1191,12 @@ static inline bool RaftWireMessageV3_entry3_term_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 152, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 152, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry3_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 152, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 152, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1188,12 +1208,12 @@ static inline bool RaftWireMessageV3_entry3_command_id_set(RaftWireMessageV3_bui
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 160, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 160, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry3_command_id_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 160, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 160, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1205,12 +1225,12 @@ static inline bool RaftWireMessageV3_entry4_index_set(RaftWireMessageV3_builder_
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 168, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 168, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry4_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 168, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 168, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1222,12 +1242,12 @@ static inline bool RaftWireMessageV3_entry4_term_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 176, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 176, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry4_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 176, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 176, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1239,12 +1259,12 @@ static inline bool RaftWireMessageV3_entry4_command_id_set(RaftWireMessageV3_bui
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 184, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 184, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry4_command_id_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 184, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 184, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1256,12 +1276,12 @@ static inline bool RaftWireMessageV3_entry5_index_set(RaftWireMessageV3_builder_
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 192, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 192, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry5_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 192, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 192, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1273,12 +1293,12 @@ static inline bool RaftWireMessageV3_entry5_term_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 200, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 200, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry5_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 200, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 200, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1290,12 +1310,12 @@ static inline bool RaftWireMessageV3_entry5_command_id_set(RaftWireMessageV3_bui
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 208, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 208, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry5_command_id_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 208, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 208, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1307,12 +1327,12 @@ static inline bool RaftWireMessageV3_entry6_index_set(RaftWireMessageV3_builder_
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 216, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 216, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry6_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 216, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 216, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1324,12 +1344,12 @@ static inline bool RaftWireMessageV3_entry6_term_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 224, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 224, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry6_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 224, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 224, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1341,12 +1361,12 @@ static inline bool RaftWireMessageV3_entry6_command_id_set(RaftWireMessageV3_bui
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 232, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 232, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry6_command_id_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 232, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 232, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1358,12 +1378,12 @@ static inline bool RaftWireMessageV3_entry7_index_set(RaftWireMessageV3_builder_
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 240, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 240, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry7_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 240, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 240, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1375,12 +1395,12 @@ static inline bool RaftWireMessageV3_entry7_term_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 248, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 248, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry7_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 248, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 248, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1392,12 +1412,12 @@ static inline bool RaftWireMessageV3_entry7_command_id_set(RaftWireMessageV3_bui
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 256, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 256, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry7_command_id_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 256, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 256, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1409,12 +1429,12 @@ static inline bool RaftWireMessageV3_entry8_index_set(RaftWireMessageV3_builder_
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 264, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 264, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry8_index_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 264, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 264, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1426,12 +1446,12 @@ static inline bool RaftWireMessageV3_entry8_term_set(RaftWireMessageV3_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 272, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 272, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry8_term_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 272, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 272, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1443,15 +1463,13 @@ static inline bool RaftWireMessageV3_entry8_command_id_set(RaftWireMessageV3_bui
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 280, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 280, TurboRaftWireV3_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessageV3_entry8_command_id_get(const RaftWireMessageV3_view_t *view) {
-    return tbe_wire_read_u64(view->data + 280, TurboRaftWireV3_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 280, TurboRaftWireV3_WIRE_BIG_ENDIAN);
 }
-
-
 
 
 
@@ -1478,7 +1496,7 @@ template <typename Record,
           DataBindStatus (*FromCsv)(DataBind *, Record *, const char *, size_t, size_t,
                                     DataBindError *),
           DataBindStatus (*FromXml)(DataBind *, Record *, const char *, size_t, DataBindError *),
-          DataBindStatus (*ToBin)(const Record *, uint8_t **, size_t *, DataBindError *),
+          DataBindStatus (*ToBin)(DataBind *, const Record *, uint8_t **, size_t *, DataBindError *),
           DataBindStatus (*ToJson)(DataBind *, const Record *, char **, size_t *, DataBindError *),
           DataBindStatus (*ToYaml)(DataBind *, const Record *, char **, size_t *, DataBindError *),
           DataBindStatus (*ToCsv)(DataBind *, const Record *, char **, size_t *, DataBindError *),
@@ -1517,8 +1535,9 @@ public:
                             DataBindError *error) noexcept {
         return FromXml(codec, &value_, data, len, error);
     }
-    DataBindStatus to_bin(uint8_t **out, size_t *out_len, DataBindError *error) const noexcept {
-        return ToBin(&value_, out, out_len, error);
+    DataBindStatus to_bin(DataBind *codec, uint8_t **out, size_t *out_len,
+                          DataBindError *error) const noexcept {
+        return ToBin(codec, &value_, out, out_len, error);
     }
     DataBindStatus to_json(DataBind *codec, char **out, size_t *out_len,
                            DataBindError *error) const noexcept {

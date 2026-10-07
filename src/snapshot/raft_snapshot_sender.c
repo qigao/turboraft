@@ -1,7 +1,7 @@
 #include <turboraft/raft_snapshot_sender.h>
 
-#include <openssl/sha.h>
-#include <salts_error.h>
+#include <cmeta_crypto.h>
+#include <cmeta_error.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -287,8 +287,11 @@ int tr_raft_snapshot_sender_begin(
     memset(&source, 0, sizeof(source));
     source.context = memory;
     source.size = size;
-    SHA256(size != 0U ? memory->data : (const uint8_t *)"",
-           size, source.digest);
+    result = cmeta_sha256(memory->data, size, source.digest);
+    if (result != SALTS_OK) {
+        tr_snapshot_memory_release(memory);
+        return result;
+    }
     source.read_at = tr_snapshot_memory_read_at;
     source.release = tr_snapshot_memory_release;
 

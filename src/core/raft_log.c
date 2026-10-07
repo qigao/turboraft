@@ -1,7 +1,7 @@
 #include "raft_log.h"
 #include "../turboraft_stl_status.h"
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <limits.h>
 #include <string.h>

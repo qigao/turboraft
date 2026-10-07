@@ -2,7 +2,7 @@
 #include "raft_membership_transition.h"
 
 #include <tinytest.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 spec("raft configuration log")
 {

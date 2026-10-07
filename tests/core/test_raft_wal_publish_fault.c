@@ -2,8 +2,8 @@
 
 #include "raft_wal_storage_internal.h"
 
-#include <salts_error.h>
-#include <salts_fs.h>
+#include <cmeta_error.h>
+#include <cmeta_fs.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -36,8 +36,8 @@ static int expect(int condition, const char *message)
 
 static void unlink_if_exists(const char *path)
 {
-    if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
-        (void)salts_fs_unlink(path);
+    if (cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
+        (void)cmeta_fs_unlink(path);
     }
 }
 
@@ -70,7 +70,7 @@ static int injected_replace_durable(
     void *context,
     const char *staging_path,
     const char *destination_path,
-    salts_fs_replace_state_t *state)
+    cmeta_fs_replace_state_t *state)
 {
     publish_fault_provider_t *provider =
         (publish_fault_provider_t *)context;
@@ -98,7 +98,7 @@ static int injected_replace_durable(
             strstr(destination_path, ".manifest") != NULL;
 
         if (!target_snapshot && !target_manifest) {
-            return salts_fs_replace_durable(
+            return cmeta_fs_replace_durable(
                 staging_path, destination_path, state);
         }
     }
@@ -106,14 +106,14 @@ static int injected_replace_durable(
     *state = SALTS_FS_REPLACE_NOT_PUBLISHED;
     if (provider->mode == PUBLISH_FAULT_STAGING_FSYNC) {
         /*
-         * Model salts_fs_replace_durable() failing its staging-file fsync:
+         * Model cmeta_fs_replace_durable() failing its staging-file fsync:
          * no namespace publication occurred and the staging path remains
          * caller-owned.
          */
         return SALTS_EIO;
     }
     if (provider->mode == PUBLISH_FAULT_DIRECTORY_FSYNC_UNKNOWN) {
-        int result = salts_fs_rename(staging_path, destination_path);
+        int result = cmeta_fs_rename(staging_path, destination_path);
         if (result != SALTS_OK) {
             return result;
         }
@@ -233,7 +233,7 @@ int main(int argc, char **argv)
 
     if (provider.fault_manifest) {
         failed |= expect(
-            salts_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK,
+            cmeta_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK,
             "manifest failure leaves complete snapshot bytes visible");
         failed |= expect(
             tr_raft_wal_storage_store_snapshot(
@@ -278,7 +278,7 @@ int main(int argc, char **argv)
         }
     } else if (provider.mode == PUBLISH_FAULT_STAGING_FSYNC) {
         failed |= expect(
-            salts_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
+            cmeta_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
             "pre-publication fault must not publish snapshot");
         failed |= expect(
             tr_raft_wal_storage_store_snapshot(
@@ -291,7 +291,7 @@ int main(int argc, char **argv)
                          "retry publishes snapshot, checkpoint segment and manifest exactly once");
     } else {
         failed |= expect(
-            salts_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK,
+            cmeta_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK,
             "uncertain publication leaves complete snapshot bytes visible");
         failed |= expect(
             tr_raft_wal_storage_store_snapshot(

@@ -2,7 +2,7 @@
 #include <turboraft/raft_snapshot_sender.h>
 #include <turboraft/raft_wire_codec.h>
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <dirent.h>
 #include <inttypes.h>

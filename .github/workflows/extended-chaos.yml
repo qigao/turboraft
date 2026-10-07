@@ -17,6 +17,11 @@ on:
     branches: [master]
     paths:
       - ".github/workflows/extended-chaos.yml"
+      - "CMakeUserPresets.json"
+      - "presets/**"
+      - "cmake/native-sdk.nuget.config"
+      - "packaging/nuget/TurboRaft.Native.csproj"
+      - "vcpkg*.json"
 
 concurrency:
   group: turboraft-extended-chaos-${{ github.ref }}-${{ github.event_name }}
@@ -25,17 +30,6 @@ concurrency:
 permissions:
   contents: read
   packages: read
-
-env:
-  VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-  SALTS_REF: v1.8.3
-  SALTS_UTILS_REF: v4.1.3
-  FLOWMQ_REF: main
-  VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
-  SALTS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts
-  SALTS_UTILS_ROOT: ${{ github.workspace }}/.ci/pkgs/salts-utils
-  FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs/flowmq
-  LD_LIBRARY_PATH: ${{ github.workspace }}/.ci/pkgs/flowmq/lib:${{ github.workspace }}/.ci/pkgs/salts-utils/lib:${{ github.workspace }}/.ci/pkgs/salts/lib:${{ github.workspace }}/.ci/vcpkg_installed/x64-linux/lib
 
 jobs:
   campaign:
@@ -65,6 +59,17 @@ jobs:
           echo "CHAOS_FIRST_SEED=$first" >> "$GITHUB_ENV"
           echo "CHAOS_SEED_COUNT=$count" >> "$GITHUB_ENV"
           echo "CHAOS_LAST_SEED=$last" >> "$GITHUB_ENV"
+          mkdir -p artifacts
+          {
+            echo "turboraft_sha=$(git rev-parse HEAD)"
+            echo "first_seed=$first"
+            echo "seed_count=$count"
+            echo "last_seed=$last"
+            echo "runner=${{ runner.os }}-${{ runner.arch }}"
+            echo "event=${{ github.event_name }}"
+            echo "scenario=multiprocess-seeded"
+            echo "companion_scenario=snapshot-group-isolation"
+          } > artifacts/campaign-metadata.txt
 
       - name: Configure shared vcpkg binary cache
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
@@ -74,132 +79,63 @@ jobs:
       - name: Restore shared re2c binary
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
-      - name: Checkout Salts
-        uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
         with:
-          repository: qigao/salts
-          ref: ${{ env.SALTS_REF }}
-          path: .ci/src/salts
-          persist-credentials: false
-
-      - name: Checkout SaltsUtils
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          ref: ${{ env.SALTS_UTILS_REF }}
-          path: .ci/src/salts-utils
-          persist-credentials: false
-
-      - name: Checkout FlowMQ
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/flowmq
-          ref: ${{ env.FLOWMQ_REF }}
-          path: .ci/src/flowmq
-          persist-credentials: false
+          dotnet-version: "8.0.x"
 
       - name: Install host build tools
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            autoconf automake build-essential libtool nasm ninja-build pkg-config
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
 
-      - name: Restore vcpkg dependency union
+      - name: Restore released native SDK dependencies
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          packages="$RUNNER_TEMP/turboraft-chaos-dependencies"
+          dotnet restore packaging/nuget/TurboRaft.Native.csproj \
+            --configfile cmake/native-sdk.nuget.config --packages "$packages" \
+            --no-cache --force-evaluate 2>&1 | tee artifacts/sdk-restore.log
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          assets = json.loads(Path("packaging/nuget/obj/project.assets.json").read_text())
+          for package, key in (("Salts.Native", "SALTS"),
+                               ("SaltsUtils.Native", "SALTS_UTILS"),
+                               ("FlowMQ.Native", "FLOWMQ")):
+              entries = [(name, value) for name, value in assets["libraries"].items()
+                         if name.split("/")[0].lower() == package.lower()]
+              if len(entries) != 1:
+                  raise SystemExit(f"Expected one resolved {package}, got {len(entries)}")
+              name, entry = entries[0]
+              roots = [Path(folder) / entry["path"] / "sdk/linux-x64"
+                       for folder in assets["packageFolders"]]
+              roots = [root for root in roots if root.is_dir()]
+              if len(roots) != 1:
+                  raise SystemExit(f"Expected one linux-x64 SDK for {name}: {roots}")
+              with open(os.environ["GITHUB_ENV"], "a") as output:
+                  print(f"{key}_ROOT={roots[0]}", file=output)
+              with open("artifacts/campaign-metadata.txt", "a") as output:
+                  print(f"{key.lower()}_package={name}", file=output)
+          PY
+
+      - name: Record campaign reproduction
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$VCPKG_INSTALLED_DIR" .ci/super-manifest
-          cat > .ci/super-manifest/vcpkg.json <<'JSON'
-          {
-            "name": "turboraft-extended-chaos",
-            "version-semver": "0.1.0",
-            "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
-            "dependencies": [
-              { "name": "pkgconf", "host": true },
-              "simde",
-              "zstd",
-              "aklomp-base64",
-              "c-ares",
-              "libuv",
-              "kcp",
-              "boringssl",
-              "miniaudio",
-              "lua",
-              { "name": "zeromq", "default-features": false },
-              { "name": "xxhash", "version>=": "0.8.3" }
-            ]
-          }
-          JSON
-          "$VCPKG_ROOT/vcpkg" install \
-            --x-manifest-root="$GITHUB_WORKSPACE/.ci/super-manifest" \
-            --x-install-root="$VCPKG_INSTALLED_DIR" \
-            --only-binarycaching \
-            --triplet=x64-linux
-
-      - name: Build first-party dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake -S .ci/src/salts -B .ci/build/salts -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$SALTS_ROOT" \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
-          cmake --build .ci/build/salts --target install --parallel 2
-
-          cmake -S .ci/src/salts-utils -B .ci/build/salts-utils -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT" \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF \
-            -DSALTS_UTILS_ENABLE_CAPTURE=OFF -DSALTS_UTILS_ENABLE_CFLOW_USB=OFF
-          cmake --build .ci/build/salts-utils --target install --parallel 2
-
-          cmake -S .ci/src/flowmq -B .ci/build/flowmq -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DCMAKE_INSTALL_PREFIX="$FLOWMQ_ROOT" \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
-          cmake --build .ci/build/flowmq --target install --parallel 2
-
-      - name: Record campaign provenance
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts
-          {
-            echo "turboraft_sha=$(git rev-parse HEAD)"
-            echo "salts_sha=$(git -C .ci/src/salts rev-parse HEAD)"
-            echo "salts_utils_sha=$(git -C .ci/src/salts-utils rev-parse HEAD)"
-            echo "flowmq_sha=$(git -C .ci/src/flowmq rev-parse HEAD)"
-            echo "first_seed=$CHAOS_FIRST_SEED"
-            echo "seed_count=$CHAOS_SEED_COUNT"
-            echo "last_seed=$CHAOS_LAST_SEED"
-            echo "runner=${{ runner.os }}-${{ runner.arch }}"
-            echo "event=${{ github.event_name }}"
-            echo "scenario=multiprocess-seeded"
-            echo "companion_scenario=snapshot-group-isolation"
-          } | tee artifacts/campaign-metadata.txt
           cat > artifacts/reproduce.sh <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
           export TURBORAFT_CHAOS_FIRST_SEED=$CHAOS_FIRST_SEED
           export TURBORAFT_CHAOS_SEED_COUNT=$CHAOS_SEED_COUNT
-          export TURBORAFT_CHAOS_NODE="$PWD/.ci/build/turboraft/bin/turboraft_multiprocess_node"
-          "$PWD/.ci/build/turboraft/bin/turboraft_multiprocess_chaos_tests"
-          ctest --test-dir "$PWD/.ci/build/turboraft" \
-            -R '^turboraft\.snapshot_group_isolation$' --output-on-failure
+          ctest --preset ci-linux-release-user \
+            -R '^turboraft\.(multiprocess_chaos|snapshot_group_isolation)$' -V
           EOF
           chmod +x artifacts/reproduce.sh
 
@@ -209,25 +145,14 @@ jobs:
           set -uo pipefail
           mkdir -p artifacts
           set +e
-          cmake -S . -B .ci/build/turboraft -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_INSTALLED_DIR="$VCPKG_INSTALLED_DIR" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_MANIFEST_MODE=OFF \
-            -DTURBORAFT_BUILD_PROFILE=full \
-            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
-            -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+          cmake --preset ci-linux-release-user \
             2>&1 | tee artifacts/configure.log
           configure_rc=${PIPESTATUS[0]}
           if (( configure_rc != 0 )); then
             echo "configure_exit_code=$configure_rc" | tee -a artifacts/campaign-metadata.txt
             exit "$configure_rc"
           fi
-          cmake --build .ci/build/turboraft --parallel 2 --target \
-            turboraft_multiprocess_node \
-            turboraft_multiprocess_chaos_tests \
-            turboraft_snapshot_group_isolation_tests \
+          cmake --build --preset ci-linux-release-user --parallel 2 \
             2>&1 | tee artifacts/build.log
           build_rc=${PIPESTATUS[0]}
           set -e
@@ -240,11 +165,10 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          export TURBORAFT_CHAOS_NODE="$GITHUB_WORKSPACE/.ci/build/turboraft/bin/turboraft_multiprocess_node"
           export TURBORAFT_CHAOS_FIRST_SEED="$CHAOS_FIRST_SEED"
           export TURBORAFT_CHAOS_SEED_COUNT="$CHAOS_SEED_COUNT"
           set +e
-          "$GITHUB_WORKSPACE/.ci/build/turboraft/bin/turboraft_multiprocess_chaos_tests" \
+          ctest --preset ci-linux-release-user -R '^turboraft\.multiprocess_chaos$' -V \
             2>&1 | tee artifacts/chaos.log
           rc=${PIPESTATUS[0]}
           set -e
@@ -259,7 +183,7 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          ctest --test-dir "$GITHUB_WORKSPACE/.ci/build/turboraft" \
+          ctest --preset ci-linux-release-user \
             -R '^turboraft\.snapshot_group_isolation$' \
             --output-on-failure 2>&1 | tee artifacts/snapshot-group-isolation.log
           rc=${PIPESTATUS[0]}
@@ -294,5 +218,5 @@ jobs:
           path: |
             artifacts/
             .ci/build/turboraft/Testing/Temporary/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30

@@ -1,7 +1,7 @@
-#include <salts_error.h>
-#include <salts_fs.h>
+#include <cmeta_error.h>
+#include <cmeta_fs.h>
 
-#include <openssl/sha.h>
+#include <cmeta_crypto.h>
 #include <xxhash.h>
 
 #include <errno.h>
@@ -196,7 +196,7 @@ static int tr_parse_u64(const char *value, uint64_t *out)
     return SALTS_OK;
 }
 
-static int tr_read_at_exact(salts_file_t file,
+static int tr_read_at_exact(cmeta_file_t file,
                             uint64_t offset,
                             uint8_t *data,
                             size_t size)
@@ -204,7 +204,7 @@ static int tr_read_at_exact(salts_file_t file,
     size_t used = 0U;
 
     while (used < size) {
-        int count = salts_fs_pread(
+        int count = cmeta_fs_pread(
             file, (char *)data + used, size - used,
             (int64_t)(offset + used));
         if (count <= 0) {
@@ -217,16 +217,16 @@ static int tr_read_at_exact(salts_file_t file,
 
 static int tr_read_exact(const char *path, uint8_t *data, size_t size)
 {
-    salts_file_t file;
+    cmeta_file_t file;
     int result;
 
-    file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
+    file = cmeta_fs_open(path, SALTS_FS_O_RDONLY, 0);
     if (file == SALTS_INVALID_FILE) {
         return SALTS_EIO;
     }
     result = tr_read_at_exact(file, 0U, data, size);
     {
-        int close_result = salts_fs_close(file);
+        int close_result = cmeta_fs_close(file);
         if (result == SALTS_OK) {
             result = close_result;
         }
@@ -269,7 +269,7 @@ static int tr_read_manifest(const char *prefix, tr_compat_result_t *result)
 {
     uint8_t header[TR_COMPAT_MANIFEST_HEADER_SIZE];
     char path[SALTS_FS_MAX_PATH];
-    salts_fs_stat_t stat;
+    cmeta_fs_stat_t stat;
     uint32_t version;
     int rc;
 
@@ -278,7 +278,7 @@ static int tr_read_manifest(const char *prefix, tr_compat_result_t *result)
         result->reason = "path_too_long";
         return rc;
     }
-    rc = salts_fs_access(path, SALTS_FS_ACCESS_EXISTS);
+    rc = cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS);
     if (rc == -ENOENT) {
         result->manifest_present = 0;
         return SALTS_OK;
@@ -288,7 +288,7 @@ static int tr_read_manifest(const char *prefix, tr_compat_result_t *result)
         return rc;
     }
     result->manifest_present = 1;
-    rc = salts_fs_stat(path, &stat);
+    rc = cmeta_fs_stat(path, &stat);
     if (rc != SALTS_OK || !stat.is_file ||
         stat.size != TR_COMPAT_MANIFEST_HEADER_SIZE) {
         result->reason = "manifest_corrupt";
@@ -333,7 +333,7 @@ static int tr_validate_segment(const char *prefix, uint64_t sequence,
 {
     uint8_t header[TR_COMPAT_SEGMENT_HEADER_SIZE];
     char path[SALTS_FS_MAX_PATH];
-    salts_fs_stat_t stat;
+    cmeta_fs_stat_t stat;
     uint32_t version;
     int rc;
 
@@ -342,7 +342,7 @@ static int tr_validate_segment(const char *prefix, uint64_t sequence,
         *out_reason = "path_too_long";
         return rc;
     }
-    rc = salts_fs_stat(path, &stat);
+    rc = cmeta_fs_stat(path, &stat);
     if (rc != SALTS_OK || !stat.is_file ||
         stat.size < TR_COMPAT_SEGMENT_HEADER_SIZE) {
         *out_reason = "segment_corrupt";
@@ -389,7 +389,7 @@ static int tr_scan_legacy_window(const char *prefix, tr_compat_result_t *result)
             result->reason = "path_too_long";
             return rc;
         }
-        rc = salts_fs_access(path, SALTS_FS_ACCESS_EXISTS);
+        rc = cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS);
         if (rc == -ENOENT) {
             if (in_range) {
                 ended = 1;
@@ -487,10 +487,10 @@ static int tr_validate_snapshot_file(
     uint8_t header[TR_COMPAT_SNAPSHOT_HEADER_SIZE];
     uint8_t buffer[8192];
     char path[SALTS_FS_MAX_PATH];
-    salts_fs_stat_t stat;
-    salts_file_t file = SALTS_INVALID_FILE;
+    cmeta_fs_stat_t stat;
+    cmeta_file_t file = SALTS_INVALID_FILE;
     XXH3_state_t *xxh = NULL;
-    SHA256_CTX sha;
+    cmeta_sha256_stream *sha = NULL;
     uint8_t digest[TR_COMPAT_SNAPSHOT_DIGEST_SIZE];
     uint64_t offset = 0U;
     int rc;
@@ -500,7 +500,7 @@ static int tr_validate_snapshot_file(
         *out_reason = "path_too_long";
         return rc;
     }
-    rc = salts_fs_stat(path, &stat);
+    rc = cmeta_fs_stat(path, &stat);
     if (rc == -ENOENT) {
         *out_reason = "snapshot_missing";
         return SALTS_ENOENT;
@@ -515,7 +515,7 @@ static int tr_validate_snapshot_file(
         *out_reason = "snapshot_corrupt";
         return SALTS_EPROTO;
     }
-    file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
+    file = cmeta_fs_open(path, SALTS_FS_O_RDONLY, 0);
     if (file == SALTS_INVALID_FILE) {
         *out_reason = "snapshot_io_error";
         return SALTS_EIO;
@@ -523,7 +523,7 @@ static int tr_validate_snapshot_file(
     rc = tr_read_at_exact(file, 0U, header, sizeof(header));
     if (rc != SALTS_OK) {
         *out_reason = "snapshot_io_error";
-        (void)salts_fs_close(file);
+        (void)cmeta_fs_close(file);
         return rc;
     }
     if (memcmp(header, TR_COMPAT_SNAPSHOT_MAGIC, 8U) != 0 ||
@@ -534,17 +534,17 @@ static int tr_validate_snapshot_file(
         tr_get_u64(header + 32U) != expected_size ||
         tr_get_u64(header + 40U) != expected_checksum) {
         *out_reason = "snapshot_corrupt";
-        (void)salts_fs_close(file);
+        (void)cmeta_fs_close(file);
         return SALTS_EPROTO;
     }
 
     xxh = XXH3_createState();
     if (xxh == NULL || XXH3_64bits_reset(xxh) != XXH_OK ||
-        SHA256_Init(&sha) != 1) {
+        cmeta_sha256_stream_create(&sha) != SALTS_OK) {
         if (xxh != NULL) {
             XXH3_freeState(xxh);
         }
-        (void)salts_fs_close(file);
+        (void)cmeta_fs_close(file);
         *out_reason = "preflight_memory_error";
         return SALTS_ENOMEM;
     }
@@ -562,7 +562,7 @@ static int tr_validate_snapshot_file(
             break;
         }
         if (XXH3_64bits_update(xxh, buffer, request) != XXH_OK ||
-            SHA256_Update(&sha, buffer, request) != 1) {
+            cmeta_sha256_stream_update(sha, buffer, request) != SALTS_OK) {
             rc = SALTS_EIO;
             *out_reason = "snapshot_io_error";
             break;
@@ -575,7 +575,7 @@ static int tr_validate_snapshot_file(
         *out_reason = "snapshot_checksum_mismatch";
     }
     if (rc == SALTS_OK) {
-        if (SHA256_Final(digest, &sha) != 1) {
+        if (cmeta_sha256_stream_finish(sha, digest) != SALTS_OK) {
             rc = SALTS_EIO;
             *out_reason = "snapshot_io_error";
         } else if (expected_digest_size != 0U &&
@@ -585,9 +585,10 @@ static int tr_validate_snapshot_file(
             *out_reason = "snapshot_digest_mismatch";
         }
     }
+    cmeta_sha256_stream_destroy(sha);
     XXH3_freeState(xxh);
     {
-        int close_result = salts_fs_close(file);
+        int close_result = cmeta_fs_close(file);
         if (rc == SALTS_OK && close_result != SALTS_OK) {
             rc = close_result;
             *out_reason = "snapshot_io_error";
@@ -831,8 +832,8 @@ static int tr_replay_segment(const char *prefix,
 {
     uint8_t segment_header[TR_COMPAT_SEGMENT_HEADER_SIZE];
     char path[SALTS_FS_MAX_PATH];
-    salts_fs_stat_t stat;
-    salts_file_t file = SALTS_INVALID_FILE;
+    cmeta_fs_stat_t stat;
+    cmeta_file_t file = SALTS_INVALID_FILE;
     uint64_t offset = TR_COMPAT_SEGMENT_HEADER_SIZE;
     int rc;
 
@@ -841,14 +842,14 @@ static int tr_replay_segment(const char *prefix,
         *out_reason = "path_too_long";
         return rc;
     }
-    rc = salts_fs_stat(path, &stat);
+    rc = cmeta_fs_stat(path, &stat);
     if (rc != SALTS_OK || !stat.is_file ||
         stat.size < TR_COMPAT_SEGMENT_HEADER_SIZE ||
         stat.size > limits->segment_bytes) {
         *out_reason = "segment_corrupt";
         return SALTS_EPROTO;
     }
-    file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
+    file = cmeta_fs_open(path, SALTS_FS_O_RDONLY, 0);
     if (file == SALTS_INVALID_FILE) {
         *out_reason = "segment_io_error";
         return SALTS_EIO;
@@ -857,7 +858,7 @@ static int tr_replay_segment(const char *prefix,
         file, 0U, segment_header, sizeof(segment_header));
     if (rc != SALTS_OK) {
         *out_reason = "segment_io_error";
-        (void)salts_fs_close(file);
+        (void)cmeta_fs_close(file);
         return rc;
     }
     while (rc == SALTS_OK && offset < stat.size) {
@@ -962,7 +963,7 @@ static int tr_replay_segment(const char *prefix,
         state->last_transaction_id = transaction_id;
         offset += sizeof(header) + payload_size;
     }
-    (void)salts_fs_close(file);
+    (void)cmeta_fs_close(file);
     return rc;
 }
 

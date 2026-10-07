@@ -16,7 +16,7 @@ add_executable(turboraft_control_operation_tests
 target_include_directories(turboraft_control_operation_tests
                            PRIVATE ../../src/control)
 target_link_libraries(turboraft_control_operation_tests
-                      PRIVATE TurboRaft::Core Salts::TinyTest)
+                      PRIVATE TurboRaft::Core Salts::CMeta Salts::TinyTest)
 add_test(NAME turboraft.control_operation
          COMMAND turboraft_control_operation_tests)
 
@@ -592,3 +592,20 @@ if(TARGET turboraft_turbodb_redis_state_machine)
                        PROPERTIES LABELS "cflow;redis;recovery")
 endif()
 cmake_config_directory_targets(FOLDER "tests/core")
+add_executable(turboraft_multicore_tests test_raft_multicore.c)
+target_link_libraries(turboraft_multicore_tests PRIVATE TurboRaft::Multicore TurboRaft::FlowMQ Salts::TinyTest)
+target_compile_definitions(turboraft_multicore_tests PRIVATE
+  TURBORAFT_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
+add_test(NAME turboraft.multicore COMMAND turboraft_multicore_tests)
+set_tests_properties(turboraft.multicore PROPERTIES TIMEOUT 60)
+
+add_executable(turboraft_node_config_tests test_raft_node_config.c)
+target_link_libraries(turboraft_node_config_tests PRIVATE TurboRaft::NodeConfig Salts::TinyTest)
+add_test(NAME turboraft.node_config COMMAND turboraft_node_config_tests)
+
+add_executable(turboraft_multicore_wal_tests test_raft_multicore_wal.c
+               ../../examples/multicore_node.c)
+target_compile_definitions(turboraft_multicore_wal_tests PRIVATE TURBORAFT_MULTICORE_DEMO_NO_MAIN)
+target_link_libraries(turboraft_multicore_wal_tests PRIVATE TurboRaft::NodeConfig TurboRaft::WalStorage Salts::TinyTest)
+add_test(NAME turboraft.multicore_wal COMMAND turboraft_multicore_wal_tests)
+set_tests_properties(turboraft.multicore_wal PROPERTIES TIMEOUT 60)

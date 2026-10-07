@@ -2,7 +2,7 @@
 
 #include <turboraft/raft_wire_codec.h>
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdlib.h>
 

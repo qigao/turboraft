@@ -3,7 +3,7 @@
 #include <cflow/cflow.h>
 #include <cmeta/cmeta.h>
 #include <salts/thread.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <tinytest.h>
 
 #include <stdatomic.h>
@@ -116,7 +116,7 @@ static void block_executor(void *user)
 
     atomic_store_explicit(&blocker->entered, true, memory_order_release);
     while (!atomic_load_explicit(&blocker->release, memory_order_acquire)) {
-        salts_thread_yield();
+        cmeta_thread_yield();
     }
 }
 
@@ -366,7 +366,7 @@ spec("CFlow Raft payload ownership")
                     CFLOW_ADMISSION_ACCEPTED);
         while (!atomic_load_explicit(
             &blocker.entered, memory_order_acquire)) {
-            salts_thread_yield();
+            cmeta_thread_yield();
         }
 
         check_equal(tr_raft_apply_runtime_start(runtime, &ready, &result),

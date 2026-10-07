@@ -3,8 +3,8 @@
 #include <turboraft/raft_snapshot_sender.h>
 
 #include <cnet/cnet.h>
-#include <salts_error.h>
-#include <salts_thread.h>
+#include <cmeta_error.h>
+#include <cmeta_thread.h>
 #include <tinytest.h>
 
 #include <stdio.h>
@@ -1001,7 +1001,7 @@ spec("Raft FlowMQ caller-driven service")
             memset(&node2_step, 0, sizeof(node2_step));
             result = step_live_pair(&pair, &node1_step, &node2_step);
             if (pair.node2_capture.count == 0U) {
-                salts_sleep_ms(1U);
+                cmeta_sleep_ms(1U);
             }
         }
         check_equal(result, SALTS_OK);
@@ -1074,7 +1074,7 @@ spec("Raft FlowMQ caller-driven service")
             memset(&node2_step, 0, sizeof(node2_step));
             result = step_live_pair(&pair, &node1_step, &node2_step);
             if (pair.node2_capture.count < 3U) {
-                salts_sleep_ms(1U);
+                cmeta_sleep_ms(1U);
             }
         }
 
@@ -1231,7 +1231,7 @@ spec("Raft FlowMQ caller-driven service")
                 fixture.sibling_count == 6U) {
                 break;
             }
-            salts_sleep_ms(1U);
+            cmeta_sleep_ms(1U);
         }
 
         check_equal(result, SALTS_OK);
@@ -1359,7 +1359,7 @@ spec("Raft FlowMQ caller-driven service")
                         pair.node2, &node2_status);
                 }
                 if (node2_status.tls_identity_rejections == 0U) {
-                    salts_sleep_ms(1U);
+                    cmeta_sleep_ms(1U);
                 }
             }
             check_equal(result, SALTS_OK);
@@ -1454,7 +1454,7 @@ spec("Raft FlowMQ caller-driven service")
                 } else if (node2_status.tls_identity_rejections != 0U) {
                     break;
                 }
-                salts_sleep_ms(1U);
+                cmeta_sleep_ms(1U);
             }
 
             check_equal(result, SALTS_OK);

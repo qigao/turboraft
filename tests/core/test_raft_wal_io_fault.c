@@ -2,8 +2,8 @@
 
 #include "raft_wal_storage_internal.h"
 
-#include <salts_error.h>
-#include <salts_fs.h>
+#include <cmeta_error.h>
+#include <cmeta_fs.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -183,8 +183,8 @@ static int commit_entry(
 
 static void unlink_if_exists(const char *path)
 {
-    if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
-        (void)salts_fs_unlink(path);
+    if (cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
+        (void)cmeta_fs_unlink(path);
     }
 }
 
@@ -461,10 +461,10 @@ static int test_snapshot_header_rewrite_short_write(void)
             snapshot, sizeof(snapshot)) == SALTS_EIO,
         "short snapshot header rewrite must fail publication");
     failed |= expect(
-        salts_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
+        cmeta_fs_access(snapshot_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
         "failed header rewrite must not publish snapshot");
     failed |= expect(
-        salts_fs_access(staging_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
+        cmeta_fs_access(staging_path, SALTS_FS_ACCESS_EXISTS) != SALTS_OK,
         "failed header rewrite must release staging file");
 
     memset(&recovery, 0, sizeof(recovery));

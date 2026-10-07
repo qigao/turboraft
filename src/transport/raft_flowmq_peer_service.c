@@ -3,7 +3,7 @@
 #include "raft_group_queue.h"
 #include "raft_transport_payload_storage.h"
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <flowmq_tls_identity_map.h>
 
 #include <limits.h>

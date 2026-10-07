@@ -3,11 +3,11 @@
 
 #ifdef TURBORAFT_BENCHMARK_WAL
 #include <turboraft/raft_wal_storage.h>
-#include <salts_fs.h>
+#include <cmeta_fs.h>
 #endif
 
 #include <tinytest.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -322,10 +322,11 @@ spec("TurboRaft performance baselines")
         benchmark_wire_message(&message);
         memset(&metadata, 0, sizeof(metadata));
         metadata.cluster_id.bytes[0] = 1U;
+        metadata.group_id = 1U;
         metadata.message_id = 1U;
         check_equal(tr_raft_wire_codec_create(&codec), SALTS_OK);
-        check_equal(tr_raft_wire_encode_version(
-                         codec, TR_RAFT_WIRE_VERSION, &metadata, &message,
+        check_equal(tr_raft_wire_encode(
+                         codec, &metadata, &message,
                          frame, sizeof(frame), &frame_size),
                      SALTS_OK);
         check_equal(tr_raft_wire_decode(codec, frame, frame_size,
@@ -333,11 +334,11 @@ spec("TurboRaft performance baselines")
                      SALTS_OK);
         check_equal(decoded.entry_count, message.entry_count);
 
-        benchmark_io("wire v3 encode 8x256B",
+        benchmark_io("current wire encode 8x256B",
                      WIRE_BENCHMARK_SAMPLE_COUNT, 1U, frame_size)
         {
-            int result = tr_raft_wire_encode_version(
-                codec, TR_RAFT_WIRE_VERSION, &metadata, &message,
+            int result = tr_raft_wire_encode(
+                codec, &metadata, &message,
                 frame, sizeof(frame), &frame_size);
             if (first_error == SALTS_OK && result != SALTS_OK) {
                 first_error = result;
@@ -355,8 +356,8 @@ spec("TurboRaft performance baselines")
 
             for (index = 0U; index < WIRE_BENCHMARK_BURST_ITEMS; ++index) {
                 metadata.message_id = index + 1U;
-                check_equal(tr_raft_wire_encode_version(
-                                 codec, TR_RAFT_WIRE_VERSION, &metadata,
+                check_equal(tr_raft_wire_encode(
+                                 codec, &metadata,
                                  &message, burst_frames[index],
                                  sizeof(burst_frames[index]),
                                  &burst_frame_sizes[index]),
@@ -364,7 +365,7 @@ spec("TurboRaft performance baselines")
                 burst_bytes += burst_frame_sizes[index];
             }
             first_error = SALTS_OK;
-            benchmark_io("wire v3 encode 16-frame replication burst",
+            benchmark_io("current wire encode 16-frame replication burst",
                          WIRE_BENCHMARK_SAMPLE_COUNT,
                          WIRE_BENCHMARK_BURST_ITEMS, burst_bytes)
             {
@@ -373,8 +374,8 @@ spec("TurboRaft performance baselines")
                     int result;
 
                     metadata.message_id = index + 1U;
-                    result = tr_raft_wire_encode_version(
-                        codec, TR_RAFT_WIRE_VERSION, &metadata, &message,
+                    result = tr_raft_wire_encode(
+                        codec, &metadata, &message,
                         burst_frames[index], sizeof(burst_frames[index]),
                         &burst_frame_sizes[index]);
                     if (first_error == SALTS_OK && result != SALTS_OK) {

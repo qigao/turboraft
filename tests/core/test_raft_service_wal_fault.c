@@ -3,8 +3,8 @@
 
 #include "raft_wal_storage_internal.h"
 
-#include <salts_error.h>
-#include <salts_fs.h>
+#include <cmeta_error.h>
+#include <cmeta_fs.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -89,8 +89,8 @@ static char *make_temp_prefix(const char *name)
 
 static void unlink_if_exists(const char *path)
 {
-    if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
-        (void)salts_fs_unlink(path);
+    if (cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
+        (void)cmeta_fs_unlink(path);
     }
 }
 

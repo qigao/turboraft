@@ -170,6 +170,14 @@
       "reentry": "Recursive execution of the same replay executor is unsupported.",
       "failure": "The first callback failure is returned unchanged and stops execution; unknown request ids and duplicate ids use the documented deterministic errors.",
       "release": "Receipts are executor-owned values; no pointer/resource ownership is transferred."
+    },
+    "multicore_resource_factory": {
+      "owner": "Fixed runtime owner thread; different owners call concurrently, without runtime locks.",
+      "borrow": "Factory context is borrowed until stop joins all owners. Owner and group Service handles cannot cross threads.",
+      "retain": "Runtime owns a Service after successful group_open. Host owns callback contexts and keeps them alive until group_close.",
+      "reentry": "Callbacks must be bounded and cannot synchronously wait for or join their own runtime. Nonblocking request_stop is allowed after startup.",
+      "failure": "Failed open cleans partial resources and returns no Service; startup rolls successful opens back on their original owner.",
+      "release": "Runtime destroys Service before group_close, then calls owner_close. Every successful open has one matching close."
     }
   },
   "callbacks": {
@@ -222,6 +230,11 @@
     "tr_replay_driver_apply_fn": "replay_driver",
     "tr_text_replay_submit_fn": "replay_executor",
     "tr_text_replay_poll_fn": "replay_executor",
-    "tr_text_replay_tick_fn": "replay_executor"
+    "tr_text_replay_tick_fn": "replay_executor",
+    "tr_raft_multicore_factory_t.owner_open": "multicore_resource_factory",
+    "tr_raft_multicore_factory_t.owner_poll": "multicore_resource_factory",
+    "tr_raft_multicore_factory_t.owner_close": "multicore_resource_factory",
+    "tr_raft_multicore_factory_t.group_open": "multicore_resource_factory",
+    "tr_raft_multicore_factory_t.group_close": "multicore_resource_factory"
   }
 }

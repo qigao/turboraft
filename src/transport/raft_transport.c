@@ -3,7 +3,7 @@
 #include "raft_transport_internal.h"
 #include "../wire/raft_wire_internal.h"
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <limits.h>
 #include <stdlib.h>

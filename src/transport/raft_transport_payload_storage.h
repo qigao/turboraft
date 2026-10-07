@@ -3,8 +3,8 @@
 
 #include <turboraft/raft_transport.h>
 
-#include <salts_buffer.h>
-#include <salts_error.h>
+#include <cmeta_buffer.h>
+#include <cmeta_error.h>
 
 #include <string.h>
 

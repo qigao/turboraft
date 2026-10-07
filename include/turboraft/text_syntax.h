@@ -1,7 +1,7 @@
 #ifndef TURBORAFT_TEXT_SYNTAX_H
 #define TURBORAFT_TEXT_SYNTAX_H
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <vstr.h>
 
 #include <stddef.h>

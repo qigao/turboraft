@@ -2,8 +2,8 @@
 #include "raft_snapshot_installer.h"
 
 #include <tinytest.h>
-#include <salts_error.h>
-#include <salts_fs.h>
+#include <cmeta_error.h>
+#include <cmeta_fs.h>
 
 #include <stdio.h>
 #include <stdlib.h>

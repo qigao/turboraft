@@ -45,7 +45,10 @@
         {
             "name": "release-mac-ninja",
             "displayName": "Release (Mac, Ninja)",
-            "inherits": "base-release-mac",
+            "inherits": [
+                "base-release-mac",
+                "pkg-vcpkg"
+            ],
             "generator": "Ninja"
         }
     ]

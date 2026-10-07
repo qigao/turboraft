@@ -1,7 +1,7 @@
 #include <turboraft/raft_snapshot_receiver.h>
 
 #include <tinytest.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <string.h>
 
@@ -221,6 +221,11 @@ spec("raft snapshot receiver")
         check(result.ack.accepted);
         check_equal(result.ack.next_offset, 3U);
         check_equal(capture.calls, 1);
+        tr_raft_snapshot_receiver_reset(receiver);
+        check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk, &result),
+                     SALTS_OK);
+        check(result.installed);
+        check_equal(capture.calls, 2);
         tr_raft_snapshot_receiver_destroy(receiver);
     }
 

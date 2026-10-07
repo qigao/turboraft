@@ -1,5 +1,5 @@
-#include <salts_error.h>
-#include <salts_process.h>
+#include <cmeta_error.h>
+#include <cmeta_process.h>
 #include "tinytest.h"
 
 #include <stdlib.h>
@@ -14,22 +14,22 @@ static int app_run(const char *program, const char *mode, const char *path,
                    int expected_exit)
 {
     const char *args[] = {mode, path, NULL};
-    salts_process_options_t options;
-    salts_process_result_t result;
-    salts_process_t *process = NULL;
+    cmeta_process_options_t options;
+    cmeta_process_result_t result;
+    cmeta_process_t *process = NULL;
     int status;
 
-    salts_process_options_init(&options);
+    cmeta_process_options_init(&options);
     options.program = program;
     options.args = args;
     options.timeout_ms = 10000U;
-    status = salts_process_spawn(&options, &process);
+    status = cmeta_process_spawn(&options, &process);
     if (status != SALTS_OK) {
         return status;
     }
     memset(&result, 0, sizeof(result));
-    status = salts_process_wait(process, &result);
-    salts_process_destroy(process);
+    status = cmeta_process_wait(process, &result);
+    cmeta_process_destroy(process);
     if (status != SALTS_OK || result.state != SALTS_PROCESS_EXITED ||
         result.exit_code != expected_exit) {
         return SALTS_EIO;

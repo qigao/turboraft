@@ -2,8 +2,8 @@
 
 #include <orm.h>
 #include <orm_runtime.h>
-#include <salts_coro_executor.h>
-#include <salts_error.h>
+#include <coro_executor.h>
+#include <cmeta_error.h>
 #include "tinytest.h"
 
 #include <stdbool.h>
@@ -66,7 +66,7 @@ typedef struct app_store {
     orm_connection_t *connection;
     app_store_failure_t failure;
     uint64_t failure_index;
-    salts_coro_executor_t *persistence_executor;
+    coro_executor_t *persistence_executor;
     atomic_bool wrong_executor;
 } app_store_t;
 
@@ -83,7 +83,7 @@ typedef struct app_persisting_state_machine {
     tr_raft_entry_state_machine_v1_t cflow;
     cflow_statechart_instance *instance;
     app_store_t *store;
-    salts_coro_executor_t *executor;
+    coro_executor_t *executor;
     app_command_event_t entry;
     uint64_t token;
     int candidate_state;
@@ -342,7 +342,7 @@ static app_store_apply_result_t app_store_apply(
     app_store_apply_result_t outcome = APP_STORE_ROLLED_BACK;
 
     if (store != NULL &&
-        salts_coro_executor_current() != store->persistence_executor) {
+        coro_executor_current() != store->persistence_executor) {
         atomic_store_explicit(&store->wrong_executor, true,
                               memory_order_release);
         return APP_STORE_ROLLED_BACK;
@@ -489,7 +489,7 @@ static int app_persisting_poll_settlement(
     app_persisting_state_machine_t *state_machine =
         (app_persisting_state_machine_t *) context;
     tr_raft_apply_settlement_t cflow_settlement;
-    salts_coro_executor_task_t task;
+    coro_executor_task_t task;
     const cmeta_type_desc *state_type = NULL;
     bool cflow_ready = false;
     int status;
@@ -526,9 +526,9 @@ static int app_persisting_poll_settlement(
             *out_ready = true;
             return SALTS_OK;
         }
-        task = (salts_coro_executor_task_t){
+        task = (coro_executor_task_t){
             app_persist_task, app_persist_cancel, NULL, state_machine};
-        status = salts_coro_executor_try_submit(state_machine->executor,
+        status = coro_executor_try_submit(state_machine->executor,
                                                 &task);
         if (status != SALTS_OK) {
             out_settlement->token = state_machine->token;
@@ -561,8 +561,8 @@ static bool app_persisting_state_machine_init(
     const tr_raft_entry_state_machine_v1_t *cflow,
     cflow_statechart_instance *instance, app_store_t *store)
 {
-    salts_coro_executor_config_t config =
-        SALTS_CORO_EXECUTOR_CONFIG_DEFAULT;
+    coro_executor_config_t config =
+        CORO_EXECUTOR_CONFIG_DEFAULT;
 
     if (state_machine == NULL || cflow == NULL || instance == NULL ||
         store == NULL) {
@@ -573,7 +573,7 @@ static bool app_persisting_state_machine_init(
     config.queue_capacity_per_worker = 1U;
     config.coroutine_pool.initial_capacity = 0U;
     config.coroutine_pool.max_capacity = 1U;
-    state_machine->executor = salts_coro_executor_create(&config);
+    state_machine->executor = coro_executor_create(&config);
     if (state_machine->executor == NULL) {
         return false;
     }
@@ -602,7 +602,7 @@ static bool app_persisting_state_machine_wait(
     app_persisting_state_machine_t *state_machine)
 {
     return state_machine != NULL && state_machine->executor != NULL &&
-           salts_coro_executor_wait(state_machine->executor) == SALTS_OK;
+           coro_executor_wait(state_machine->executor) == SALTS_OK;
 }
 
 static bool app_persisting_state_machine_destroy(
@@ -616,9 +616,9 @@ static bool app_persisting_state_machine_destroy(
         state_machine->in_flight) {
         return false;
     }
-    shutdown_status = salts_coro_executor_shutdown(state_machine->executor);
-    wait_status = salts_coro_executor_wait(state_machine->executor);
-    destroy_status = salts_coro_executor_destroy(state_machine->executor);
+    shutdown_status = coro_executor_shutdown(state_machine->executor);
+    wait_status = coro_executor_wait(state_machine->executor);
+    destroy_status = coro_executor_destroy(state_machine->executor);
     state_machine->store->persistence_executor = NULL;
     state_machine->executor = NULL;
     return shutdown_status == SALTS_OK && wait_status == SALTS_OK &&

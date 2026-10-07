@@ -1,7 +1,7 @@
 #include <turboraft/raft_cflow_state_machine.h>
 
 #include <cflow/cflow.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <tinytest.h>
 
 #include <string.h>

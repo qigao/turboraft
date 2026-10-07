@@ -3,7 +3,7 @@
 #include <turboraft/raft_snapshot_receiver.h>
 
 #include <tinytest.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdbool.h>
 #include <stdlib.h>

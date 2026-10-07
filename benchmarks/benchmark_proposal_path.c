@@ -1,8 +1,8 @@
 #include <turboraft/raft_service.h>
 #include <turboraft/raft_wal_storage.h>
 
-#include <salts_error.h>
-#include <salts_fs.h>
+#include <cmeta_error.h>
+#include <cmeta_fs.h>
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -143,8 +143,8 @@ typedef struct bench_memory_storage {
 static void bench_unlink_if_exists(const char *path)
 {
     if (path != NULL &&
-        salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
-        (void)salts_fs_unlink(path);
+        cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
+        (void)cmeta_fs_unlink(path);
     }
 }
 

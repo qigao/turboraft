@@ -10,11 +10,6 @@ on:
         required: true
         type: string
 
-env:
-  SALTS_SDK_VERSION: "1.8.3"
-  SALTS_UTILS_SDK_VERSION: "4.1.3"
-  FLOWMQ_SDK_VERSION: "1.1.1"
-
 jobs:
   metadata:
     runs-on: ubuntu-24.04
@@ -86,9 +81,14 @@ jobs:
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json             --name github --username qigao --password "$GITHUB_TOKEN"             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/TurboRaft.Native.csproj             --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "FLOWMQ_ROOT=$packages/flowmq.native/$FLOWMQ_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          for spec in "salts.native:SALTS:SALTS" "saltsutils.native:SALTS_UTILS:SALTS_UTILS" "flowmq.native:FLOWMQ:FLOWMQ"; do
+            IFS=: read -r package root_key version_key <<< "$spec"
+            versions=("$packages/$package"/*)
+            test "${#versions[@]}" -eq 1
+            test -d "${versions[0]}/sdk/linux-x64"
+            echo "${root_key}_ROOT=${versions[0]}/sdk/linux-x64" >> "$GITHUB_ENV"
+            echo "${version_key}_SDK_VERSION=$(basename "${versions[0]}")" >> "$GITHUB_ENV"
+          done
           chttp_versions=("$packages/chttp.native"/*)
           test "${#chttp_versions[@]}" -eq 1
           chttp_pkg="${chttp_versions[0]}"
@@ -108,9 +108,9 @@ jobs:
           export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/bin:$FLOWMQ_ROOT/bin:$CHTTP_ROOT/bin:$PATH"
           export LD_LIBRARY_PATH="$CHTTP_ROOT/lib:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:$FLOWMQ_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           prefix="$GITHUB_WORKSPACE/stage/sdk/linux-x64"
-          cmake -S . -B build/native-sdk -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=OFF             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             -DCMAKE_INSTALL_PREFIX="$prefix"             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF             -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF             -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=OFF             -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
-          cmake --build build/native-sdk --parallel 2
-          cmake --install build/native-sdk
+          cmake --preset native-sdk-linux-user
+          cmake --build --preset native-sdk-linux-user --parallel 2
+          cmake --build --preset install-native-sdk-linux-user
           python3 tools/abi/public_callback_contract.py \
             --sdk-root "$prefix" \
             --contract "$prefix/share/turboraft/abi/PUBLIC_CALLBACK_CONTRACTS.json"
@@ -178,9 +178,17 @@ jobs:
           '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
           dotnet restore packaging/nuget/TurboRaft.Native.csproj --configfile $config --packages $packages
-          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "FLOWMQ_ROOT=$packages\flowmq.native\$env:FLOWMQ_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          foreach ($sdk in @(
+            @{ Package = 'salts.native'; Key = 'SALTS' },
+            @{ Package = 'saltsutils.native'; Key = 'SALTS_UTILS' },
+            @{ Package = 'flowmq.native'; Key = 'FLOWMQ' })) {
+            $versions = @(Get-ChildItem -LiteralPath (Join-Path $packages $sdk.Package) -Directory)
+            if ($versions.Count -ne 1) { throw "expected one restored $($sdk.Package) version" }
+            $root = Join-Path $versions[0].FullName 'sdk\windows-x64'
+            if (-not (Test-Path -LiteralPath $root -PathType Container)) { throw "missing SDK: $root" }
+            "$($sdk.Key)_ROOT=$root" >> $env:GITHUB_ENV
+            "$($sdk.Key)_SDK_VERSION=$($versions[0].Name)" >> $env:GITHUB_ENV
+          }
           $chttpVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "chttp.native") -Directory)
           if ($chttpVersions.Count -ne 1) { throw "expected one CHttp.Native version, found $($chttpVersions.Count)" }
           $chttpRoot = Join-Path $chttpVersions[0].FullName "sdk\windows-x64"
@@ -201,11 +209,11 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
           set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%FLOWMQ_ROOT%\bin;%CHTTP_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
-          cmake -S . -B build\native-sdk -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\stage\sdk\windows-x64" -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF -DTURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE=OFF -DTURBORAFT_ENABLE_ORM_SQLITE_FIXTURES=OFF
+          cmake --preset native-sdk-windows-user
           if errorlevel 1 exit /b 1
-          cmake --build build\native-sdk --parallel 2
+          cmake --build --preset native-sdk-windows-user --parallel 2
           if errorlevel 1 exit /b 1
-          cmake --install build\native-sdk
+          cmake --build --preset install-native-sdk-windows-user
           if errorlevel 1 exit /b 1
           python tools\abi\public_callback_contract.py --sdk-root "%GITHUB_WORKSPACE%\stage\sdk\windows-x64" --contract "%GITHUB_WORKSPACE%\stage\sdk\windows-x64\share\turboraft\abi\PUBLIC_CALLBACK_CONTRACTS.json"
           if errorlevel 1 exit /b 1
@@ -366,9 +374,14 @@ jobs:
           </Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "FLOWMQ_ROOT=$packages/flowmq.native/$FLOWMQ_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          for spec in "salts.native:SALTS:SALTS" "saltsutils.native:SALTS_UTILS:SALTS_UTILS" "flowmq.native:FLOWMQ:FLOWMQ"; do
+            IFS=: read -r package root_key version_key <<< "$spec"
+            versions=("$packages/$package"/*)
+            test "${#versions[@]}" -eq 1
+            test -d "${versions[0]}/sdk/linux-x64"
+            echo "${root_key}_ROOT=${versions[0]}/sdk/linux-x64" >> "$GITHUB_ENV"
+            echo "${version_key}_SDK_VERSION=$(basename "${versions[0]}")" >> "$GITHUB_ENV"
+          done
           chttp_versions=("$packages/chttp.native"/*)
           test "${#chttp_versions[@]}" -eq 1
           chttp_pkg="${chttp_versions[0]}"
@@ -398,9 +411,17 @@ jobs:
           </Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages
-          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "FLOWMQ_ROOT=$packages\flowmq.native\$env:FLOWMQ_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          foreach ($sdk in @(
+            @{ Package = 'salts.native'; Key = 'SALTS' },
+            @{ Package = 'saltsutils.native'; Key = 'SALTS_UTILS' },
+            @{ Package = 'flowmq.native'; Key = 'FLOWMQ' })) {
+            $versions = @(Get-ChildItem -LiteralPath (Join-Path $packages $sdk.Package) -Directory)
+            if ($versions.Count -ne 1) { throw "expected one restored $($sdk.Package) version" }
+            $root = Join-Path $versions[0].FullName 'sdk\windows-x64'
+            if (-not (Test-Path -LiteralPath $root -PathType Container)) { throw "missing SDK: $root" }
+            "$($sdk.Key)_ROOT=$root" >> $env:GITHUB_ENV
+            "$($sdk.Key)_SDK_VERSION=$($versions[0].Name)" >> $env:GITHUB_ENV
+          }
           $chttpVersions = @(Get-ChildItem -LiteralPath (Join-Path $packages "chttp.native") -Directory)
           if ($chttpVersions.Count -ne 1) { throw "expected one CHttp.Native version, found $($chttpVersions.Count)" }
           "CHTTP_ROOT=$(Join-Path $chttpVersions[0].FullName 'sdk\windows-x64')" >> $env:GITHUB_ENV

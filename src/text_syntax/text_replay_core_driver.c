@@ -1,6 +1,6 @@
 #include <turboraft/text_replay_core_driver.h>
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <limits.h>
 #include <stdlib.h>

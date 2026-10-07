@@ -143,6 +143,7 @@ jobs:
             "version-semver": "0.1.0",
             "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
             "dependencies": [
+              "gmssl",
               { "name": "pkgconf", "host": true },
               "simde",
               "zstd",
@@ -150,7 +151,6 @@ jobs:
               "c-ares",
               "libuv",
               "kcp",
-              "boringssl",
               "llhttp",
               "tree-sitter",
               "tree-sitter-c",

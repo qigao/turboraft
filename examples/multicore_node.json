@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "node_id": 1,
+  "cluster_id": "12345678-1234-1234-1234-123456789abc",
+  "owner_count": 2,
+  "capacity": 64,
+  "work_budget": 8,
+  "tick_ms": 10,
+  "idle_ms": 1,
+  "network_enabled": false,
+  "owners": [],
+  "groups": [
+    { "group_id": 1, "owner_index": 0, "voters": [1], "learners": [], "storage_path": "/var/lib/turboraft/group1" },
+    { "group_id": 2, "owner_index": 1, "voters": [1], "learners": [], "storage_path": "/var/lib/turboraft/group2" },
+    { "group_id": 3, "owner_index": 0, "voters": [1], "learners": [], "storage_path": "/var/lib/turboraft/group3" },
+    { "group_id": 4, "owner_index": 1, "voters": [1], "learners": [], "storage_path": "/var/lib/turboraft/group4" }
+  ]
+}

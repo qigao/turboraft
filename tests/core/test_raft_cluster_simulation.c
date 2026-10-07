@@ -1,7 +1,7 @@
 #include <turboraft/raft_core.h>
 
 #include <tinytest.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdbool.h>
 #include <stddef.h>

@@ -103,15 +103,21 @@ unset(_turboraft_required_roots)
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" TURBORAFT_SALTS_ROOT_PATH)
 file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" TURBORAFT_SALTS_UTILS_ROOT_PATH)
 
-find_package(Salts CONFIG REQUIRED
-             PATHS "${TURBORAFT_SALTS_ROOT_PATH}" NO_DEFAULT_PATH)
-find_package(SaltsUtils CONFIG REQUIRED
-             PATHS "${TURBORAFT_SALTS_UTILS_ROOT_PATH}" NO_DEFAULT_PATH)
+unset(Salts_DIR CACHE)
+unset(Salts_DIR)
+unset(SaltsUtils_DIR CACHE)
+unset(SaltsUtils_DIR)
+find_package(Salts 2.1 CONFIG REQUIRED
+             PATHS "${TURBORAFT_SALTS_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_package(SaltsUtils 4.2 CONFIG REQUIRED
+             PATHS "${TURBORAFT_SALTS_UTILS_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 if(TURBORAFT_PROFILE_FULL)
   file(TO_CMAKE_PATH "$ENV{FLOWMQ_ROOT}" TURBORAFT_FLOWMQ_ROOT_PATH)
-  find_package(FlowMQ CONFIG REQUIRED
-               PATHS "${TURBORAFT_FLOWMQ_ROOT_PATH}" NO_DEFAULT_PATH)
+  unset(FlowMQ_DIR CACHE)
+  unset(FlowMQ_DIR)
+  find_package(FlowMQ 1.2.1 CONFIG REQUIRED
+               PATHS "${TURBORAFT_FLOWMQ_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
   if(NOT TARGET Salts::CNet)
     message(FATAL_ERROR "TurboRaft full profile requires Salts::CNet")
   endif()
@@ -139,7 +145,6 @@ if(TURBORAFT_PROFILE_FULL AND
 endif()
 
 if(TURBORAFT_PROFILE_STORAGE)
-  find_package(OpenSSL REQUIRED)
   find_package(xxHash CONFIG REQUIRED)
 endif()
 
@@ -262,6 +267,17 @@ target_include_directories(
          $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(turboraft_service PUBLIC TurboRaft::Core)
 
+add_library(turboraft_multicore STATIC src/runtime/raft_multicore.c)
+add_library(TurboRaft::Multicore ALIAS turboraft_multicore)
+set_target_properties(turboraft_multicore PROPERTIES EXPORT_NAME Multicore
+                      FOLDER "libraries/runtime")
+target_include_directories(turboraft_multicore
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(turboraft_multicore PUBLIC TurboRaft::Service
+                      PRIVATE Salts::Core)
+
+
 if(TURBORAFT_PROFILE_STORAGE)
 add_library(turboraft_snapshot_receiver STATIC
             src/snapshot/raft_snapshot_receiver.c)
@@ -275,7 +291,7 @@ target_include_directories(
 target_link_libraries(
   turboraft_snapshot_receiver
   PUBLIC TurboRaft::Core
-  PRIVATE OpenSSL::Crypto)
+  PRIVATE Salts::Core)
 
 add_library(turboraft_snapshot_sender STATIC
             src/snapshot/raft_snapshot_sender.c)
@@ -289,7 +305,7 @@ target_include_directories(
 target_link_libraries(
   turboraft_snapshot_sender
   PUBLIC TurboRaft::Core
-  PRIVATE OpenSSL::Crypto)
+  PRIVATE Salts::Core)
 
 add_library(turboraft_data_stream STATIC
             src/stream/raft_data_stream.c)
@@ -305,7 +321,7 @@ target_include_directories(
 target_link_libraries(
   turboraft_data_stream
   PUBLIC TurboRaft::Core
-  PRIVATE OpenSSL::Crypto)
+  PRIVATE Salts::Core)
 
 add_library(turboraft_wal_storage STATIC
             src/storage/raft_wal_storage.c)
@@ -320,11 +336,11 @@ target_include_directories(
          $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(turboraft_wal_storage
                       PUBLIC TurboRaft::Core
-                      PRIVATE Salts::Core xxHash::xxhash OpenSSL::Crypto)
+                      PRIVATE Salts::Core xxHash::xxhash)
 
 add_executable(turboraft_compat_check tools/turboraft_compat_check.c)
 target_link_libraries(turboraft_compat_check
-                      PRIVATE Salts::Core OpenSSL::Crypto xxHash::xxhash)
+                      PRIVATE Salts::Core xxHash::xxhash)
 set_target_properties(turboraft_compat_check
                       PROPERTIES FOLDER "TurboRaft/tools")
 
@@ -396,7 +412,7 @@ if(TARGET Salts::CNet)
   target_link_libraries(
     turboraft_cnet
     PUBLIC TurboRaft::Core Salts::CNet
-    PRIVATE Salts::CSTL)
+    PRIVATE Salts::CSTL Salts::CMeta)
 
   add_library(turboraft_snapshot_peer STATIC
               src/service/raft_snapshot_peer.c)
@@ -427,7 +443,8 @@ endif()
 
 if(TARGET Salts::CNet AND TARGET FlowMQ::FlowMQ)
   add_library(turboraft_flowmq STATIC
-              src/transport/raft_flowmq_peer_service.c)
+              src/transport/raft_flowmq_peer_service.c
+              src/transport/raft_flowmq_owner.c)
   add_library(TurboRaft::FlowMQ ALIAS turboraft_flowmq)
   set_target_properties(turboraft_flowmq PROPERTIES EXPORT_NAME FlowMQ)
   target_include_directories(
@@ -436,8 +453,24 @@ if(TARGET Salts::CNet AND TARGET FlowMQ::FlowMQ)
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
   target_link_libraries(
     turboraft_flowmq
-    PUBLIC TurboRaft::CNet FlowMQ::FlowMQ
+    PUBLIC TurboRaft::CNet TurboRaft::Multicore FlowMQ::FlowMQ
     PRIVATE Salts::Core Salts::CSTL)
+
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/schema/turboraft_node.schema" TURBORAFT_NODE_SCHEMA_TEXT)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/schema/turboraft_node.schema")
+  string(REPLACE "\\" "\\\\" TURBORAFT_NODE_SCHEMA_TEXT "${TURBORAFT_NODE_SCHEMA_TEXT}")
+  string(REPLACE "\"" "\\\"" TURBORAFT_NODE_SCHEMA_TEXT "${TURBORAFT_NODE_SCHEMA_TEXT}")
+  string(REPLACE "\n" "\\n\"\n\"" TURBORAFT_NODE_SCHEMA_TEXT "${TURBORAFT_NODE_SCHEMA_TEXT}")
+  configure_file(src/runtime/node_schema.h.in generated/node_schema.h @ONLY)
+  add_library(turboraft_node_config STATIC src/runtime/raft_node_config.c)
+  add_library(TurboRaft::NodeConfig ALIAS turboraft_node_config)
+  set_target_properties(turboraft_node_config PROPERTIES EXPORT_NAME NodeConfig FOLDER "libraries/runtime")
+  target_include_directories(turboraft_node_config
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+  target_link_libraries(turboraft_node_config PUBLIC TurboRaft::Multicore TurboRaft::FlowMQ Salts::DataBind)
 else()
   message(FATAL_ERROR "Required target is unavailable: FlowMQ::FlowMQ")
 endif()
@@ -600,13 +633,14 @@ cmake_config_target(turboraft_repl
 
 endif()
 
-if(TURBORAFT_PROFILE_FULL)
+if(TURBORAFT_PROFILE_FULL AND BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-set(TURBORAFT_INSTALL_TARGETS turboraft_core turboraft_service)
+set(TURBORAFT_INSTALL_TARGETS turboraft_core turboraft_service turboraft_multicore)
 foreach(_turboraft_install_candidate IN ITEMS
         turboraft_snapshot_receiver
+        turboraft_node_config
         turboraft_snapshot_sender
         turboraft_data_stream
         turboraft_wal_storage
@@ -669,6 +703,10 @@ install(
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/turboraft"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+if(TARGET turboraft_node_config)
+  install(FILES schema/turboraft_node.schema
+          DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/schema")
+endif()
 install(
   PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/tools/turboraft_incident_bundle.py"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/tools")

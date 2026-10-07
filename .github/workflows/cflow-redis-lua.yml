@@ -102,7 +102,6 @@ jobs:
               "c-ares",
               "libuv",
               "kcp",
-              "boringssl",
               "gmssl",
               "miniaudio",
               "lua",

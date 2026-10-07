@@ -105,7 +105,6 @@ jobs:
               "c-ares",
               "libuv",
               "kcp",
-              "boringssl",
               "gmssl",
               "llhttp",
               "tree-sitter",

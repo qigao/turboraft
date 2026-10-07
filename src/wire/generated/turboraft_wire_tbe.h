@@ -17,8 +17,8 @@
 #endif
 #endif
 
-#include "tbe_wire.h"
-#if defined(TBE_WASM_GUEST)
+#include "data_bind_binary_wire.h"
+#if defined(DATA_BIND_BINARY_WASM_GUEST)
 static inline void *tbe_generated_memcpy(void *destination, const void *source, size_t size) {
     unsigned char *out = (unsigned char *)destination;
     const unsigned char *in = (const unsigned char *)source;
@@ -47,20 +47,23 @@ static inline size_t tbe_generated_strlen(const char *text) {
 #ifndef SALTS_UUID_H
 #define SALTS_UUID_H
 #define SALTS_UUID_SIZE 16U
-typedef struct salts_uuid_s {
+typedef struct cmeta_uuid_s {
     uint8_t bytes[SALTS_UUID_SIZE];
-} salts_uuid_t;
+} cmeta_uuid_t;
 #endif
 #else
 #include <string.h>
-#include "salts_uuid.h"
+#include <tstr.h>
+#include <cstl/byte_buffer.h>
+#include "cmeta_uuid.h"
 #define TBE_GENERATED_MEMCPY memcpy
 #define TBE_GENERATED_STRCMP strcmp
 #define TBE_GENERATED_STRLEN strlen
 #endif
 
-#include "tbe_typed.h"
-
+#include "data_bind_native_binding.h"
+#include <cstl/typed.h>
+#include <cmeta_cmeta_data.h>
 
 #ifndef TBE_SCHEMA_CODEC_V1_DEFINED
 #define TBE_SCHEMA_CODEC_V1_DEFINED
@@ -107,6 +110,30 @@ extern "C" {
 
 /* Schema TurboRaftWire  */
 enum { TurboRaftWire_WIRE_BIG_ENDIAN = 0 };
+struct cmeta_data_desc;
+/* Canonical generated record metadata. These are the same descriptors returned
+ * by *_cmeta_data(); typed CSTL record containers bind them directly. Call the
+ * accessor or record init before reading the exported graph, so its once
+ * initialization has published every field and generic argument. */
+
+
+TBE_GENERATED_API extern const cmeta_type_desc RaftWireMessage_CMETA_TYPE;
+TBE_GENERATED_API extern const cmeta_data_desc RaftWireMessage_CMETA_DATA;
+TBE_GENERATED_API extern const cmeta_type_desc InstallSnapshotChunk_CMETA_TYPE;
+TBE_GENERATED_API extern const cmeta_data_desc InstallSnapshotChunk_CMETA_DATA;
+TBE_GENERATED_API extern const cmeta_type_desc InstallSnapshotAck_CMETA_TYPE;
+TBE_GENERATED_API extern const cmeta_data_desc InstallSnapshotAck_CMETA_DATA;
+
+/** Borrow immutable native scalar/struct/enum metadata with static lifetime.
+ * Unsupported storage returns DATA_BIND_ERR_SCHEMA without changing *out.
+ * Wire/default/presence/fingerprint metadata stays in the schema overlay.
+ * This graph seam does not itself promise native decode/encode behavior. */
+TBE_GENERATED_API DataBindStatus RaftWireMessage_cmeta_data(const struct cmeta_data_desc **out, DataBindError *error);
+TBE_GENERATED_API const DataBindMessageNativeArtifact *RaftWireMessage_native_artifact(void);
+TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_cmeta_data(const struct cmeta_data_desc **out, DataBindError *error);
+TBE_GENERATED_API const DataBindMessageNativeArtifact *InstallSnapshotChunk_native_artifact(void);
+TBE_GENERATED_API DataBindStatus InstallSnapshotAck_cmeta_data(const struct cmeta_data_desc **out, DataBindError *error);
+TBE_GENERATED_API const DataBindMessageNativeArtifact *InstallSnapshotAck_native_artifact(void);
 TBE_GENERATED_API DataBindStatus TurboRaftWire_codec_create(DataBind **out_codec, DataBindError *error);
 TBE_GENERATED_API const char *TurboRaftWire_schema_text(void);
 TBE_GENERATED_API const tbe_schema_codec_v1_t *TurboRaftWire_schema_codec(void);
@@ -165,10 +192,10 @@ typedef struct RaftWireMessage_s {
     /* size: 8 unsigned */
     uint64_t entry_command_id;
     /* size:   */
-    tbe_bytes_t entry_data;
+    stl_byte_buffer entry_data;
 } RaftWireMessage_t;
 
-/** Owning lifecycle and schema serialization API; serialized buffers use tbe_typed_serialized_free. */
+/** Owning lifecycle and schema serialization API; serialized buffers use the DataBind generated-output release contract. */
 TBE_GENERATED_API void RaftWireMessage_init(RaftWireMessage_t *object);
 TBE_GENERATED_API void RaftWireMessage_clear(RaftWireMessage_t *object);
 TBE_GENERATED_API DataBindStatus RaftWireMessage_from_bin(DataBind *codec, RaftWireMessage_t *object, const void *data, size_t len, DataBindError *error);
@@ -176,8 +203,8 @@ TBE_GENERATED_API DataBindStatus RaftWireMessage_from_json(DataBind *codec, Raft
 TBE_GENERATED_API DataBindStatus RaftWireMessage_from_yaml(DataBind *codec, RaftWireMessage_t *object, const char *data, size_t len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus RaftWireMessage_from_csv(DataBind *codec, RaftWireMessage_t *object, const char *data, size_t len, size_t row, DataBindError *error);
 TBE_GENERATED_API DataBindStatus RaftWireMessage_from_xml(DataBind *codec, RaftWireMessage_t *object, const char *data, size_t len, DataBindError *error);
-TBE_GENERATED_API DataBindStatus RaftWireMessage_to_bin(const RaftWireMessage_t *object, uint8_t **out, size_t *out_len, DataBindError *error);
-TBE_GENERATED_API DataBindStatus RaftWireMessage_to_bin_into(const RaftWireMessage_t *object, uint8_t *output, size_t output_capacity, size_t *out_len, DataBindError *error);
+TBE_GENERATED_API DataBindStatus RaftWireMessage_to_bin(DataBind *codec, const RaftWireMessage_t *object, uint8_t **out, size_t *out_len, DataBindError *error);
+TBE_GENERATED_API DataBindStatus RaftWireMessage_to_bin_into(DataBind *codec, const RaftWireMessage_t *object, uint8_t *output, size_t output_capacity, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus RaftWireMessage_to_json(DataBind *codec, const RaftWireMessage_t *object, char **out, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus RaftWireMessage_to_yaml(DataBind *codec, const RaftWireMessage_t *object, char **out, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus RaftWireMessage_to_csv(DataBind *codec, const RaftWireMessage_t *object, char **out, size_t *out_len, DataBindError *error);
@@ -192,6 +219,7 @@ typedef struct RaftWireMessage_builder_s {
     uint8_t *data;
     size_t size;
 } RaftWireMessage_builder_t;
+
 
 
 enum { RaftWireMessage_BLOCK_LENGTH = 120 };
@@ -264,7 +292,7 @@ static inline bool RaftWireMessage_entry_data_set(RaftWireMessage_builder_t *vie
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWire_WIRE_BIG_ENDIAN,
                                    data,
@@ -272,14 +300,14 @@ static inline bool RaftWireMessage_entry_data_set(RaftWireMessage_builder_t *vie
 }
 
 static inline bool RaftWireMessage_entry_data(const RaftWireMessage_view_t *view,
-                                           tbe_var_data_t *value) {
+                                           DataBindBinaryVarData *value) {
     size_t payload_offset = RaftWireMessage_BLOCK_LENGTH;
 
     if (!view || !value || view->size < payload_offset) {
         return false;
     }
 
-    return tbe_wire_read_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_read_var_data(view->data + payload_offset,
                                   view->size - payload_offset,
                                   TurboRaftWire_WIRE_BIG_ENDIAN,
                                   value);
@@ -293,12 +321,12 @@ static inline bool RaftWireMessage_message_type_set(RaftWireMessage_builder_t *v
         return false;
     }
 
-    tbe_wire_write_u8(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u8(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint8_t RaftWireMessage_message_type_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u8(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u8(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -310,12 +338,12 @@ static inline bool RaftWireMessage_granted_set(RaftWireMessage_builder_t *view,
         return false;
     }
 
-    tbe_wire_write_u8(view->data + 1, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u8(view->data + 1, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint8_t RaftWireMessage_granted_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u8(view->data + 1, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u8(view->data + 1, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -327,12 +355,12 @@ static inline bool RaftWireMessage_reserved_set(RaftWireMessage_builder_t *view,
         return false;
     }
 
-    tbe_wire_write_u16(view->data + 2, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u16(view->data + 2, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint16_t RaftWireMessage_reserved_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u16(view->data + 2, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u16(view->data + 2, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -344,12 +372,12 @@ static inline bool RaftWireMessage_entry_count_set(RaftWireMessage_builder_t *vi
         return false;
     }
 
-    tbe_wire_write_u32(view->data + 4, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u32(view->data + 4, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint32_t RaftWireMessage_entry_count_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u32(view->data + 4, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u32(view->data + 4, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -361,12 +389,12 @@ static inline bool RaftWireMessage_from_node_set(RaftWireMessage_builder_t *view
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_from_node_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -378,12 +406,12 @@ static inline bool RaftWireMessage_to_node_set(RaftWireMessage_builder_t *view,
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_to_node_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -395,12 +423,12 @@ static inline bool RaftWireMessage_term_set(RaftWireMessage_builder_t *view,
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_term_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -412,12 +440,12 @@ static inline bool RaftWireMessage_campaign_term_set(RaftWireMessage_builder_t *
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_campaign_term_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -429,12 +457,12 @@ static inline bool RaftWireMessage_last_log_index_set(RaftWireMessage_builder_t 
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_last_log_index_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -446,12 +474,12 @@ static inline bool RaftWireMessage_last_log_term_set(RaftWireMessage_builder_t *
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_last_log_term_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -463,12 +491,12 @@ static inline bool RaftWireMessage_leader_commit_set(RaftWireMessage_builder_t *
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 56, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 56, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_leader_commit_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 56, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 56, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -480,12 +508,12 @@ static inline bool RaftWireMessage_previous_log_index_set(RaftWireMessage_builde
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 64, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 64, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_previous_log_index_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 64, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 64, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -497,12 +525,12 @@ static inline bool RaftWireMessage_previous_log_term_set(RaftWireMessage_builder
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 72, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 72, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_previous_log_term_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 72, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 72, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -514,12 +542,12 @@ static inline bool RaftWireMessage_match_index_set(RaftWireMessage_builder_t *vi
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 80, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 80, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_match_index_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 80, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 80, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -531,12 +559,12 @@ static inline bool RaftWireMessage_reject_hint_set(RaftWireMessage_builder_t *vi
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 88, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 88, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_reject_hint_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 88, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 88, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -548,12 +576,12 @@ static inline bool RaftWireMessage_entry_index_set(RaftWireMessage_builder_t *vi
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 96, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 96, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_entry_index_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 96, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 96, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -565,12 +593,12 @@ static inline bool RaftWireMessage_entry_term_set(RaftWireMessage_builder_t *vie
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 104, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 104, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_entry_term_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 104, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 104, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -582,12 +610,12 @@ static inline bool RaftWireMessage_entry_command_id_set(RaftWireMessage_builder_
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 112, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 112, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t RaftWireMessage_entry_command_id_get(const RaftWireMessage_view_t *view) {
-    return tbe_wire_read_u64(view->data + 112, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 112, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -616,14 +644,14 @@ typedef struct InstallSnapshotChunk_s {
     /* size: 1 unsigned */
     uint8_t done;
     /* size:   */
-    tbe_bytes_t snapshot_configuration;
+    stl_byte_buffer snapshot_configuration;
     /* size:   */
-    tbe_bytes_t snapshot_digest;
+    stl_byte_buffer snapshot_digest;
     /* size:   */
-    tbe_bytes_t chunk_data;
+    stl_byte_buffer chunk_data;
 } InstallSnapshotChunk_t;
 
-/** Owning lifecycle and schema serialization API; serialized buffers use tbe_typed_serialized_free. */
+/** Owning lifecycle and schema serialization API; serialized buffers use the DataBind generated-output release contract. */
 TBE_GENERATED_API void InstallSnapshotChunk_init(InstallSnapshotChunk_t *object);
 TBE_GENERATED_API void InstallSnapshotChunk_clear(InstallSnapshotChunk_t *object);
 TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_from_bin(DataBind *codec, InstallSnapshotChunk_t *object, const void *data, size_t len, DataBindError *error);
@@ -631,8 +659,8 @@ TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_from_json(DataBind *codec,
 TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_from_yaml(DataBind *codec, InstallSnapshotChunk_t *object, const char *data, size_t len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_from_csv(DataBind *codec, InstallSnapshotChunk_t *object, const char *data, size_t len, size_t row, DataBindError *error);
 TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_from_xml(DataBind *codec, InstallSnapshotChunk_t *object, const char *data, size_t len, DataBindError *error);
-TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_to_bin(const InstallSnapshotChunk_t *object, uint8_t **out, size_t *out_len, DataBindError *error);
-TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_to_bin_into(const InstallSnapshotChunk_t *object, uint8_t *output, size_t output_capacity, size_t *out_len, DataBindError *error);
+TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_to_bin(DataBind *codec, const InstallSnapshotChunk_t *object, uint8_t **out, size_t *out_len, DataBindError *error);
+TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_to_bin_into(DataBind *codec, const InstallSnapshotChunk_t *object, uint8_t *output, size_t output_capacity, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_to_json(DataBind *codec, const InstallSnapshotChunk_t *object, char **out, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_to_yaml(DataBind *codec, const InstallSnapshotChunk_t *object, char **out, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus InstallSnapshotChunk_to_csv(DataBind *codec, const InstallSnapshotChunk_t *object, char **out, size_t *out_len, DataBindError *error);
@@ -647,6 +675,7 @@ typedef struct InstallSnapshotChunk_builder_s {
     uint8_t *data;
     size_t size;
 } InstallSnapshotChunk_builder_t;
+
 
 
 enum { InstallSnapshotChunk_BLOCK_LENGTH = 57 };
@@ -699,7 +728,7 @@ static inline bool InstallSnapshotChunk_snapshot_configuration_set(InstallSnapsh
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWire_WIRE_BIG_ENDIAN,
                                    data,
@@ -707,14 +736,14 @@ static inline bool InstallSnapshotChunk_snapshot_configuration_set(InstallSnapsh
 }
 
 static inline bool InstallSnapshotChunk_snapshot_configuration(const InstallSnapshotChunk_view_t *view,
-                                           tbe_var_data_t *value) {
+                                           DataBindBinaryVarData *value) {
     size_t payload_offset = InstallSnapshotChunk_BLOCK_LENGTH;
 
     if (!view || !value || view->size < payload_offset) {
         return false;
     }
 
-    return tbe_wire_read_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_read_var_data(view->data + payload_offset,
                                   view->size - payload_offset,
                                   TurboRaftWire_WIRE_BIG_ENDIAN,
                                   value);
@@ -725,7 +754,7 @@ static inline bool InstallSnapshotChunk_snapshot_digest_set(InstallSnapshotChunk
                                                const void *data,
                                                size_t size) {
     InstallSnapshotChunk_view_t read_view;
-    tbe_var_data_t previous;
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -739,13 +768,13 @@ static inline bool InstallSnapshotChunk_snapshot_digest_set(InstallSnapshotChunk
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWire_WIRE_BIG_ENDIAN,
                                    data,
@@ -753,8 +782,8 @@ static inline bool InstallSnapshotChunk_snapshot_digest_set(InstallSnapshotChunk
 }
 
 static inline bool InstallSnapshotChunk_snapshot_digest(const InstallSnapshotChunk_view_t *view,
-                                           tbe_var_data_t *value) {
-    tbe_var_data_t previous;
+                                           DataBindBinaryVarData *value) {
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -766,13 +795,13 @@ static inline bool InstallSnapshotChunk_snapshot_digest(const InstallSnapshotChu
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_read_var_data(payload_data,
+    return data_bind_binary_wire_read_var_data(payload_data,
                                   view->size - payload_offset,
                                   TurboRaftWire_WIRE_BIG_ENDIAN,
                                   value);
@@ -783,7 +812,7 @@ static inline bool InstallSnapshotChunk_chunk_data_set(InstallSnapshotChunk_buil
                                                const void *data,
                                                size_t size) {
     InstallSnapshotChunk_view_t read_view;
-    tbe_var_data_t previous;
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -797,13 +826,13 @@ static inline bool InstallSnapshotChunk_chunk_data_set(InstallSnapshotChunk_buil
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWire_WIRE_BIG_ENDIAN,
                                    data,
@@ -811,8 +840,8 @@ static inline bool InstallSnapshotChunk_chunk_data_set(InstallSnapshotChunk_buil
 }
 
 static inline bool InstallSnapshotChunk_chunk_data(const InstallSnapshotChunk_view_t *view,
-                                           tbe_var_data_t *value) {
-    tbe_var_data_t previous;
+                                           DataBindBinaryVarData *value) {
+    DataBindBinaryVarData previous;
     const uint8_t *payload_data;
     size_t payload_offset;
 
@@ -824,13 +853,13 @@ static inline bool InstallSnapshotChunk_chunk_data(const InstallSnapshotChunk_vi
         return false;
     }
 
-    payload_data = tbe_wire_var_data_end(&previous);
+    payload_data = data_bind_binary_wire_var_data_end(&previous);
     payload_offset = (size_t)(payload_data - view->data);
     if (payload_offset > view->size) {
         return false;
     }
 
-    return tbe_wire_read_var_data(payload_data,
+    return data_bind_binary_wire_read_var_data(payload_data,
                                   view->size - payload_offset,
                                   TurboRaftWire_WIRE_BIG_ENDIAN,
                                   value);
@@ -844,12 +873,12 @@ static inline bool InstallSnapshotChunk_from_node_set(InstallSnapshotChunk_build
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotChunk_from_node_get(const InstallSnapshotChunk_view_t *view) {
-    return tbe_wire_read_u64(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -861,12 +890,12 @@ static inline bool InstallSnapshotChunk_to_node_set(InstallSnapshotChunk_builder
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotChunk_to_node_get(const InstallSnapshotChunk_view_t *view) {
-    return tbe_wire_read_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -878,12 +907,12 @@ static inline bool InstallSnapshotChunk_term_set(InstallSnapshotChunk_builder_t 
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotChunk_term_get(const InstallSnapshotChunk_view_t *view) {
-    return tbe_wire_read_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -895,12 +924,12 @@ static inline bool InstallSnapshotChunk_snapshot_index_set(InstallSnapshotChunk_
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotChunk_snapshot_index_get(const InstallSnapshotChunk_view_t *view) {
-    return tbe_wire_read_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -912,12 +941,12 @@ static inline bool InstallSnapshotChunk_snapshot_term_set(InstallSnapshotChunk_b
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotChunk_snapshot_term_get(const InstallSnapshotChunk_view_t *view) {
-    return tbe_wire_read_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -929,12 +958,12 @@ static inline bool InstallSnapshotChunk_snapshot_offset_set(InstallSnapshotChunk
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotChunk_snapshot_offset_get(const InstallSnapshotChunk_view_t *view) {
-    return tbe_wire_read_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -946,12 +975,12 @@ static inline bool InstallSnapshotChunk_snapshot_size_set(InstallSnapshotChunk_b
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotChunk_snapshot_size_get(const InstallSnapshotChunk_view_t *view) {
-    return tbe_wire_read_u64(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -963,12 +992,12 @@ static inline bool InstallSnapshotChunk_done_set(InstallSnapshotChunk_builder_t 
         return false;
     }
 
-    tbe_wire_write_u8(view->data + 56, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u8(view->data + 56, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint8_t InstallSnapshotChunk_done_get(const InstallSnapshotChunk_view_t *view) {
-    return tbe_wire_read_u8(view->data + 56, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u8(view->data + 56, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -995,10 +1024,10 @@ typedef struct InstallSnapshotAck_s {
     /* size: 1 unsigned */
     uint8_t accepted;
     /* size:   */
-    tbe_bytes_t snapshot_digest;
+    stl_byte_buffer snapshot_digest;
 } InstallSnapshotAck_t;
 
-/** Owning lifecycle and schema serialization API; serialized buffers use tbe_typed_serialized_free. */
+/** Owning lifecycle and schema serialization API; serialized buffers use the DataBind generated-output release contract. */
 TBE_GENERATED_API void InstallSnapshotAck_init(InstallSnapshotAck_t *object);
 TBE_GENERATED_API void InstallSnapshotAck_clear(InstallSnapshotAck_t *object);
 TBE_GENERATED_API DataBindStatus InstallSnapshotAck_from_bin(DataBind *codec, InstallSnapshotAck_t *object, const void *data, size_t len, DataBindError *error);
@@ -1006,8 +1035,8 @@ TBE_GENERATED_API DataBindStatus InstallSnapshotAck_from_json(DataBind *codec, I
 TBE_GENERATED_API DataBindStatus InstallSnapshotAck_from_yaml(DataBind *codec, InstallSnapshotAck_t *object, const char *data, size_t len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus InstallSnapshotAck_from_csv(DataBind *codec, InstallSnapshotAck_t *object, const char *data, size_t len, size_t row, DataBindError *error);
 TBE_GENERATED_API DataBindStatus InstallSnapshotAck_from_xml(DataBind *codec, InstallSnapshotAck_t *object, const char *data, size_t len, DataBindError *error);
-TBE_GENERATED_API DataBindStatus InstallSnapshotAck_to_bin(const InstallSnapshotAck_t *object, uint8_t **out, size_t *out_len, DataBindError *error);
-TBE_GENERATED_API DataBindStatus InstallSnapshotAck_to_bin_into(const InstallSnapshotAck_t *object, uint8_t *output, size_t output_capacity, size_t *out_len, DataBindError *error);
+TBE_GENERATED_API DataBindStatus InstallSnapshotAck_to_bin(DataBind *codec, const InstallSnapshotAck_t *object, uint8_t **out, size_t *out_len, DataBindError *error);
+TBE_GENERATED_API DataBindStatus InstallSnapshotAck_to_bin_into(DataBind *codec, const InstallSnapshotAck_t *object, uint8_t *output, size_t output_capacity, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus InstallSnapshotAck_to_json(DataBind *codec, const InstallSnapshotAck_t *object, char **out, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus InstallSnapshotAck_to_yaml(DataBind *codec, const InstallSnapshotAck_t *object, char **out, size_t *out_len, DataBindError *error);
 TBE_GENERATED_API DataBindStatus InstallSnapshotAck_to_csv(DataBind *codec, const InstallSnapshotAck_t *object, char **out, size_t *out_len, DataBindError *error);
@@ -1022,6 +1051,7 @@ typedef struct InstallSnapshotAck_builder_s {
     uint8_t *data;
     size_t size;
 } InstallSnapshotAck_builder_t;
+
 
 
 enum { InstallSnapshotAck_BLOCK_LENGTH = 49 };
@@ -1072,7 +1102,7 @@ static inline bool InstallSnapshotAck_snapshot_digest_set(InstallSnapshotAck_bui
         return false;
     }
 
-    return tbe_wire_write_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_write_var_data(view->data + payload_offset,
                                    view->size - payload_offset,
                                    TurboRaftWire_WIRE_BIG_ENDIAN,
                                    data,
@@ -1080,14 +1110,14 @@ static inline bool InstallSnapshotAck_snapshot_digest_set(InstallSnapshotAck_bui
 }
 
 static inline bool InstallSnapshotAck_snapshot_digest(const InstallSnapshotAck_view_t *view,
-                                           tbe_var_data_t *value) {
+                                           DataBindBinaryVarData *value) {
     size_t payload_offset = InstallSnapshotAck_BLOCK_LENGTH;
 
     if (!view || !value || view->size < payload_offset) {
         return false;
     }
 
-    return tbe_wire_read_var_data(view->data + payload_offset,
+    return data_bind_binary_wire_read_var_data(view->data + payload_offset,
                                   view->size - payload_offset,
                                   TurboRaftWire_WIRE_BIG_ENDIAN,
                                   value);
@@ -1101,12 +1131,12 @@ static inline bool InstallSnapshotAck_from_node_set(InstallSnapshotAck_builder_t
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotAck_from_node_get(const InstallSnapshotAck_view_t *view) {
-    return tbe_wire_read_u64(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 0, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1118,12 +1148,12 @@ static inline bool InstallSnapshotAck_to_node_set(InstallSnapshotAck_builder_t *
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotAck_to_node_get(const InstallSnapshotAck_view_t *view) {
-    return tbe_wire_read_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 8, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1135,12 +1165,12 @@ static inline bool InstallSnapshotAck_term_set(InstallSnapshotAck_builder_t *vie
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotAck_term_get(const InstallSnapshotAck_view_t *view) {
-    return tbe_wire_read_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 16, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1152,12 +1182,12 @@ static inline bool InstallSnapshotAck_snapshot_index_set(InstallSnapshotAck_buil
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotAck_snapshot_index_get(const InstallSnapshotAck_view_t *view) {
-    return tbe_wire_read_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 24, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1169,12 +1199,12 @@ static inline bool InstallSnapshotAck_snapshot_size_set(InstallSnapshotAck_build
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotAck_snapshot_size_get(const InstallSnapshotAck_view_t *view) {
-    return tbe_wire_read_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 32, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1186,12 +1216,12 @@ static inline bool InstallSnapshotAck_next_offset_set(InstallSnapshotAck_builder
         return false;
     }
 
-    tbe_wire_write_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint64_t InstallSnapshotAck_next_offset_get(const InstallSnapshotAck_view_t *view) {
-    return tbe_wire_read_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u64(view->data + 40, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
 
 
@@ -1203,15 +1233,13 @@ static inline bool InstallSnapshotAck_accepted_set(InstallSnapshotAck_builder_t 
         return false;
     }
 
-    tbe_wire_write_u8(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN, value);
+    data_bind_binary_wire_write_u8(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN, value);
     return true;
 }
 
 static inline uint8_t InstallSnapshotAck_accepted_get(const InstallSnapshotAck_view_t *view) {
-    return tbe_wire_read_u8(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN);
+    return data_bind_binary_wire_read_u8(view->data + 48, TurboRaftWire_WIRE_BIG_ENDIAN);
 }
-
-
 
 
 
@@ -1238,7 +1266,7 @@ template <typename Record,
           DataBindStatus (*FromCsv)(DataBind *, Record *, const char *, size_t, size_t,
                                     DataBindError *),
           DataBindStatus (*FromXml)(DataBind *, Record *, const char *, size_t, DataBindError *),
-          DataBindStatus (*ToBin)(const Record *, uint8_t **, size_t *, DataBindError *),
+          DataBindStatus (*ToBin)(DataBind *, const Record *, uint8_t **, size_t *, DataBindError *),
           DataBindStatus (*ToJson)(DataBind *, const Record *, char **, size_t *, DataBindError *),
           DataBindStatus (*ToYaml)(DataBind *, const Record *, char **, size_t *, DataBindError *),
           DataBindStatus (*ToCsv)(DataBind *, const Record *, char **, size_t *, DataBindError *),
@@ -1277,8 +1305,9 @@ public:
                             DataBindError *error) noexcept {
         return FromXml(codec, &value_, data, len, error);
     }
-    DataBindStatus to_bin(uint8_t **out, size_t *out_len, DataBindError *error) const noexcept {
-        return ToBin(&value_, out, out_len, error);
+    DataBindStatus to_bin(DataBind *codec, uint8_t **out, size_t *out_len,
+                          DataBindError *error) const noexcept {
+        return ToBin(codec, &value_, out, out_len, error);
     }
     DataBindStatus to_json(DataBind *codec, char **out, size_t *out_len,
                            DataBindError *error) const noexcept {

@@ -1,6 +1,6 @@
 #include "raft_snapshot_coordinator.h"
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdlib.h>
 #include <string.h>

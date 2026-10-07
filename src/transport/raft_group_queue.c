@@ -1,6 +1,6 @@
 #include "raft_group_queue.h"
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdint.h>
 #include <stdlib.h>

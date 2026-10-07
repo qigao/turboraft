@@ -4,7 +4,8 @@
 #include "raft_transport_internal.h"
 #include "raft_transport_payload_storage.h"
 
-#include <salts_error.h>
+#include <cmeta_error.h>
+#include <cmeta/scope.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,30 @@ struct tr_raft_cnet_peer {
     int stopping;
     int last_error;
 };
+
+/* Each lexical slice owns one reference. CNet retains its own references on
+ * admission; queue and packet storage stay immutable until send settlement. */
+typedef mem_slice_t tr_cnet_send_slice;
+static const cmeta_type_desc tr_cnet_send_slice_type = {
+    "turboraft.cnet.send_slice", sizeof(tr_cnet_send_slice),
+    CMETA_ALIGNOF(tr_cnet_send_slice), CMETA_T_OBJECT, NULL, NULL, NULL};
+
+static cmeta_status tr_cnet_send_slice_init(tr_cnet_send_slice *slice)
+{
+    memset(slice, 0, sizeof(*slice));
+    return CMETA_OK;
+}
+
+static void tr_cnet_send_slice_move(tr_cnet_send_slice *destination,
+                                     tr_cnet_send_slice *source)
+{
+    *destination = *source;
+    memset(source, 0, sizeof(*source));
+}
+
+CMETA_DEFINE_LIFECYCLE(tr_cnet_send_slice, &tr_cnet_send_slice_type,
+    tr_cnet_send_slice_init, mem_slice_release, tr_cnet_send_slice_move,
+    CMETA_LIFECYCLE_INIT_NOFAIL | CMETA_LIFECYCLE_MOVABLE);
 
 static size_t tr_raft_cnet_payload_bytes(
     const tr_raft_transport_payload_t *payload)
@@ -271,6 +296,39 @@ int tr_raft_cnet_peer_enqueue_group(
     return tr_raft_cnet_peer_enqueue_payload(peer, &payload);
 }
 
+static int tr_raft_cnet_send_packet(
+    tr_raft_cnet_peer_t *peer,
+    const tr_raft_owned_transport_payload_t *owned,
+    tr_cnet_send_slice *prefix,
+    tr_cnet_send_slice *payload)
+{
+    const uint8_t *payload_data = NULL;
+    size_t payload_size = 0U;
+    mem_slice_t segments[2];
+    size_t segment_count = 1U;
+    int result;
+
+    *prefix = mem_slice(peer->packet, 0U, peer->packet_prefix_size);
+    if (prefix->buffer == NULL || prefix->length != peer->packet_prefix_size) {
+        return SALTS_EPROTO;
+    }
+    segments[0] = *prefix;
+    if (peer->packet_payload_sg) {
+        result = tr_raft_cnet_owned_payload_view(owned, &payload_data, &payload_size);
+        if (result != SALTS_OK) {
+            return result;
+        }
+        *payload = mem_slice(owned->payload_data, 0U, payload_size);
+        if (payload->buffer == NULL || payload->length != payload_size) {
+            return SALTS_EPROTO;
+        }
+        segments[1] = *payload;
+        segment_count = 2U;
+    }
+    /* The vector borrows descriptors from the lexical owners above. */
+    return cnet_send_slicev(peer->client, peer->connection, segments, segment_count);
+}
+
 int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
 {
     const tr_raft_owned_transport_payload_t *owned;
@@ -278,8 +336,6 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
     tr_raft_group_queue_token_t next_token;
     const uint8_t *payload_data = NULL;
     size_t payload_size = 0U;
-    mem_slice_t segments[2] = {{0}};
-    size_t segment_count = 1U;
     int result;
 
     if (peer == NULL) {
@@ -354,40 +410,9 @@ int tr_raft_cnet_peer_step(tr_raft_cnet_peer_t *peer)
         peer->packet_ready = 1;
     }
 
-    segments[0] = mem_slice(
-        peer->packet, 0U, peer->packet_prefix_size);
-    if (segments[0].buffer == NULL ||
-        segments[0].length != peer->packet_prefix_size) {
-        peer->last_error = SALTS_EPROTO;
-        mem_slice_release(&segments[0]);
-        return SALTS_EPROTO;
-    }
-
-    if (peer->packet_payload_sg) {
-        result = tr_raft_cnet_owned_payload_view(
-            owned, &payload_data, &payload_size);
-        if (result != SALTS_OK) {
-            peer->last_error = result;
-            mem_slice_release(&segments[0]);
-            return result;
-        }
-        segments[1] = mem_slice(owned->payload_data, 0U, payload_size);
-        if (segments[1].buffer == NULL ||
-            segments[1].length != payload_size) {
-            peer->last_error = SALTS_EPROTO;
-            mem_slice_release(&segments[1]);
-            mem_slice_release(&segments[0]);
-            return SALTS_EPROTO;
-        }
-        segment_count = 2U;
-    }
-
-    result = cnet_send_slicev(
-        peer->client, peer->connection, segments, segment_count);
-    if (segment_count == 2U) {
-        mem_slice_release(&segments[1]);
-    }
-    mem_slice_release(&segments[0]);
+    cmeta_scope(result,
+        cmeta_autos((tr_cnet_send_slice, prefix), (tr_cnet_send_slice, payload)),
+        cmeta_body(tr_raft_cnet_send_packet(peer, owned, &prefix, &payload)));
     if (result != SALTS_OK) {
         if (result != SALTS_EBUSY) {
             peer->last_error = result;

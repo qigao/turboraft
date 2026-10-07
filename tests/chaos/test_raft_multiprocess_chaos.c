@@ -4,9 +4,9 @@
 #include <turboraft/raft_wire_codec.h>
 
 #include <tinytest.h>
-#include <salts_error.h>
-#include <salts_process.h>
-#include <salts_thread.h>
+#include <cmeta_error.h>
+#include <cmeta_process.h>
+#include <cmeta_thread.h>
 
 #include <errno.h>
 #include <stdio.h>
@@ -102,7 +102,7 @@ typedef struct tr_chaos_response {
 typedef struct tr_chaos_process_node {
     tr_raft_node_id_t id;
     char database_path[512];
-    salts_process_t *process;
+    cmeta_process_t *process;
     uint32_t next_request_id;
     int alive;
     int require_existing;
@@ -145,7 +145,7 @@ static uint32_t tr_chaos_random(uint32_t *state)
     return value;
 }
 
-static int tr_chaos_process_read_exact(salts_process_t *process,
+static int tr_chaos_process_read_exact(cmeta_process_t *process,
                                        void *output,
                                        size_t size)
 {
@@ -155,7 +155,7 @@ static int tr_chaos_process_read_exact(salts_process_t *process,
 
     while (total < size && waited < TR_CHAOS_IO_TIMEOUT_MS) {
         size_t count = 0U;
-        int result = salts_process_read_stdout(
+        int result = cmeta_process_read_stdout(
             process, bytes + total, size - total, &count);
 
         total += count;
@@ -168,13 +168,13 @@ static int tr_chaos_process_read_exact(salts_process_t *process,
         if (result != SALTS_OK) {
             return result;
         }
-        salts_sleep_ms(1U);
+        cmeta_sleep_ms(1U);
         waited++;
     }
     return SALTS_ETIMEDOUT;
 }
 
-static int tr_chaos_process_write_exact(salts_process_t *process,
+static int tr_chaos_process_write_exact(cmeta_process_t *process,
                                         const void *input,
                                         size_t size)
 {
@@ -183,7 +183,7 @@ static int tr_chaos_process_write_exact(salts_process_t *process,
 
     while (total < size) {
         size_t count = 0U;
-        int result = salts_process_write_stdin(
+        int result = cmeta_process_write_stdin(
             process, bytes + total, size - total, &count);
 
         if (result != SALTS_OK) {
@@ -478,7 +478,7 @@ static int tr_chaos_node_spawn(tr_chaos_process_node_t *node,
                                tr_chaos_safety_t *safety,
                                uint8_t *response_payload)
 {
-    salts_process_options_t options;
+    cmeta_process_options_t options;
     tr_chaos_response_t response;
     char node_id[16];
     const char *args[6];
@@ -492,13 +492,13 @@ static int tr_chaos_node_spawn(tr_chaos_process_node_t *node,
     args[3] = node->database_path;
     args[4] = node->require_existing ? "--require-existing" : NULL;
     args[5] = NULL;
-    salts_process_options_init(&options);
+    cmeta_process_options_init(&options);
     options.program = program;
     options.args = args;
     options.flags |= SALTS_PROCESS_PIPE_STDIN;
     options.timeout_ms = 60000U;
     options.max_output_bytes = 8U * 1024U * 1024U;
-    result = salts_process_spawn(&options, &node->process);
+    result = cmeta_process_spawn(&options, &node->process);
     if (result != SALTS_OK) {
         return result;
     }
@@ -514,17 +514,17 @@ static int tr_chaos_node_spawn(tr_chaos_process_node_t *node,
 
 static int tr_chaos_node_terminate(tr_chaos_process_node_t *node)
 {
-    salts_process_result_t result;
+    cmeta_process_result_t result;
     int operation_result;
 
     if (!node->alive) {
         return SALTS_OK;
     }
-    operation_result = salts_process_terminate(node->process);
+    operation_result = cmeta_process_terminate(node->process);
     if (operation_result == SALTS_OK) {
-        operation_result = salts_process_wait(node->process, &result);
+        operation_result = cmeta_process_wait(node->process, &result);
     }
-    salts_process_destroy(node->process);
+    cmeta_process_destroy(node->process);
     node->process = NULL;
     node->alive = 0;
     return operation_result;
@@ -534,7 +534,7 @@ static int tr_chaos_node_stop(tr_chaos_process_node_t *node,
                               uint8_t *response_payload)
 {
     tr_chaos_response_t response;
-    salts_process_result_t process_result;
+    cmeta_process_result_t process_result;
     int result;
 
     memset(&process_result, 0, sizeof(process_result));
@@ -545,14 +545,14 @@ static int tr_chaos_node_stop(tr_chaos_process_node_t *node,
     result = tr_chaos_node_command(node, TR_CHAOS_COMMAND_STOP, NULL, 0U,
                                    response_payload, &response);
     if (result == SALTS_OK) {
-        result = salts_process_wait(node->process, &process_result);
+        result = cmeta_process_wait(node->process, &process_result);
     }
     if (result == SALTS_OK &&
         (process_result.state != SALTS_PROCESS_EXITED ||
          process_result.exit_code != 0)) {
         result = SALTS_EPROTO;
     }
-    salts_process_destroy(node->process);
+    cmeta_process_destroy(node->process);
     node->process = NULL;
     node->alive = 0;
     return result;
@@ -701,9 +701,9 @@ static int tr_chaos_expect_existing_open_failure(
     tr_raft_node_id_t node_id,
     const char *database_path)
 {
-    salts_process_options_t options;
-    salts_process_result_t process_result;
-    salts_process_t *process = NULL;
+    cmeta_process_options_t options;
+    cmeta_process_result_t process_result;
+    cmeta_process_t *process = NULL;
     char node_id_text[16];
     const char *args[6];
     int result;
@@ -721,23 +721,23 @@ static int tr_chaos_expect_existing_open_failure(
     args[4] = "--require-existing";
     args[5] = NULL;
     memset(&process_result, 0, sizeof(process_result));
-    salts_process_options_init(&options);
+    cmeta_process_options_init(&options);
     options.program = program;
     options.args = args;
     options.timeout_ms = 10000U;
     options.max_output_bytes = 1024U * 1024U;
-    result = salts_process_spawn(&options, &process);
+    result = cmeta_process_spawn(&options, &process);
     if (result != SALTS_OK) {
         return result;
     }
-    result = salts_process_wait(process, &process_result);
+    result = cmeta_process_wait(process, &process_result);
     if (result != SALTS_OK) {
-        (void)salts_process_terminate(process);
-        (void)salts_process_wait(process, &process_result);
-        salts_process_destroy(process);
+        (void)cmeta_process_terminate(process);
+        (void)cmeta_process_wait(process, &process_result);
+        cmeta_process_destroy(process);
         return result;
     }
-    salts_process_destroy(process);
+    cmeta_process_destroy(process);
     return process_result.state == SALTS_PROCESS_EXITED &&
                    process_result.exit_code != 0
                ? SALTS_OK
@@ -2089,7 +2089,7 @@ spec("raft multi-process deterministic chaos")
         tr_chaos_process_node_t node;
         tr_chaos_safety_t safety;
         tr_chaos_response_t response;
-        salts_process_result_t process_result;
+        cmeta_process_result_t process_result;
         uint8_t fail_reopen[4];
         uint8_t *response_payload = NULL;
         int result = SALTS_EINVAL;
@@ -2126,11 +2126,11 @@ spec("raft multi-process deterministic chaos")
         }
         if (result == SALTS_OK &&
             response.operation_result == SALTS_EIO) {
-            result = salts_process_wait(node.process, &process_result);
+            result = cmeta_process_wait(node.process, &process_result);
             check_equal(result, SALTS_OK);
             check_equal(process_result.state, SALTS_PROCESS_EXITED);
             check_not_equal(process_result.exit_code, 0);
-            salts_process_destroy(node.process);
+            cmeta_process_destroy(node.process);
             node.process = NULL;
             node.alive = 0;
         }

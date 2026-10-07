@@ -1,0 +1,2 @@
+/* Embedded from the canonical schema; no deployed schema-file dependency. */
+static const char tr_node_schema[] = "@TURBORAFT_NODE_SCHEMA_TEXT@";

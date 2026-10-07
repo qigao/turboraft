@@ -1,6 +1,6 @@
 #include <turboraft/raft_control_audit.h>
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdatomic.h>
 #include <stdlib.h>

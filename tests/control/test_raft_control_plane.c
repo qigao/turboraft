@@ -1,6 +1,6 @@
 #include <turboraft/raft_control_plane.h>
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <tinytest.h>
 
 #include <string.h>

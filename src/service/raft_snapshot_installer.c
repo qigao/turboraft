@@ -1,6 +1,6 @@
 #include "raft_snapshot_installer.h"
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdlib.h>
 

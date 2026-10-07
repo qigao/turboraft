@@ -8,8 +8,8 @@ workflow proves the same build, runtime, recovery, and package contracts.
 
 The executable source of truth is the workflow named in each row. Source
 integration gates follow current first-party branches; native package
-qualification may temporarily remain on the last mutually compatible
-published SDK epoch until its producer publishes the next release. Changes to a
+qualification resolves current stable SDK releases and records the actual
+versions in each SDK manifest. Changes to a
 qualified compiler, operating system, dependency source, sanitizer, or package
 contract must update both this document and the corresponding workflow in the
 same change.
@@ -36,6 +36,16 @@ Qualification evidence on 2026-09-23:
 
 ## First-party dependency contract
 
+The scheduled `extended-chaos.yml` campaign consumes the latest stable
+`Salts.Native`, `SaltsUtils.Native`, and `FlowMQ.Native` packages through the
+same floating references as native SDK packaging. Each run restores with
+`--no-cache --force-evaluate`, resolves SDK roots from NuGet assets, and records
+the selected versions in `artifacts/campaign-metadata.txt`. This replaces the
+incompatible combination of pinned Salts 1.8.3 / SaltsUtils 4.1.3 and moving
+FlowMQ source. It uses `ci-linux-release-user` for manifest-mode configuration,
+the complete build graph, and CTest execution. Dependency restore logs are
+retained even when configuration or compilation never starts.
+
 TurboRaft configure requires explicit active-profile roots:
 
 - `SALTS_ROOT`
@@ -53,7 +63,7 @@ The first-party dependency policy is:
 | --- | --- | --- | --- |
 | Salts | current `master` source | latest published Salts.Native SDK | `find_package(Salts CONFIG REQUIRED)` |
 | SaltsUtils | current `master` source | latest published SaltsUtils.Native SDK | `find_package(SaltsUtils CONFIG REQUIRED)`; supplies `salts-idlc` |
-| FlowMQ | current `main` source; package qualification remains on FlowMQ.Native 1.1.1 until v1.1.2 is published | current `main` source; package qualification remains on FlowMQ.Native 1.1.1 until v1.1.2 is published | `find_package(FlowMQ CONFIG REQUIRED)`; TLS certificate/HELLO identity contract is required |
+| FlowMQ | current `main` source; package qualification resolves the latest stable FlowMQ.Native | current `main` source; package qualification resolves the latest stable FlowMQ.Native | `find_package(FlowMQ 1.2.1 CONFIG REQUIRED)`; TLS certificate/HELLO identity contract is required |
 | TurboDB | not a Core dependency | not a Core dependency | only opt-in Redis/SQLite application qualification workflows |
 
 TurboRaft source integration intentionally follows current first-party
@@ -83,9 +93,9 @@ silently rebuild a third-party dependency inside a consumer workflow.
 ## Package qualification
 
 TurboRaft 0.3.x publishes `TurboRaft.Native` for the release-qualified
-`linux-x64` and `windows-x64` SDKs only. The package has exact NuGet
-dependencies on Salts.Native 1.8.3, SaltsUtils.Native 4.1.3, and
-FlowMQ.Native 1.1.1. macOS and Android remain intentionally absent until they
+`linux-x64` and `windows-x64` SDKs only. The package resolves current stable NuGet
+dependencies on Salts.Native, SaltsUtils.Native, and FlowMQ.Native. CMake
+requires Salts 2.1+ and SaltsUtils 4.2+; FlowMQ must use the same SDK generation. macOS and Android remain intentionally absent until they
 gain hosted release qualification.
 
 A build is not qualified merely because the repository itself compiles.
@@ -101,7 +111,10 @@ Installed consumers normalize `TURBORAFT_ROOT` before
 `find_package(TurboRaft ... PATHS ...)`, so the same package tests are valid
 on POSIX and Windows paths.
 
-`TurboRaft::FlowMQ` transitively requires FlowMQ >= 1.1.1.
+`TurboRaft::FlowMQ` transitively requires FlowMQ >= 1.2.1, including its
+certificate fingerprint capacity, TLS identity policy, and rejection counter
+APIs. NuGet restoration remains floating (`Version="*"`); the CMake minimum
+rejects incompatible SDKs before compilation.
 
 ## Sanitizer policy
 

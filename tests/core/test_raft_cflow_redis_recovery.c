@@ -2,8 +2,8 @@
 #include <turboraft/turbodb_redis_state_machine.h>
 
 #include <cflow/cflow.h>
-#include <salts_coro_executor.h>
-#include <salts_error.h>
+#include <coro_executor.h>
+#include <cmeta_error.h>
 #include <tinytest.h>
 
 #include <stdatomic.h>
@@ -25,7 +25,7 @@ enum redis_async_id {
 
 typedef struct redis_async_persistence {
     tr_raft_entry_state_machine_v1_t cflow;
-    salts_coro_executor_t *executor;
+    coro_executor_t *executor;
     redis_io_runtime io_runtime;
     redis_cflow_connection connection;
     tr_turbodb_redis_state_machine_t *adapter;
@@ -275,12 +275,12 @@ static bool redis_async_submit(
     redis_async_persistence_t *persistence,
     coro_fn run)
 {
-    salts_coro_executor_task_t task = {
+    coro_executor_task_t task = {
         run, redis_async_task_cancel, NULL, persistence};
 
     atomic_store_explicit(
         &persistence->task_ready, false, memory_order_relaxed);
-    return salts_coro_executor_try_submit(
+    return coro_executor_try_submit(
                persistence->executor, &task) == SALTS_OK;
 }
 
@@ -377,8 +377,8 @@ static bool redis_async_persistence_init(
     const tr_raft_entry_state_machine_v1_t *cflow,
     const char *port_text)
 {
-    salts_coro_executor_config_t config =
-        SALTS_CORO_EXECUTOR_CONFIG_DEFAULT;
+    coro_executor_config_t config =
+        CORO_EXECUTOR_CONFIG_DEFAULT;
 
     if (persistence == NULL || cflow == NULL ||
         port_text == NULL ||
@@ -392,20 +392,20 @@ static bool redis_async_persistence_init(
     config.queue_capacity_per_worker = 2U;
     config.coroutine_pool.initial_capacity = 0U;
     config.coroutine_pool.max_capacity = 2U;
-    persistence->executor = salts_coro_executor_create(&config);
+    persistence->executor = coro_executor_create(&config);
     if (persistence->executor == NULL) {
         return false;
     }
     atomic_init(&persistence->task_ready, false);
     if (!redis_async_submit(persistence, redis_async_init_task) ||
-        salts_coro_executor_wait(persistence->executor) != SALTS_OK ||
+        coro_executor_wait(persistence->executor) != SALTS_OK ||
         !atomic_load_explicit(
             &persistence->task_ready, memory_order_acquire) ||
         persistence->task_result != SALTS_OK ||
         !persistence->redis_ready) {
-        (void) salts_coro_executor_shutdown(persistence->executor);
-        (void) salts_coro_executor_wait(persistence->executor);
-        (void) salts_coro_executor_destroy(persistence->executor);
+        (void) coro_executor_shutdown(persistence->executor);
+        (void) coro_executor_wait(persistence->executor);
+        (void) coro_executor_destroy(persistence->executor);
         persistence->executor = NULL;
         return false;
     }
@@ -417,7 +417,7 @@ static bool redis_async_persistence_wait(
 {
     return persistence != NULL &&
            persistence->executor != NULL &&
-           salts_coro_executor_wait(persistence->executor) == SALTS_OK;
+           coro_executor_wait(persistence->executor) == SALTS_OK;
 }
 
 static bool redis_async_persistence_destroy(
@@ -432,15 +432,15 @@ static bool redis_async_persistence_destroy(
         return false;
     }
     if (!redis_async_submit(persistence, redis_async_close_task) ||
-        salts_coro_executor_wait(persistence->executor) != SALTS_OK ||
+        coro_executor_wait(persistence->executor) != SALTS_OK ||
         persistence->task_result != SALTS_OK) {
         return false;
     }
     shutdown_result =
-        salts_coro_executor_shutdown(persistence->executor);
-    wait_result = salts_coro_executor_wait(persistence->executor);
+        coro_executor_shutdown(persistence->executor);
+    wait_result = coro_executor_wait(persistence->executor);
     destroy_result =
-        salts_coro_executor_destroy(persistence->executor);
+        coro_executor_destroy(persistence->executor);
     persistence->executor = NULL;
     return shutdown_result == SALTS_OK &&
            wait_result == SALTS_OK &&

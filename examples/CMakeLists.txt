@@ -4,3 +4,5 @@ target_link_libraries(
   PRIVATE TurboRaft::TextSyntax TurboRaft::ReplayDriver)
 
 cmake_config_directory_targets(FOLDER "examples")
+add_executable(turboraft_multicore_node multicore_node.c)
+target_link_libraries(turboraft_multicore_node PRIVATE TurboRaft::NodeConfig TurboRaft::WalStorage)

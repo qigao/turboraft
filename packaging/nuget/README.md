@@ -7,11 +7,17 @@ Release-qualified SDK payloads:
 - `sdk/linux-x64`
 - `sdk/windows-x64`
 
-Exact first-party package dependencies:
+First-party package dependencies resolve the latest stable release:
 
-- Salts.Native 1.8.3
-- SaltsUtils.Native 4.1.3
-- FlowMQ.Native 1.1.1
+- Salts.Native (CMake requires 2.1+)
+- SaltsUtils.Native (CMake requires 4.2+)
+- FlowMQ.Native (built against the matching SDK generation)
+
+The build records the resolved versions in `turboraft-sdk-manifest.txt`.
+CI configures, builds and installs through `native-sdk-linux-user` or
+`native-sdk-windows-user` and its matching `install-` build preset, with vcpkg
+manifest mode enabled. GmSSL-backed hashing is consumed through Salts::Core;
+TurboRaft no longer exports an OpenSSL dependency.
 
 Installed CMake consumers require `SALTS_ROOT`, `SALTS_UTILS_ROOT`, and
 `TURBORAFT_ROOT`. Core links `Salts::DataBind`, which is supplied by the

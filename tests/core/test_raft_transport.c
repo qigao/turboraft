@@ -2,7 +2,7 @@
 
 #include "../../src/transport/raft_transport_internal.h"
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <tinytest.h>
 
 #include <string.h>

@@ -1,6 +1,6 @@
 #include <turboraft/raft_wal_storage.h>
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <dirent.h>
 #include <glob.h>

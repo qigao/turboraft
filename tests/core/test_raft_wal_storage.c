@@ -4,8 +4,8 @@
 #include "raft_wal_storage_internal.h"
 
 #include <tinytest.h>
-#include <salts_error.h>
-#include <salts_fs.h>
+#include <cmeta_error.h>
+#include <cmeta_fs.h>
 #include <xxhash.h>
 
 #include <stdint.h>
@@ -121,17 +121,17 @@ static int wal_read_recovered_snapshot(
 static int wal_test_copy_file(const char *source,
                               const char *destination)
 {
-    salts_fs_buf_t bytes = {0};
+    cmeta_fs_buf_t bytes = {0};
     int result;
 
     if (source == NULL || destination == NULL) {
         return SALTS_EINVAL;
     }
-    result = salts_fs_read_file(source, &bytes);
+    result = cmeta_fs_read_file(source, &bytes);
     if (result == SALTS_OK) {
-        result = salts_fs_write_file(destination, &bytes);
+        result = cmeta_fs_write_file(destination, &bytes);
     }
-    salts_fs_buf_free(&bytes);
+    cmeta_fs_buf_free(&bytes);
     return result;
 }
 
@@ -141,17 +141,17 @@ static void wal_test_cleanup(char *prefix)
     size_t index;
     for (index = 1U; index <= WAL_TEST_CLEANUP_SEGMENTS; ++index) {
         snprintf(path, sizeof(path), "%s.%08zu.wal", prefix, index);
-        if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
+        if (cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
             check_equal(tt_remove_file(path), 0);
     }
     wal_test_path(path, sizeof(path), prefix, ".manifest");
-    if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
+    if (cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
         check_equal(tt_remove_file(path), 0);
     wal_test_path(path, sizeof(path), prefix, ".manifest.tmp");
-    if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
+    if (cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
         check_equal(tt_remove_file(path), 0);
     wal_test_path(path, sizeof(path), prefix, ".lock");
-    if (salts_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
+    if (cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
         check_equal(tt_remove_file(path), 0);
     check_equal(tt_remove_file(prefix), 0);
     free(prefix);
@@ -367,9 +367,9 @@ spec("raft segmented WAL storage")
                  prefix);
         snprintf(second_segment, sizeof(second_segment), "%s.00000002.wal",
                  prefix);
-        check_not_equal(salts_fs_access(first_segment, SALTS_FS_ACCESS_EXISTS),
+        check_not_equal(cmeta_fs_access(first_segment, SALTS_FS_ACCESS_EXISTS),
                      SALTS_OK);
-        check_equal(salts_fs_access(second_segment, SALTS_FS_ACCESS_EXISTS),
+        check_equal(cmeta_fs_access(second_segment, SALTS_FS_ACCESS_EXISTS),
                      SALTS_OK);
         config.create_if_missing = false;
         check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
@@ -435,7 +435,7 @@ spec("raft segmented WAL storage")
         tr_raft_wal_recovery_t recovery;
         tr_raft_entry_t entry = wal_test_entry(1U, 1U, 21U, "only");
         char path[SALTS_FS_MAX_PATH];
-        salts_file_t file;
+        cmeta_file_t file;
         static const uint8_t torn[] = {0x54U, 0x52U, 0x57U};
 
         check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
@@ -450,11 +450,11 @@ spec("raft segmented WAL storage")
         check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
 
         wal_test_path(path, sizeof(path), prefix, ".00000001.wal");
-        file = salts_fs_open(path, SALTS_FS_O_WRONLY | SALTS_FS_O_APPEND, 0);
+        file = cmeta_fs_open(path, SALTS_FS_O_WRONLY | SALTS_FS_O_APPEND, 0);
         check_not_equal(file, SALTS_INVALID_FILE);
-        check_equal(salts_fs_write(file, (const char *)torn, sizeof(torn)),
+        check_equal(cmeta_fs_write(file, (const char *)torn, sizeof(torn)),
                      (int)sizeof(torn));
-        check_equal(salts_fs_close(file), SALTS_OK);
+        check_equal(cmeta_fs_close(file), SALTS_OK);
 
         config.create_if_missing = false;
         storage = NULL;
@@ -476,7 +476,7 @@ spec("raft segmented WAL storage")
         tr_raft_storage_t adapter;
         tr_raft_entry_t entry = wal_test_entry(1U, 1U, 31U, "value");
         char path[SALTS_FS_MAX_PATH];
-        salts_file_t file;
+        cmeta_file_t file;
         uint8_t byte = 0xffU;
 
         check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
@@ -487,11 +487,11 @@ spec("raft segmented WAL storage")
         check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
 
         wal_test_path(path, sizeof(path), prefix, ".00000001.wal");
-        file = salts_fs_open(path, SALTS_FS_O_RDWR, 0);
+        file = cmeta_fs_open(path, SALTS_FS_O_RDWR, 0);
         check_not_equal(file, SALTS_INVALID_FILE);
-        check_equal(salts_fs_pwrite(file, (const char *)&byte, 1U, 96), 1);
-        check_equal(salts_fs_fsync(file), SALTS_OK);
-        check_equal(salts_fs_close(file), SALTS_OK);
+        check_equal(cmeta_fs_pwrite(file, (const char *)&byte, 1U, 96), 1);
+        check_equal(cmeta_fs_fsync(file), SALTS_OK);
+        check_equal(cmeta_fs_close(file), SALTS_OK);
         storage = NULL;
         config.create_if_missing = false;
         check_equal(tr_raft_wal_storage_open(&config, &storage),
@@ -576,7 +576,7 @@ spec("raft segmented WAL storage")
         check_equal(tr_raft_wal_storage_close(storage), SALTS_OK);
         wal_test_path(second_segment, sizeof(second_segment), prefix,
                       ".00000002.wal");
-        check_equal(salts_fs_access(second_segment,
+        check_equal(cmeta_fs_access(second_segment,
                                      SALTS_FS_ACCESS_EXISTS), SALTS_OK);
         config.create_if_missing = false;
         storage = NULL;
@@ -660,15 +660,15 @@ spec("raft segmented WAL storage")
         }
 
         wal_test_path(path, sizeof(path), prefix, ".manifest");
-        check_equal(salts_fs_access(path, SALTS_FS_ACCESS_EXISTS), SALTS_OK);
+        check_equal(cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS), SALTS_OK);
         snprintf(path, sizeof(path), "%s.%08llu.wal", prefix,
                  (unsigned long long)
                      (TR_RAFT_WAL_MAX_LIVE_SEGMENTS + 6ULL));
-        check_equal(salts_fs_access(path, SALTS_FS_ACCESS_EXISTS), SALTS_OK);
+        check_equal(cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS), SALTS_OK);
         check_equal(tt_remove_file(path), 0);
         snprintf(path, sizeof(path), "%s.%08u.wal", prefix,
                  TR_RAFT_WAL_MAX_LIVE_SEGMENTS);
-        check_not_equal(salts_fs_access(path, SALTS_FS_ACCESS_EXISTS),
+        check_not_equal(cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS),
                         SALTS_OK);
 
         snprintf(path, sizeof(path), "%s.snapshot.%u.1", prefix, 6U);
@@ -767,7 +767,7 @@ spec("raft segmented WAL storage")
             tt_make_temp_file("turboraft-wal-manifest-range", ".data");
         tr_raft_wal_storage_config_t config = wal_test_config(prefix, true);
         tr_raft_wal_storage_t *storage = NULL;
-        salts_fs_buf_t manifest = {0};
+        cmeta_fs_buf_t manifest = {0};
         char manifest_path[SALTS_FS_MAX_PATH];
         uint64_t checksum;
 
@@ -777,15 +777,15 @@ spec("raft segmented WAL storage")
 
         wal_test_path(manifest_path, sizeof(manifest_path),
                       prefix, ".manifest");
-        check_equal(salts_fs_read_file(manifest_path, &manifest), SALTS_OK);
+        check_equal(cmeta_fs_read_file(manifest_path, &manifest), SALTS_OK);
         check_equal(manifest.len, 40U);
 
         wal_test_put_u64((uint8_t *)manifest.base + 16U, UINT64_C(1));
         wal_test_put_u64((uint8_t *)manifest.base + 24U, UINT64_MAX);
         checksum = XXH3_64bits(manifest.base, 32U);
         wal_test_put_u64((uint8_t *)manifest.base + 32U, checksum);
-        check_equal(salts_fs_write_file(manifest_path, &manifest), SALTS_OK);
-        salts_fs_buf_free(&manifest);
+        check_equal(cmeta_fs_write_file(manifest_path, &manifest), SALTS_OK);
+        cmeta_fs_buf_free(&manifest);
 
         config.create_if_missing = false;
         check_equal(tr_raft_wal_storage_open(&config, &storage),
@@ -822,7 +822,7 @@ spec("raft segmented WAL storage")
 
         config.create_if_missing = false;
         check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
-        check_equal(salts_fs_access(
+        check_equal(cmeta_fs_access(
                         manifest_path, SALTS_FS_ACCESS_EXISTS), SALTS_OK);
         memset(&recovery, 0, sizeof(recovery));
         check_equal(tr_raft_wal_storage_load(storage, &recovery), SALTS_OK);

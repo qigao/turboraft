@@ -2,7 +2,7 @@
 
 #include "raft_peer_set.h"
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <string.h>
 

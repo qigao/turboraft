@@ -1,7 +1,7 @@
 #include <turboraft/raft_cflow_state_machine.h>
 
 #include <salts/thread.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -13,7 +13,7 @@ struct tr_raft_cflow_state_machine {
     cflow_statechart_host_transaction_fn host_transaction;
     void *host_context;
     cflow_statechart_instance *instance;
-    salts_mutex_t mutex;
+    cmeta_mutex_t mutex;
     tr_raft_apply_settlement_t settlement;
     uint64_t expected_token;
     bool in_flight;
@@ -84,11 +84,11 @@ static void tr_raft_cflow_on_settlement(
     if (state_machine == NULL || settlement == NULL) {
         return;
     }
-    salts_mutex_lock(&state_machine->mutex);
+    cmeta_mutex_lock(&state_machine->mutex);
     if (!state_machine->in_flight || state_machine->settlement_ready ||
         settlement->origin_token != state_machine->expected_token) {
         state_machine->protocol_fault = true;
-        salts_mutex_unlock(&state_machine->mutex);
+        cmeta_mutex_unlock(&state_machine->mutex);
         return;
     }
     state_machine->settlement.token = settlement->origin_token;
@@ -113,7 +113,7 @@ static void tr_raft_cflow_on_settlement(
         state_machine->settlement.cause = SALTS_EPROTO;
     }
     state_machine->settlement_ready = true;
-    salts_mutex_unlock(&state_machine->mutex);
+    cmeta_mutex_unlock(&state_machine->mutex);
 }
 
 static tr_raft_apply_admission_t tr_raft_cflow_try_apply(
@@ -137,20 +137,20 @@ static tr_raft_apply_admission_t tr_raft_cflow_try_apply(
         return TR_RAFT_APPLY_ADMISSION_FAILED;
     }
     *out_cause = SALTS_OK;
-    salts_mutex_lock(&state_machine->mutex);
+    cmeta_mutex_lock(&state_machine->mutex);
     if (state_machine->instance == NULL ||
         state_machine->instance->impl == NULL) {
-        salts_mutex_unlock(&state_machine->mutex);
+        cmeta_mutex_unlock(&state_machine->mutex);
         *out_cause = SALTS_ESHUTDOWN;
         return TR_RAFT_APPLY_ADMISSION_CLOSED;
     }
     if (state_machine->protocol_fault || state_machine->in_flight ||
         state_machine->settlement_ready) {
-        salts_mutex_unlock(&state_machine->mutex);
+        cmeta_mutex_unlock(&state_machine->mutex);
         *out_cause = SALTS_EPROTO;
         return TR_RAFT_APPLY_ADMISSION_FAILED;
     }
-    salts_mutex_unlock(&state_machine->mutex);
+    cmeta_mutex_unlock(&state_machine->mutex);
 
     memset(&event, 0, sizeof(event));
     decode_result = state_machine->decode_entry(
@@ -162,23 +162,23 @@ static tr_raft_apply_admission_t tr_raft_cflow_try_apply(
         return TR_RAFT_APPLY_ADMISSION_FAILED;
     }
 
-    salts_mutex_lock(&state_machine->mutex);
+    cmeta_mutex_lock(&state_machine->mutex);
     if (state_machine->instance == NULL ||
         state_machine->instance->impl == NULL) {
-        salts_mutex_unlock(&state_machine->mutex);
+        cmeta_mutex_unlock(&state_machine->mutex);
         *out_cause = SALTS_ESHUTDOWN;
         return TR_RAFT_APPLY_ADMISSION_CLOSED;
     }
     if (state_machine->protocol_fault || state_machine->in_flight ||
         state_machine->settlement_ready) {
-        salts_mutex_unlock(&state_machine->mutex);
+        cmeta_mutex_unlock(&state_machine->mutex);
         *out_cause = SALTS_EPROTO;
         return TR_RAFT_APPLY_ADMISSION_FAILED;
     }
     state_machine->expected_token = token;
     state_machine->in_flight = true;
     instance = state_machine->instance;
-    salts_mutex_unlock(&state_machine->mutex);
+    cmeta_mutex_unlock(&state_machine->mutex);
 
     status = cflow_statechart_instance_try_send_tagged(instance, &event,
                                                        token);
@@ -186,14 +186,14 @@ static tr_raft_apply_admission_t tr_raft_cflow_try_apply(
         return TR_RAFT_APPLY_ADMISSION_ACCEPTED;
     }
 
-    salts_mutex_lock(&state_machine->mutex);
+    cmeta_mutex_lock(&state_machine->mutex);
     if (state_machine->settlement_ready) {
         state_machine->protocol_fault = true;
     } else {
         state_machine->expected_token = 0U;
         state_machine->in_flight = false;
     }
-    salts_mutex_unlock(&state_machine->mutex);
+    cmeta_mutex_unlock(&state_machine->mutex);
     if (status == CFLOW_MAILBOX_FULL) {
         *out_cause = SALTS_ENOBUFS;
         return TR_RAFT_APPLY_ADMISSION_FULL;
@@ -225,9 +225,9 @@ static int tr_raft_cflow_poll_settlement(
         return SALTS_EINVAL;
     }
     *out_ready = false;
-    salts_mutex_lock(&state_machine->mutex);
+    cmeta_mutex_lock(&state_machine->mutex);
     if (state_machine->protocol_fault) {
-        salts_mutex_unlock(&state_machine->mutex);
+        cmeta_mutex_unlock(&state_machine->mutex);
         return SALTS_EPROTO;
     }
     if (state_machine->settlement_ready) {
@@ -239,7 +239,7 @@ static int tr_raft_cflow_poll_settlement(
                sizeof(state_machine->settlement));
         *out_ready = true;
     }
-    salts_mutex_unlock(&state_machine->mutex);
+    cmeta_mutex_unlock(&state_machine->mutex);
     return SALTS_OK;
 }
 
@@ -264,7 +264,7 @@ int tr_raft_cflow_state_machine_create(
     if (state_machine == NULL) {
         return SALTS_ENOMEM;
     }
-    salts_mutex_init(&state_machine->mutex);
+    cmeta_mutex_init(&state_machine->mutex);
     state_machine->decode_entry = config->decode_entry;
     state_machine->decode_context = config->decode_context;
     state_machine->host_transaction = config->host_transaction;
@@ -303,7 +303,7 @@ int tr_raft_cflow_state_machine_bind(
     if (state_machine == NULL || instance == NULL || instance->impl == NULL) {
         return SALTS_EINVAL;
     }
-    salts_mutex_lock(&state_machine->mutex);
+    cmeta_mutex_lock(&state_machine->mutex);
     if (state_machine->instance != NULL) {
         result = SALTS_EALREADY;
     } else if (state_machine->in_flight ||
@@ -313,7 +313,7 @@ int tr_raft_cflow_state_machine_bind(
     } else {
         state_machine->instance = instance;
     }
-    salts_mutex_unlock(&state_machine->mutex);
+    cmeta_mutex_unlock(&state_machine->mutex);
     return result;
 }
 
@@ -324,10 +324,10 @@ int tr_raft_cflow_state_machine_get_spi(
     if (state_machine == NULL || out_spi == NULL) {
         return SALTS_EINVAL;
     }
-    salts_mutex_lock(&state_machine->mutex);
+    cmeta_mutex_lock(&state_machine->mutex);
     if (state_machine->instance == NULL ||
         state_machine->instance->impl == NULL) {
-        salts_mutex_unlock(&state_machine->mutex);
+        cmeta_mutex_unlock(&state_machine->mutex);
         return SALTS_EPROTO;
     }
     memset(out_spi, 0, sizeof(*out_spi));
@@ -336,7 +336,7 @@ int tr_raft_cflow_state_machine_get_spi(
     out_spi->context = state_machine;
     out_spi->try_apply = tr_raft_cflow_try_apply;
     out_spi->poll_settlement = tr_raft_cflow_poll_settlement;
-    salts_mutex_unlock(&state_machine->mutex);
+    cmeta_mutex_unlock(&state_machine->mutex);
     return SALTS_OK;
 }
 
@@ -349,7 +349,7 @@ int tr_raft_cflow_state_machine_unbind(
     if (state_machine == NULL || instance == NULL) {
         return SALTS_EINVAL;
     }
-    salts_mutex_lock(&state_machine->mutex);
+    cmeta_mutex_lock(&state_machine->mutex);
     if (state_machine->instance != instance) {
         result = SALTS_EINVAL;
     } else if (instance->impl != NULL || state_machine->in_flight ||
@@ -358,7 +358,7 @@ int tr_raft_cflow_state_machine_unbind(
     } else {
         state_machine->instance = NULL;
     }
-    salts_mutex_unlock(&state_machine->mutex);
+    cmeta_mutex_unlock(&state_machine->mutex);
     return result;
 }
 
@@ -368,14 +368,14 @@ int tr_raft_cflow_state_machine_destroy(
     if (state_machine == NULL) {
         return SALTS_OK;
     }
-    salts_mutex_lock(&state_machine->mutex);
+    cmeta_mutex_lock(&state_machine->mutex);
     if (state_machine->instance != NULL || state_machine->in_flight ||
         state_machine->settlement_ready) {
-        salts_mutex_unlock(&state_machine->mutex);
+        cmeta_mutex_unlock(&state_machine->mutex);
         return SALTS_EBUSY;
     }
-    salts_mutex_unlock(&state_machine->mutex);
-    salts_mutex_destroy(&state_machine->mutex);
+    cmeta_mutex_unlock(&state_machine->mutex);
+    cmeta_mutex_destroy(&state_machine->mutex);
     free(state_machine);
     return SALTS_OK;
 }

@@ -1,7 +1,7 @@
 #include <turboraft/raft_snapshot_sender.h>
 
 #include <tinytest.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -59,6 +59,38 @@ static void generated_snapshot_release(void *context)
 
 spec("raft snapshot sender")
 {
+    it("preserves SHA-256 wire digests for empty and abc snapshots")
+    {
+        static const uint8_t expected[][TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE] = {
+            {0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
+             0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+             0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c,
+             0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55},
+            {0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+             0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+             0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
+             0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad}};
+        size_t index;
+
+        for (index = 0U; index < 2U; ++index) {
+            tr_raft_snapshot_sender_config_t config = {0};
+            tr_raft_snapshot_sender_t *sender = NULL;
+            tr_raft_snapshot_chunk_t chunk;
+            config.self_id = 1U;
+            config.peer_id = 2U;
+            config.max_snapshot_bytes = 1024U;
+            config.chunk_size = 512U;
+            config.max_inflight_chunks = 1U;
+            check_equal(tr_raft_snapshot_sender_create(&config, &sender), SALTS_OK);
+            check_equal(tr_raft_snapshot_sender_begin(
+                sender, 7U, 9U, 6U, &sender_configuration,
+                index == 0U ? NULL : "abc", index == 0U ? 0U : 3U), SALTS_OK);
+            check_equal(tr_raft_snapshot_sender_next_chunk(sender, &chunk), SALTS_OK);
+            check_equal(chunk.snapshot_digest, expected[index], sizeof(expected[index]));
+            tr_raft_snapshot_sender_destroy(sender);
+        }
+    }
+
     it("advances only after an acknowledgement")
     {
         tr_raft_snapshot_sender_config_t config;

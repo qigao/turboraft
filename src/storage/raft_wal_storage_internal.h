@@ -3,7 +3,7 @@
 
 #include <turboraft/raft_wal_storage.h>
 
-#include <salts_fs.h>
+#include <cmeta_fs.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -16,7 +16,7 @@ typedef int (*tr_raft_wal_replace_durable_fn)(
     void *context,
     const char *staging_path,
     const char *destination_path,
-    salts_fs_replace_state_t *state);
+    cmeta_fs_replace_state_t *state);
 
 typedef enum tr_raft_wal_io_phase {
     TR_RAFT_WAL_IO_SEGMENT_WRITE = 0,

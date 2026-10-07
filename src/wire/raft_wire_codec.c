@@ -6,26 +6,13 @@
 #include "../turboraft_stl_status.h"
 
 #include "turboraft_wire_tbe.h"
-#undef SCHEMA_GENERATED_H
 #include "turboraft_wire_v3_tbe.h"
 
-/*
- * SaltsUtils master renamed the generated wire-view primitives from the
- * released tbe_wire spelling to DataBindBinaryWire. Keep this private codec
- * source neutral to that generated-API rename; the generated field accessors
- * still own layout, endian, and bounds semantics in both cases.
- */
-#if defined(DATA_BIND_BINARY_WIRE_H)
 typedef DataBindBinaryVarData tr_wire_generated_var_data_t;
 #define tr_wire_generated_var_data_end data_bind_binary_wire_var_data_end
 #define tr_wire_generated_write_u32 data_bind_binary_wire_write_u32
-#else
-typedef tbe_var_data_t tr_wire_generated_var_data_t;
-#define tr_wire_generated_var_data_end tbe_wire_var_data_end
-#define tr_wire_generated_write_u32 tbe_wire_write_u32
-#endif
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <cstl/vec.h>
 
 #include <stdlib.h>
@@ -35,6 +22,7 @@ static const uint8_t TR_RAFT_WIRE_MAGIC[4] = {'T', 'R', 'F', 'T'};
 
 struct tr_raft_wire_codec {
     DataBind *binding;
+    DataBind *binding_v3;
 };
 
 static void tr_put_u16(uint8_t *output, uint16_t value)
@@ -319,6 +307,7 @@ static int tr_wire_v3_from_message(RaftWireMessageV3_t *wire,
 }
 
 static int tr_raft_wire_encode_current(
+    DataBind *binding,
     const tr_raft_wire_metadata_t *metadata,
     const tr_raft_message_t *message,
     uint8_t *output,
@@ -338,7 +327,7 @@ static int tr_raft_wire_encode_current(
         return result;
     }
     status = RaftWireMessageV3_to_bin_into(
-        &wire, output + TR_RAFT_WIRE_HEADER_SIZE,
+        binding, &wire, output + TR_RAFT_WIRE_HEADER_SIZE,
         output_capacity - TR_RAFT_WIRE_HEADER_SIZE,
         &payload_length, &error);
     RaftWireMessageV3_clear(&wire);
@@ -369,7 +358,11 @@ int tr_raft_wire_codec_create(tr_raft_wire_codec_t **out_codec)
         return SALTS_ENOMEM;
     }
     status = TurboRaftWire_codec_create(&codec->binding, &error);
+    if (status == DATA_BIND_OK) {
+        status = TurboRaftWireV3_codec_create(&codec->binding_v3, &error);
+    }
     if (status != DATA_BIND_OK) {
+        data_bind_free(codec->binding);
         free(codec);
         return SALTS_EPROTO;
     }
@@ -382,6 +375,7 @@ void tr_raft_wire_codec_destroy(tr_raft_wire_codec_t *codec)
     if (codec == NULL) {
         return;
     }
+    data_bind_free(codec->binding_v3);
     data_bind_free(codec->binding);
     free(codec);
 }
@@ -405,7 +399,7 @@ int tr_raft_wire_encode(tr_raft_wire_codec_t *codec,
         *output_length = TR_RAFT_WIRE_HEADER_SIZE;
         return SALTS_ENOSPC;
     }
-    return tr_raft_wire_encode_current(metadata, message, output,
+    return tr_raft_wire_encode_current(codec->binding_v3, metadata, message, output,
                                        output_capacity, output_length);
 }
 

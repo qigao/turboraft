@@ -2,7 +2,7 @@
 #define TURBORAFT_STL_STATUS_H
 
 #include <cstl/status.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 static inline int tr_raft_stl_status_to_error(stl_status status)
 {

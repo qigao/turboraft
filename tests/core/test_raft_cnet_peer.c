@@ -1,6 +1,6 @@
 #include <turboraft/raft_cnet_peer.h>
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <tinytest.h>
 
 #include <string.h>
@@ -58,6 +58,33 @@ static tr_raft_cnet_peer_t *make_peer(
 
 spec("Raft CNet peer adapter")
 {
+    it("retains queued payloads across rejected send admission")
+    {
+        cnet_client client = {0};
+        cnet_connection connection = {0};
+        tr_raft_cnet_peer_t *peer = make_peer(&client, 4U, 2U, 2U);
+        cnet_observer observer = tr_raft_cnet_peer_observer(peer);
+        tr_raft_cnet_peer_status_t status;
+        tr_raft_message_t message = {0};
+        size_t index;
+
+        message.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+        message.from = 1U;
+        message.to = 2U;
+        message.term = 3U;
+        check_equal(tr_raft_cnet_peer_enqueue_group(peer, 10U, &message), SALTS_OK);
+        observer.on_state(observer.user, connection, CNET_CONNECTION_CONNECTED, NULL);
+        for (index = 0U; index < 3U; ++index) {
+            check_not_equal(tr_raft_cnet_peer_step(peer), SALTS_OK);
+            check_equal(tr_raft_cnet_peer_get_status(peer, &status), SALTS_OK);
+            check_equal(status.queued_payload_count, 1U);
+            check_equal(status.frames_admitted, 0U);
+            check_equal(status.write_pending, 0);
+        }
+        observer.on_state(observer.user, connection, CNET_CONNECTION_CLOSED, NULL);
+        check_equal(tr_raft_cnet_peer_destroy(peer), SALTS_OK);
+    }
+
     it("exposes callbacks and a bounded grouped queue")
     {
         cnet_client client;

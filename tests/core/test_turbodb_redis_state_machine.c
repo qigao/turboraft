@@ -1,7 +1,7 @@
 #include <turboraft/turbodb_redis_state_machine.h>
 
 #include <tinytest.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <stdint.h>
 #include <stdlib.h>

@@ -4,7 +4,7 @@
 #include <turboraft/raft_snapshot_sender.h>
 #include <turboraft/raft_transport.h>
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <tinytest.h>
 
 #include <stdbool.h>

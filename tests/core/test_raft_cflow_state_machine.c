@@ -2,7 +2,7 @@
 
 #include <cflow/cflow.h>
 #include <salts/thread.h>
-#include <salts_error.h>
+#include <cmeta_error.h>
 #include <tinytest.h>
 
 #include <stdatomic.h>
@@ -57,7 +57,7 @@ static void block_executor(void *user)
 
     atomic_store(&blocker->entered, true);
     while (!atomic_load(&blocker->release)) {
-        salts_thread_yield();
+        cmeta_thread_yield();
     }
 }
 
@@ -460,7 +460,7 @@ spec("CFlow Statechart Raft state machine")
                                             &blocker),
                     CFLOW_ADMISSION_ACCEPTED);
         while (!atomic_load(&blocker.entered)) {
-            salts_thread_yield();
+            cmeta_thread_yield();
         }
         check_equal(cflow_executor_try_post(&executor, noop_executor, NULL),
                     CFLOW_ADMISSION_ACCEPTED);
@@ -591,7 +591,7 @@ spec("CFlow Statechart Raft state machine")
                                             &blocker),
                     CFLOW_ADMISSION_ACCEPTED);
         while (!atomic_load(&blocker.entered)) {
-            salts_thread_yield();
+            cmeta_thread_yield();
         }
         {
             const cflow_event_view untagged = {
@@ -613,7 +613,7 @@ spec("CFlow Statechart Raft state machine")
                                             &blocker),
                     CFLOW_ADMISSION_ACCEPTED);
         while (!atomic_load(&blocker.entered)) {
-            salts_thread_yield();
+            cmeta_thread_yield();
         }
         check_equal(tr_raft_apply_runtime_poll(runtime, &result), SALTS_OK);
         check_equal(result.state,

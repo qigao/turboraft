@@ -1,7 +1,7 @@
 #include <turboraft/raft_service.h>
 #include <turboraft/raft_wal_storage.h>
 
-#include <salts_error.h>
+#include <cmeta_error.h>
 
 #include <glob.h>
 #include <inttypes.h>
