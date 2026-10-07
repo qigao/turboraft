@@ -36,6 +36,12 @@ Qualification evidence on 2026-09-23:
 
 ## First-party dependency contract
 
+Source-built SaltsUtils still compiles its Lua and QuickJS bindings. Linux
+source-integration jobs therefore restore `lua` and `quickjs-ng` as producer
+build dependencies; `quickjs-ng` supplies `qjsConfig.cmake`. Removing optional
+binding runtime discovery from the installed SDK does not remove these source
+build requirements. TurboRaft's own manifest does not depend on either runtime.
+
 The scheduled `extended-chaos.yml` campaign consumes the latest stable
 `Salts.Native`, `SaltsUtils.Native`, and `FlowMQ.Native` packages through the
 same floating references as native SDK packaging. Each run restores with

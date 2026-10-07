@@ -91,6 +91,7 @@ jobs:
               "gmssl",
               "miniaudio",
               "lua",
+              "quickjs-ng",
               { "name": "zeromq", "default-features": false },
               { "name": "xxhash", "version>=": "0.8.3" }
             ]
