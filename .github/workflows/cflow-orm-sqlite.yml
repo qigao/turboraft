@@ -93,7 +93,8 @@ jobs:
               "miniaudio",
               { "name": "zeromq", "default-features": false },
               { "name": "xxhash", "version>=": "0.8.3" },
-              { "name": "sqlite3", "version>=": "3.49.0" }
+              { "name": "sqlite3", "version>=": "3.49.0" },
+              { "name": "libpq", "default-features": false, "features": ["zstd"] }
             ]
           }
           JSON
@@ -128,20 +129,12 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DCMAKE_INSTALL_PREFIX="$TURBODB_ROOT" \
-            -DORM_BUILD_SQLITE_DRIVER=ON \
-            -DORM_BUILD_POSTGRESQL_DRIVER=OFF \
-            -DORM_BUILD_LEGACY_POSTGRESQL_COMPONENT=OFF \
-            -DORM_BUILD_REDIS_DRIVER=OFF \
-            -DORM_BUILD_MONGODB_DRIVER=OFF \
-            -DORM_BUILD_MYSQL_DRIVER=OFF \
-            -DORM_BUILD_TIDESDB_DRIVER=OFF \
-            -DORM_BUILD_TESTS=OFF \
-            -DTURBODB_DBTOOLS_WITH_SQLITE=OFF \
-            -DTURBODB_DBTOOLS_WITH_PGSQL=OFF \
-            -DTURBODB_BUILD_REDIS=OFF \
+            -DTURBODB_BUILD_ORM=ON -DTURBODB_BUILD_REDIS=OFF \
+            -DTURBODB_BUILD_DBTOOLS=OFF \
+            -DTURBODB_BUILD_SQLPARSER=ON -DTURBODB_BUILD_TIDESSQL=ON \
             -DTIDESDB_BUILD_TESTS=OFF \
             -DTIDESDB_WITH_SNAPPY=OFF -DTIDESDB_WITH_LZ4=OFF \
-            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
           cmake --build .ci/build-orm/turbodb --target install --parallel 2
           test -f "$TURBODB_ROOT/lib/cmake/TurboDB/TurboDBConfig.cmake"
           test -f "$ORM_SQLITE_PLUGIN"

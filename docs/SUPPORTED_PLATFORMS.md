@@ -47,6 +47,12 @@ incompatible published SDKs fail explicitly; they do not trigger a source-build
 fallback. SaltsUtils 4.2.0 keeps runtime discovery with binding consumers, so
 TurboRaft can use DataBind without installing the VM runtimes.
 
+Redis qualification selects TurboDB's standalone Redis build with ORM, dbtools,
+SQL parser and TidesSQL disabled. SQLite qualification uses the current ORM
+build, which includes all native drivers; its cache restore therefore includes
+the producer's `libpq[core,zstd]` contract even though the exercised database is
+SQLite. The removed `ORM_BUILD_*_DRIVER` options no longer select that graph.
+
 The scheduled `extended-chaos.yml` campaign consumes the latest stable
 `Salts.Native`, `SaltsUtils.Native`, and `FlowMQ.Native` packages through the
 same floating references as native SDK packaging. Each run restores with
