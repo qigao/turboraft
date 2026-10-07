@@ -6,6 +6,13 @@ on:
   push:
     branches:
       - master
+      - feature/multi-group-wire
+      - feature/multi-group-multiplex
+      - feature/streaming-snapshot
+      - feature/multigroup-chaos
+      - feature/concurrent-readindex
+      - feature/streaming-data-plane
+      - feature/proposal-batching-benchmark
   workflow_dispatch:
 
 concurrency:
@@ -333,14 +340,6 @@ jobs:
             cmake --build "$build_dir" --parallel 2
             "$build_dir/turboraft_component_package_consumer"
           done
-
-      - name: Targeted production integration gates
-        shell: bash
-        run: |
-          set -euo pipefail
-          ctest --test-dir .ci/build/turboraft \
-            -R 'turboraft\.(flowmq_peer_service|multiprocess_chaos)$' \
-            --output-on-failure
 
       - name: Full Release CTest
         shell: bash

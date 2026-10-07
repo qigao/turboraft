@@ -147,26 +147,7 @@ jobs:
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json             --name github --username qigao --password "$GITHUB_TOKEN"             --store-password-in-clear-text --configfile "$config"
           dotnet restore packaging/nuget/TurboRaft.Native.csproj             --configfile "$config" --packages "$packages"
-          shopt -s nullglob
-          resolve_native_sdk() {
-            local package_id="$1"
-            local env_prefix="$2"
-            local package_dir="$packages/$package_id"
-            local versions=("$package_dir"/*)
-            if [[ "${#versions[@]}" -ne 1 ]]; then
-              echo "expected exactly one restored $package_id version, found ${#versions[@]}" >&2
-              exit 1
-            fi
-            local package_root="${versions[0]}"
-            local sdk_root="$package_root/sdk/linux-x64"
-            test -d "$sdk_root"
-            echo "${env_prefix}_ROOT=$sdk_root" >> "$GITHUB_ENV"
-            echo "${env_prefix}_SDK_VERSION=$(basename "$package_root")" >> "$GITHUB_ENV"
-          }
-          resolve_native_sdk salts.native SALTS
-          resolve_native_sdk saltsutils.native SALTS_UTILS
-          resolve_native_sdk flowmq.native FLOWMQ
-          resolve_native_sdk chttp.native CHTTP
+          python3 tools/ci/export_native_sdks.py --assets packaging/nuget/obj/project.assets.json --rid linux-x64
       - name: Restore vcpkg dependencies cache-only
         shell: bash
         run: |
@@ -250,19 +231,9 @@ jobs:
           '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
           dotnet restore packaging/nuget/TurboRaft.Native.csproj --configfile $config --packages $packages
-          function Export-NativeSdk([string]$PackageId, [string]$EnvPrefix) {
-            $packageDir = Join-Path $packages $PackageId
-            $versions = @(Get-ChildItem -LiteralPath $packageDir -Directory)
-            if ($versions.Count -ne 1) { throw "expected exactly one restored $PackageId version, found $($versions.Count)" }
-            $sdkRoot = Join-Path $versions[0].FullName "sdk\windows-x64"
-            if (-not (Test-Path -LiteralPath $sdkRoot -PathType Container)) { throw "missing $PackageId Windows SDK root: $sdkRoot" }
-            "${EnvPrefix}_ROOT=$sdkRoot" >> $env:GITHUB_ENV
-            "${EnvPrefix}_SDK_VERSION=$($versions[0].Name)" >> $env:GITHUB_ENV
-          }
-          Export-NativeSdk "salts.native" "SALTS"
-          Export-NativeSdk "saltsutils.native" "SALTS_UTILS"
-          Export-NativeSdk "flowmq.native" "FLOWMQ"
-          Export-NativeSdk "chttp.native" "CHTTP"
+          if ($LASTEXITCODE -ne 0) { throw "native SDK restore failed" }
+          python tools/ci/export_native_sdks.py --assets packaging/nuget/obj/project.assets.json --rid windows-x64
+          if ($LASTEXITCODE -ne 0) { throw "native SDK resolution failed" }
       - name: Restore vcpkg dependencies cache-only
         shell: pwsh
         run: |
@@ -453,27 +424,7 @@ jobs:
           </Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          shopt -s nullglob
-          resolve_native_sdk() {
-            local package_id="$1"
-            local env_prefix="$2"
-            local package_dir="$packages/$package_id"
-            local versions=("$package_dir"/*)
-            if [[ "${#versions[@]}" -ne 1 ]]; then
-              echo "expected exactly one restored $package_id version, found ${#versions[@]}" >&2
-              exit 1
-            fi
-            local package_root="${versions[0]}"
-            local sdk_root="$package_root/sdk/linux-x64"
-            test -d "$sdk_root"
-            echo "${env_prefix}_ROOT=$sdk_root" >> "$GITHUB_ENV"
-            echo "${env_prefix}_SDK_VERSION=$(basename "$package_root")" >> "$GITHUB_ENV"
-          }
-          resolve_native_sdk salts.native SALTS
-          resolve_native_sdk saltsutils.native SALTS_UTILS
-          resolve_native_sdk flowmq.native FLOWMQ
-          resolve_native_sdk chttp.native CHTTP
-          echo "TURBORAFT_ROOT=$packages/turboraft.native/${{ needs.metadata.outputs.package_version }}/sdk/linux-x64" >> "$GITHUB_ENV"
+          python3 tools/ci/export_native_sdks.py --assets "$RUNNER_TEMP/obj/project.assets.json" --rid linux-x64 --packages salts salts-utils flowmq chttp turboraft
       - name: Restore packed SDK on Windows
         if: matrix.os == 'windows'
         shell: pwsh
@@ -500,20 +451,9 @@ jobs:
           </Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages
-          function Export-NativeSdk([string]$PackageId, [string]$EnvPrefix) {
-            $packageDir = Join-Path $packages $PackageId
-            $versions = @(Get-ChildItem -LiteralPath $packageDir -Directory)
-            if ($versions.Count -ne 1) { throw "expected exactly one restored $PackageId version, found $($versions.Count)" }
-            $sdkRoot = Join-Path $versions[0].FullName "sdk\windows-x64"
-            if (-not (Test-Path -LiteralPath $sdkRoot -PathType Container)) { throw "missing $PackageId Windows SDK root: $sdkRoot" }
-            "${EnvPrefix}_ROOT=$sdkRoot" >> $env:GITHUB_ENV
-            "${EnvPrefix}_SDK_VERSION=$($versions[0].Name)" >> $env:GITHUB_ENV
-          }
-          Export-NativeSdk "salts.native" "SALTS"
-          Export-NativeSdk "saltsutils.native" "SALTS_UTILS"
-          Export-NativeSdk "flowmq.native" "FLOWMQ"
-          Export-NativeSdk "chttp.native" "CHTTP"
-          "TURBORAFT_ROOT=$packages\turboraft.native\${{ needs.metadata.outputs.package_version }}\sdk\windows-x64" >> $env:GITHUB_ENV
+          if ($LASTEXITCODE -ne 0) { throw "qualification SDK restore failed" }
+          python tools/ci/export_native_sdks.py --assets "$env:RUNNER_TEMP/obj/project.assets.json" --rid windows-x64 --packages salts salts-utils flowmq chttp turboraft
+          if ($LASTEXITCODE -ne 0) { throw "qualification SDK resolution failed" }
       - name: Restore qualification vcpkg dependencies
         shell: bash
         if: matrix.os == 'linux'

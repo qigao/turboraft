@@ -219,14 +219,6 @@ jobs:
           set -euo pipefail
           cmake --build ".ci/build-${{ matrix.name }}/turboraft" --parallel 2
 
-      - name: Run focused production gates with ${{ matrix.name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ctest --test-dir ".ci/build-${{ matrix.name }}/turboraft" \
-            -R 'turboraft\.(flowmq_peer_service|multiprocess_chaos|apply_ack|cflow_state_machine)$' \
-            --output-on-failure
-
       - name: Run full CTest with ${{ matrix.name }}
         shell: bash
         run: |

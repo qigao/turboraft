@@ -2,6 +2,12 @@ name: TurboRaft native SDK release
 
 on:
   push:
+    branches: [master]
+    paths:
+      - "CMakeLists.txt"
+      - "vcpkg.json"
+      - ".github/workflows/native-sdk-pipeline.yml"
+      - ".github/workflows/native-sdk-release.yml"
     tags:
       - "v*"
 
@@ -15,6 +21,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.ref_type == 'tag' || startsWith(github.event.head_commit.message, 'release:')
     uses: ./.github/workflows/native-sdk-pipeline.yml
     with:
       publish: true

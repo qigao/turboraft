@@ -18,11 +18,11 @@ same change.
 
 | Profile | Runner / toolchain | Dependency contract | Required evidence |
 | --- | --- | --- | --- |
-| Linux Release | `ubuntu-latest`, GCC (current hosted image) | current Salts `master`, SaltsUtils `master`, FlowMQ `main`, CHttp `master`; x64-linux vcpkg baseline below | configure/build, focused production integration, full CTest, SDK install, installed Core/CFlow/FlowMQ/ControlPlane consumers |
-| Linux ASan | `ubuntu-latest`, GCC Debug + AddressSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs are intentionally **not** ASan-instrumented so TurboRaft owns the sanitizer runtime | focused production gates + complete CTest inventory under ASan |
-| Linux UBSan | `ubuntu-latest`, GCC Debug + UndefinedBehaviorSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs are intentionally uninstrumented to avoid mixed sanitizer runtimes | focused production gates + complete CTest inventory under UBSan |
-| Linux TSan | `ubuntu-latest`, GCC Debug + ThreadSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs remain uninstrumented so TurboRaft owns the TSan runtime | focused production gates + complete CTest inventory under TSan |
-| Windows Release | `windows-2025`, x64 MSVC via `VsDevCmd` + Ninja using the shared v145 triplet | latest published Salts.Native / SaltsUtils.Native roots, current FlowMQ `main`, CHttp `master`, canonical shared-cache triplet | MSVC configure/build, focused production gates, full CTest, SDK install, installed Core/FlowMQ/ControlPlane consumers |
+| Linux Release | `ubuntu-latest`, GCC (current hosted image) | current Salts `master`, SaltsUtils `master`, FlowMQ `main`, CHttp `master`; x64-linux vcpkg baseline below | configure/build, full CTest once (including production integration), SDK install, installed Core/CFlow/FlowMQ/ControlPlane consumers |
+| Linux ASan | `ubuntu-latest`, GCC Debug + AddressSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs are intentionally **not** ASan-instrumented so TurboRaft owns the sanitizer runtime | complete CTest inventory once under ASan |
+| Linux UBSan | `ubuntu-latest`, GCC Debug + UndefinedBehaviorSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs are intentionally uninstrumented to avoid mixed sanitizer runtimes | complete CTest inventory once under UBSan |
+| Linux TSan | `ubuntu-latest`, GCC Debug + ThreadSanitizer | current Salts / SaltsUtils / CHttp source branches; dependency Debug SDKs remain uninstrumented so TurboRaft owns the TSan runtime | complete CTest inventory once under TSan |
+| Windows Release | `windows-2025`, x64 MSVC via `VsDevCmd` + Ninja using the shared v145 triplet | latest published Salts.Native / SaltsUtils.Native roots, current FlowMQ `main`, CHttp `master`, canonical shared-cache triplet | MSVC configure/build, full CTest once, SDK install, installed Core/FlowMQ/ControlPlane consumers |
 
 Qualification evidence on 2026-09-23:
 
@@ -134,7 +134,7 @@ ASan-instrumented first-party SDK and makes sanitizer failures attributable to
 the product under test.
 
 The hosted GCC/ThreadSanitizer combination is qualified by PR #122. TSan uses
-the same focused production gates and full CTest inventory as ASan/UBSan, with
+the same full CTest inventory as ASan/UBSan, with
 first-party dependency Debug SDKs left uninstrumented so reports are
 attributable to TurboRaft rather than mixed sanitizer runtimes.
 
@@ -156,7 +156,9 @@ inventory, and installed-package verification where installation is supported.
 
 ## CI ownership
 
-The matrix maps directly to these workflows:
+The matrix maps directly to these workflows. Each Release or sanitizer job
+runs its complete CTest inventory once; the focused production tests are
+included in that inventory.
 
 - `.github/workflows/full-stack-acceptance.yml` — Linux Release and installed
   package contracts.
@@ -171,3 +173,43 @@ A pull request that changes a supported dependency version, runner family,
 compiler profile, package root contract, or sanitizer policy must update this
 document together with the workflow change. Historical local runs do not
 override a failing hosted gate.
+
+### Workflow and test deduplication
+
+The FlowMQ, multiprocess chaos, apply acknowledgement, and CFlow gates are
+already part of full CTest. Separate focused invocations duplicated 18 test
+executions across the two Release jobs and three sanitizer variants.
+Different operating systems, sanitizers, source dependencies, and restored
+release SDKs remain separate qualification boundaries.
+
+The obsolete `multigroup-wire-verify.yml` compiled inline test programs and
+source stubs outside the normal build. Its feature-branch triggers now use
+`full-stack-acceptance.yml`, which builds production libraries and runs the
+maintained tests. The authoritative coverage is:
+
+| Retired inline scenario | Maintained CTest coverage / owner |
+| --- | --- |
+| Wire/group API and baseline handshake | `turboraft.multigroup_wire`, `turboraft.transport_contract`, `turboraft.peer_handshake` |
+| Bounded group scheduling and routing rejection | `turboraft.group_queue`, `turboraft.transport` |
+| Apply retry and completed ReadIndex queue | `turboraft.apply_runtime`, `turboraft.apply_ack`, `turboraft.service`, `turboraft.read_index` |
+| Streaming data | `turboraft.data_stream` |
+| Streaming snapshot source, sink, manager and policy | `turboraft.snapshot_sender`, `turboraft.snapshot_receiver`, `turboraft.snapshot_manager`, `turboraft.snapshot_manager_runtime`, `turboraft.snapshot_policy` |
+| Streaming WAL recovery | `turboraft.wal_storage` |
+| Three-process multi-group faults and sibling progress | `turboraft.multiprocess_chaos`, `turboraft.snapshot_group_isolation` |
+| Proposal batching | `turboraft.proposal_batch` |
+| Durability benchmark | `durable-fsync-benchmark.yml` |
+
+`native-sdk-release.yml` is the single release entry for version tags and
+`release:` commits on master; both reuse `native-sdk-pipeline.yml`. PR package
+qualification keeps its read-only entry and uses the same pipeline. The
+one-time v0.2.0 bootstrap was removed after the published release was verified;
+compatibility workflows still consume that release and retain their distinct
+fixtures. SDK root/version exports now share `tools/ci/export_native_sdks.py`,
+which reads the resolved NuGet assets rather than selecting a directory by
+name. Missing or ambiguous SDKs fail before any environment values are written.
+
+The maintained C/C++ test cases, native job IDs, and artifact names remain
+unchanged. If repository rules still require the retired `syntax` or bootstrap
+checks, remove those obsolete requirements when adopting this change. Revert
+the workflow refactor to restore the former entry points; no data or protocol
+migration is involved.

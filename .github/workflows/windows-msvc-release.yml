@@ -110,25 +110,19 @@ jobs:
           finally { Pop-Location }
           dotnet restore $project --configfile $config --packages $packages --no-cache
           if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
-          function Get-RestoredSdkRoot([string]$packageName) {
-            $roots = @(
-              Get-ChildItem -LiteralPath (Join-Path $packages $packageName) -Directory |
-                ForEach-Object { Join-Path $_.FullName "sdk\windows-x64" } |
-                Where-Object { Test-Path -LiteralPath $_ -PathType Container }
-            )
-            if ($roots.Count -ne 1) { throw "expected exactly one restored $packageName SDK, found $($roots.Count)" }
-            return ($roots[0] -replace '\\', '/')
-          }
-          $saltsRoot = Get-RestoredSdkRoot "salts.native"
-          $saltsUtilsRoot = Get-RestoredSdkRoot "saltsutils.native"
+          python tools/ci/export_native_sdks.py --assets "$env:RUNNER_TEMP/obj/project.assets.json" --rid windows-x64 --packages salts salts-utils
+          if ($LASTEXITCODE -ne 0) { throw "native SDK resolution failed" }
+
+      - name: Verify restored Salts SDK files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
           foreach ($path in @(
-            (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
-            (Join-Path $saltsUtilsRoot "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"),
-            (Join-Path $saltsUtilsRoot "bin\salts-idlc.exe"))) {
+            (Join-Path $env:SALTS_ROOT "lib\cmake\Salts\SaltsConfig.cmake"),
+            (Join-Path $env:SALTS_UTILS_ROOT "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"),
+            (Join-Path $env:SALTS_UTILS_ROOT "bin\salts-idlc.exe"))) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing restored SDK file: $path" }
           }
-          "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
-          "SALTS_UTILS_ROOT=$saltsUtilsRoot" >> $env:GITHUB_ENV
 
       - name: Bootstrap Windows vcpkg dependency union
         shell: pwsh
@@ -195,14 +189,6 @@ jobs:
           cmake -S . -B .ci\build\turboraft -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_APPLOCAL_DEPS=OFF -DBUILD_TESTING=ON -DBUILD_TESTS=ON -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF
           if errorlevel 1 exit /b 1
           cmake --build .ci\build\turboraft --parallel 2
-          if errorlevel 1 exit /b 1
-
-      - name: Run focused Windows production gates
-        shell: cmd
-        run: |
-          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          set "PATH=%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%FLOWMQ_ROOT%\bin;%CHTTP_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
-          ctest --test-dir .ci\build\turboraft -R "turboraft\.(flowmq_peer_service|multiprocess_chaos|apply_ack|cflow_state_machine)$" --output-on-failure
           if errorlevel 1 exit /b 1
 
       - name: Run full Windows Release CTest

@@ -20,6 +20,7 @@ on:
       - "CMakeUserPresets.json"
       - "presets/**"
       - "cmake/native-sdk.nuget.config"
+      - "tools/ci/**"
       - "packaging/nuget/TurboRaft.Native.csproj"
       - "vcpkg*.json"
 
@@ -100,30 +101,8 @@ jobs:
           dotnet restore packaging/nuget/TurboRaft.Native.csproj \
             --configfile cmake/native-sdk.nuget.config --packages "$packages" \
             --no-cache --force-evaluate 2>&1 | tee artifacts/sdk-restore.log
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          assets = json.loads(Path("packaging/nuget/obj/project.assets.json").read_text())
-          for package, key in (("Salts.Native", "SALTS"),
-                               ("SaltsUtils.Native", "SALTS_UTILS"),
-                               ("FlowMQ.Native", "FLOWMQ")):
-              entries = [(name, value) for name, value in assets["libraries"].items()
-                         if name.split("/")[0].lower() == package.lower()]
-              if len(entries) != 1:
-                  raise SystemExit(f"Expected one resolved {package}, got {len(entries)}")
-              name, entry = entries[0]
-              roots = [Path(folder) / entry["path"] / "sdk/linux-x64"
-                       for folder in assets["packageFolders"]]
-              roots = [root for root in roots if root.is_dir()]
-              if len(roots) != 1:
-                  raise SystemExit(f"Expected one linux-x64 SDK for {name}: {roots}")
-              with open(os.environ["GITHUB_ENV"], "a") as output:
-                  print(f"{key}_ROOT={roots[0]}", file=output)
-              with open("artifacts/campaign-metadata.txt", "a") as output:
-                  print(f"{key.lower()}_package={name}", file=output)
-          PY
+          python3 tools/ci/export_native_sdks.py --assets packaging/nuget/obj/project.assets.json \
+            --rid linux-x64 --packages salts salts-utils flowmq --metadata artifacts/campaign-metadata.txt
 
       - name: Record campaign reproduction
         shell: bash

@@ -5,6 +5,8 @@ on:
     paths:
       - "CMakeLists.txt"
       - "CMakeOptions.cmake"
+      - "CMakeUserPresets.json"
+      - "presets/**"
       - "cmake/**"
       - "include/**"
       - "src/**"
