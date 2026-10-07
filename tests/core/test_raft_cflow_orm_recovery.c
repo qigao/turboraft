@@ -138,53 +138,15 @@ static orm_status_t app_execute(
 
 static bool app_store_open(app_store_t *store, const char *filename)
 {
-    const char *plugin = getenv("TURBORAFT_ORM_PLUGIN");
-    const char *driver = getenv("TURBORAFT_ORM_DRIVER");
+    const char *plugin = getenv("ORM_SQLITE_PLUGIN");
     orm_runtime_config_t runtime_config;
     orm_driver_load_config_t load;
     orm_config_t config;
-    orm_option_t options[8];
-    size_t option_count = 0U;
+    orm_option_t option;
     orm_error_t error;
 
     if (store == NULL || filename == NULL || store->runtime != NULL ||
-        store->connection != NULL || plugin == NULL || plugin[0] == '\0' ||
-        driver == NULL) {
-        return false;
-    }
-    if (strcmp(driver, "sqlite") == 0) {
-        options[option_count++] = (orm_option_t){
-            orm_view("filename"), orm_view(filename)};
-    } else if (strcmp(driver, "postgresql") == 0) {
-        const char *conninfo = getenv("TURBORAFT_ORM_PG_CONNINFO");
-        if (conninfo == NULL || conninfo[0] == '\0') {
-            return false;
-        }
-        /* The isolated fixture uses libpq transport with explicit conninfo. */
-        options[option_count++] = (orm_option_t){
-            orm_view("turbodb_pg_transport"), orm_view("disabled")};
-        options[option_count++] = (orm_option_t){
-            orm_view("conninfo"), orm_view(conninfo)};
-    } else if (strcmp(driver, "mysql") == 0) {
-        static const char *keys[] = {
-            "host", "port", "username", "password", "database", "ca_file",
-            "server_name"};
-        static const char *variables[] = {
-            "ORM_MYSQL_HOST", "ORM_MYSQL_PORT", "ORM_MYSQL_USER",
-            "ORM_MYSQL_PASSWORD", "ORM_MYSQL_DATABASE", "ORM_MYSQL_CA_FILE",
-            "ORM_MYSQL_SERVER_NAME"};
-        size_t i;
-        for (i = 0U; i < sizeof(keys) / sizeof(keys[0]); ++i) {
-            const char *value = getenv(variables[i]);
-            if (value == NULL || value[0] == '\0') {
-                return false;
-            }
-            options[option_count++] = (orm_option_t){
-                orm_view(keys[i]), orm_view(value)};
-        }
-        options[option_count++] = (orm_option_t){
-            orm_view("timeout_ms"), orm_view("5000")};
-    } else {
+        store->connection != NULL || plugin == NULL || plugin[0] == '\0') {
         return false;
     }
     orm_error_init(&error);
@@ -198,7 +160,7 @@ static bool app_store_open(app_store_t *store, const char *filename)
     load.struct_size = (uint32_t)sizeof(load);
     load.abi_version = ORM_RUNTIME_ABI_VERSION;
     load.module_path = orm_view(plugin);
-    load.expected_driver_id = orm_view(driver);
+    load.expected_driver_id = orm_view("sqlite");
     if (orm_runtime_load_driver(store->runtime, &load, &error) !=
         ORM_STATUS_OK) {
         (void)orm_runtime_close(store->runtime, &error);
@@ -208,9 +170,11 @@ static bool app_store_open(app_store_t *store, const char *filename)
     }
 
     orm_config(&config);
-    config.driver = orm_view(driver);
-    config.options = options;
-    config.option_count = (uint32_t)option_count;
+    option.keyword = orm_view("filename");
+    option.value = orm_view(filename);
+    config.driver = orm_view("sqlite");
+    config.options = &option;
+    config.option_count = 1U;
     if (orm_runtime_connect(store->runtime, &config, &store->connection,
                             &error) != ORM_STATUS_OK) {
         (void)orm_runtime_close(store->runtime, &error);
@@ -252,10 +216,6 @@ static bool app_store_create_schema(app_store_t *store)
         "create table turboraft_test_journal("
         "log_index bigint primary key,term bigint not null,"
         "command_id bigint not null,payload blob not null)";
-    static const char pg_journal_schema[] =
-        "create table turboraft_test_journal("
-        "log_index bigint primary key,term bigint not null,"
-        "command_id bigint not null,payload bytea not null)";
     orm_error_t error;
 
     if (store == NULL || store->connection == NULL) {
@@ -266,9 +226,7 @@ static bool app_store_create_schema(app_store_t *store)
                        NULL, &error) == ORM_STATUS_OK &&
            app_execute(store->connection, NULL, state_seed, NULL, 0U,
                        NULL, &error) == ORM_STATUS_OK &&
-           app_execute(store->connection, NULL,
-                       strcmp(getenv("TURBORAFT_ORM_DRIVER"), "postgresql") == 0
-                           ? pg_journal_schema : journal_schema, NULL, 0U,
+           app_execute(store->connection, NULL, journal_schema, NULL, 0U,
                        NULL, &error) == ORM_STATUS_OK;
 }
 

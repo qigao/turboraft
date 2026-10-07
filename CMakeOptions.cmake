@@ -19,9 +19,6 @@ option(TURBORAFT_BUILD_FUZZERS
 option(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES
        "Build opt-in CFlow/Orm::C SQLite recovery and crash fixtures" OFF)
 
-option(TURBORAFT_ENABLE_ORM_LIVE_TESTS
-       "Build opt-in TurboDB ORM MySQL/PostgreSQL recovery tests" OFF)
-
 option(BUILD_BENCHMARKS "Build TurboRaft performance benchmarks" OFF)
 option(BUILD_EXAMPLES "Build TurboRaft examples" OFF)
 

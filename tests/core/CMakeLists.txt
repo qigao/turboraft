@@ -181,7 +181,7 @@ target_link_libraries(turboraft_cflow_snapshot_replay_tests
 add_test(NAME turboraft.cflow_snapshot_replay
          COMMAND turboraft_cflow_snapshot_replay_tests)
 
-if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES OR TURBORAFT_ENABLE_ORM_LIVE_TESTS)
+if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
   if(NOT DEFINED ENV{TURBODB_ROOT} OR
      "$ENV{TURBODB_ROOT}" STREQUAL "" OR
      NOT IS_DIRECTORY "$ENV{TURBODB_ROOT}")
@@ -199,31 +199,17 @@ if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES OR TURBORAFT_ENABLE_ORM_LIVE_TESTS)
                  test_raft_cflow_orm_recovery.c)
   target_link_libraries(turboraft_cflow_orm_recovery_tests
     PRIVATE TurboRaft::CFlowStateMachine Orm::C Salts::Coroutine Salts::TinyTest)
-  set(_turboraft_orm_drivers)
-  if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
-    list(APPEND _turboraft_orm_drivers sqlite)
+  set(_turboraft_sqlite_plugin
+      "${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_LIBRARY_SUFFIX}")
+  if(NOT EXISTS "${_turboraft_sqlite_plugin}")
+    message(FATAL_ERROR "Missing TurboDB ORM test driver: ${_turboraft_sqlite_plugin}")
   endif()
-  if(TURBORAFT_ENABLE_ORM_LIVE_TESTS)
-    list(APPEND _turboraft_orm_drivers mysql postgresql)
-  endif()
-  foreach(_driver IN LISTS _turboraft_orm_drivers)
-    set(_plugin "${TurboDB_DRIVER_DIR}/turbodb_driver_${_driver}${CMAKE_SHARED_LIBRARY_SUFFIX}")
-    if(NOT EXISTS "${_plugin}")
-      message(FATAL_ERROR "Missing requested TurboDB ORM driver: ${_plugin}")
-    endif()
-    add_test(NAME turboraft.cflow_orm_${_driver}_recovery
-             COMMAND turboraft_cflow_orm_recovery_tests)
-    set_tests_properties(turboraft.cflow_orm_${_driver}_recovery PROPERTIES
-      ENVIRONMENT "TURBORAFT_ORM_DRIVER=${_driver};TURBORAFT_ORM_PLUGIN=${_plugin}"
-      TIMEOUT 90 LABELS "orm;${_driver};recovery")
-  endforeach()
-  unset(_plugin)
-  unset(_driver)
-  unset(_turboraft_orm_drivers)
-  unset(_turboraft_turbodb_root)
-endif()
+  add_test(NAME turboraft.cflow_orm_sqlite_recovery
+           COMMAND turboraft_cflow_orm_recovery_tests)
+  set_tests_properties(turboraft.cflow_orm_sqlite_recovery PROPERTIES
+    ENVIRONMENT "ORM_SQLITE_PLUGIN=${_turboraft_sqlite_plugin}"
+    TIMEOUT 90 LABELS "orm;sqlite;recovery")
 
-if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
   add_executable(turboraft_orm_sqlite_crash_node
                  ../chaos/raft_orm_sqlite_crash_node.c)
   target_link_libraries(turboraft_orm_sqlite_crash_node PRIVATE Orm::C)
@@ -235,8 +221,10 @@ if(TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES)
   add_test(NAME turboraft.orm_sqlite_crash
            COMMAND turboraft_orm_sqlite_crash_tests)
   set_tests_properties(turboraft.orm_sqlite_crash PROPERTIES
-    ENVIRONMENT "TURBORAFT_ORM_SQLITE_CRASH_NODE=$<TARGET_FILE:turboraft_orm_sqlite_crash_node>;ORM_SQLITE_PLUGIN=${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_LIBRARY_SUFFIX}"
+    ENVIRONMENT "TURBORAFT_ORM_SQLITE_CRASH_NODE=$<TARGET_FILE:turboraft_orm_sqlite_crash_node>;ORM_SQLITE_PLUGIN=${_turboraft_sqlite_plugin}"
     TIMEOUT 60 LABELS "orm;sqlite;crash")
+  unset(_turboraft_sqlite_plugin)
+  unset(_turboraft_turbodb_root)
 endif()
 
 add_executable(turboraft_service_tests test_raft_service.c)

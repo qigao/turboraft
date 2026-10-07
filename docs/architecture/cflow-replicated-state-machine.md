@@ -24,7 +24,7 @@ CFlow V5 exact macrostep settlement
         |
         +--> optional app-owned durable materialization
              TurboDB 2.3.1+ / Orm::C
-             SQLite, MySQL, PostgreSQL
+             SQL execution + transactions
 ```
 
 TurboRaft Core remains consensus-only. It does not know SQL, ORM objects,
@@ -121,8 +121,8 @@ CFlow macrostep
     -> Core ack_applied(index)
 ```
 
-The same application-owned ORM recovery fixture runs against SQLite, MySQL and
-PostgreSQL. It commits domain rows, exact entry identity, journal payload and
+The application-owned ORM recovery fixture uses SQLite to verify the SQL
+transaction contract. It commits domain rows, exact entry identity, journal payload and
 the durable applied marker in one transaction. Database drivers, SQL dialects,
 connections and transactions belong to TurboDB, not to Core or CFlow.
 
@@ -194,7 +194,7 @@ fact being tested:
 | Process dies before SQLite commit | transaction/journal/state are absent after reopen | `turboraft.orm_sqlite_crash` crash-before-commit child |
 | Process dies after SQLite commit | durable state/identity survive and reconcile APPLIED | `turboraft.orm_sqlite_crash` crash-after-commit child |
 | Host commit succeeds but reply is lost | durable identity proves APPLIED; no blind retry | `turboraft.cflow_orm_sqlite_recovery` fail-after-commit / unknown reply |
-| Conflicting payload at an existing index | exact identity mismatch leaves Core unapplied | `turboraft.cflow_orm_{sqlite,mysql,postgresql}_recovery` |
+| Conflicting payload at an existing index | exact identity mismatch leaves Core unapplied | `turboraft.cflow_orm_sqlite_recovery` |
 | Durable app marker wins before Core applied ack | restart resumes after durable marker | `turboraft.apply_ack` durable-marker-before-Core-ack case |
 | Ready admitted but application not proven | volatile admission is forgotten and suffix replays | `turboraft.apply_ack` admitted-but-unapplied restart case |
 | Restart from snapshot plus committed suffix | reconstructed typed state and applied index equal uninterrupted execution | `turboraft.cflow_snapshot_replay` |

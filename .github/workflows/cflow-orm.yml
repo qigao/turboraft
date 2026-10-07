@@ -32,38 +32,6 @@ jobs:
   orm-recovery:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    services:
-      postgres:
-        image: postgres:17.6-alpine3.22
-        env:
-          POSTGRES_DB: turboraft_test
-          POSTGRES_USER: turboraft_test
-          POSTGRES_PASSWORD: test-only-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U turboraft_test -d turboraft_test"
-          --health-interval 5s --health-timeout 5s --health-retries 30
-      mysql:
-        image: mysql:8.0.40
-        env:
-          MYSQL_ROOT_PASSWORD: test-only-root
-          MYSQL_DATABASE: turboraft_test
-          MYSQL_USER: turboraft_test
-          MYSQL_PASSWORD: test-only-password
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -ptest-only-root"
-          --health-interval 5s --health-timeout 5s --health-retries 30
-    env:
-      TURBORAFT_ORM_PG_CONNINFO: "host=127.0.0.1 port=5432 dbname=turboraft_test user=turboraft_test password=test-only-password sslmode=disable connect_timeout=5"
-      ORM_MYSQL_HOST: "127.0.0.1"
-      ORM_MYSQL_PORT: "3306"
-      ORM_MYSQL_USER: turboraft_test
-      ORM_MYSQL_PASSWORD: test-only-password
-      ORM_MYSQL_DATABASE: turboraft_test
-      ORM_MYSQL_SERVER_NAME: localhost
     steps:
       - uses: actions/checkout@v4
       - name: Configure shared vcpkg binary cache
@@ -78,34 +46,13 @@ jobs:
           rid: linux-x64
           token: ${{ secrets.GITHUB_TOKEN }}
           orm: "true"
-      - name: Checkout TurboDB 2.3.1 TLS test fixtures
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/turbodb
-          ref: 5c2f332779f0eb4e7e457dc01fc2d2fac77975a3
-          path: .ci/turbodb-fixtures
-          sparse-checkout: tidessql/tests/protocol/fixtures
-          persist-credentials: false
       - name: Install host build tools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
-      - name: Configure verified MySQL TLS
-        env:
-          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
-        run: |
-          set -euo pipefail
-          fixture="$GITHUB_WORKSPACE/.ci/turbodb-fixtures/tidessql/tests/protocol/fixtures"
-          docker cp "$fixture/p256-test-root-cert.pem" "$MYSQL_CONTAINER:/var/lib/mysql/ca.pem"
-          docker cp "$fixture/p256-test-server-cert.pem" "$MYSQL_CONTAINER:/var/lib/mysql/server-cert.pem"
-          docker cp "$fixture/p256-test-server-key.pem" "$MYSQL_CONTAINER:/var/lib/mysql/server-key.pem"
-          docker exec --user root "$MYSQL_CONTAINER" chown mysql:mysql /var/lib/mysql/ca.pem /var/lib/mysql/server-cert.pem /var/lib/mysql/server-key.pem
-          docker exec --user root "$MYSQL_CONTAINER" chmod 600 /var/lib/mysql/server-key.pem
-          docker exec "$MYSQL_CONTAINER" mysql -uroot -ptest-only-root -e "ALTER INSTANCE RELOAD TLS;"
-          echo "ORM_MYSQL_CA_FILE=$fixture/p256-test-root-cert.pem" >> "$GITHUB_ENV"
       - name: Configure ORM qualification
         run: cmake --preset ci-linux-orm-user
       - name: Build complete configured graph
         run: cmake --build --preset ci-linux-orm-user --parallel 4
-      - name: Run SQLite, MySQL and PostgreSQL recovery plus SQLite process crashes
+      - name: Run SQL transaction recovery and process-crash tests
         run: ctest --preset ci-linux-orm-user --output-junit orm-results.xml
       - name: Upload ORM diagnostics
         if: always()

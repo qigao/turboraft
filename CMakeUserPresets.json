@@ -329,8 +329,7 @@
         "BUILD_TESTS": false,
         "BUILD_BENCHMARKS": false,
         "BUILD_EXAMPLES": false,
-        "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": false,
-        "TURBORAFT_ENABLE_ORM_LIVE_TESTS": false
+        "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": false
       }
     },
     {
@@ -417,7 +416,6 @@
       "binaryDir": "${sourceDir}/build/Msvc-Orm",
       "cacheVariables": {
         "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": true,
-        "TURBORAFT_ENABLE_ORM_LIVE_TESTS": false,
         "BUILD_TESTING": true,
         "BUILD_TESTS": true,
         "BUILD_EXAMPLES": false,
@@ -430,7 +428,6 @@
       "binaryDir": "${sourceDir}/.ci/build/turboraft-orm",
       "cacheVariables": {
         "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": true,
-        "TURBORAFT_ENABLE_ORM_LIVE_TESTS": true,
         "BUILD_TESTING": true,
         "BUILD_TESTS": true,
         "BUILD_EXAMPLES": false,

@@ -18,9 +18,9 @@ see the [design and configuration contract](docs/DESIGN.md#optional-multicore-or
 and [durable counter example](examples/multicore_node.c).
 
 Application database writes use [TurboDB ORM 2.3.1+](docs/architecture/turbodb-orm-state-machine.md)
-for SQLite, MySQL and PostgreSQL. Applications own the schema and atomically
+for SQL execution and transactions. Applications own the schema and atomically
 commit business rows, entry identity and the applied marker through `Orm::C`.
-Raft Core owns consensus; it does not call database-native clients.
+Database drivers and dialects belong to TurboDB. Raft Core owns consensus.
 
 ## Ownership model
 

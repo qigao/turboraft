@@ -1,10 +1,11 @@
 # TurboDB ORM database boundary
 
 All TurboRaft application database access goes through **TurboDB ORM 2.3.1 or
-newer**, linked as `Orm::C`. The qualified SQL backends are SQLite, MySQL and
-PostgreSQL. ORM does not supply a schema-less document/key-value backend.
-Database-native clients and driver implementation details remain inside
-TurboDB. Raft WAL files remain Raft consensus storage, separate from the
+newer**, linked as `Orm::C`. The integration boundary is SQL execution and
+transactions. Driver selection, connection configuration and SQL dialects remain
+inside TurboDB and the application bootstrap; TurboRaft does not maintain
+backend-specific adapters or a database-server CI matrix. ORM does not supply
+a schema-less document/key-value backend. Raft WAL files remain Raft consensus storage, separate from the
 application database.
 
 ## Ownership and transaction protocol
@@ -42,8 +43,8 @@ business mutation. A rollback/cleanup failure also requires explicit recovery.
 The repository's application-owned reference is
 [`test_raft_cflow_orm_recovery.c`](../../tests/core/test_raft_cflow_orm_recovery.c).
 It uses the public `orm_runtime_load_driver` / `orm_runtime_connect` APIs and
-portable `?N` parameter binding from TurboDB 2.3.1. Only the fixture's DDL binary
-column differs (`bytea` for PostgreSQL, `blob` for SQLite/MySQL). The fixture
+portable `?N` parameter binding from TurboDB 2.3.1. SQLite is the fixture's local
+SQL implementation, not an additional database API in Raft. The fixture
 uses signed SQL `BIGINT` indexes and rejects values above `INT64_MAX`; this is
 not a change to Core's unsigned index domain.
 
@@ -54,7 +55,7 @@ path and exposed a separate public component. Retaining it would preserve a
 non-SQL database boundary that this project no longer supports. Moving SQL or
 schema management into Core would instead couple consensus to application data.
 The chosen boundary keeps the existing generic state-machine SPI and provides
-one ORM recovery implementation qualified against all three SQL backends.
+one SQL transaction/recovery contract through ORM.
 There is no new universal SQL schema or parallel ORM wrapper in TurboRaft.
 
 This removes `TurboRaft::TurboDbRedisStateMachine`, its public header/functions,
@@ -67,10 +68,9 @@ no runtime database fallback. Wire, WAL and snapshot formats are unchanged.
 ## Configuration and qualification
 
 Set `TURBODB_ROOT` to the intended SDK. CMake requires version 2.3.1+, `Orm::C`
-and the selected installed driver modules. `TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES`
-enables local SQLite recovery/crash tests; `TURBORAFT_ENABLE_ORM_LIVE_TESTS`
-additionally registers MySQL/PostgreSQL tests. Missing requested SDKs, drivers
-or database settings fail explicitly.
+and the installed SQLite test driver. `TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES`
+enables the SQL recovery/crash tests. Missing requested SDKs or the test driver
+fail explicitly.
 
 Windows local validation, from a Visual Studio developer environment:
 
@@ -81,15 +81,11 @@ ctest --preset win-orm-user
 ```
 
 CI uses `ci-linux-orm-user`, builds the complete configured graph, and runs the
-four ORM CTest entries. The same recovery case checks rollback, commit-unknown
-reconciliation, conflicting identity rejection and absence of duplicate effects
-on all three databases. SQLite additionally verifies process termination before
-and after commit. The live tests require disposable databases: they create and
-drop only their `turboraft_test_state` and `turboraft_test_journal` tables, and
-fail if those tables already exist. MySQL settings use `ORM_MYSQL_HOST`, `PORT`,
-`USER`, `PASSWORD`, `DATABASE`, `CA_FILE`, `SERVER_NAME` with the `ORM_MYSQL_`
-prefix on each name. PostgreSQL uses `TURBORAFT_ORM_PG_CONNINFO`; its fixture
-selects the producer's explicit libpq transport. CTest supplies driver paths.
+two ORM CTest entries. The recovery case checks rollback, commit-unknown
+reconciliation, conflicting identity rejection and absence of duplicate effects.
+The process-crash fixture verifies termination before and after commit. Tests
+own temporary database files, create their own schema and remove it afterwards.
+CTest supplies the SQLite driver path from the installed TurboDB SDK.
 
 CI restores exactly `TurboDB.Native` 2.3.1, while Salts and SaltsUtils continue
 to resolve their latest published stable SDKs. References:
