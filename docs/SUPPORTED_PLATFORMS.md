@@ -63,7 +63,7 @@ The first-party dependency policy is:
 | --- | --- | --- | --- |
 | Salts | current `master` source | latest published Salts.Native SDK | `find_package(Salts CONFIG REQUIRED)` |
 | SaltsUtils | current `master` source | latest published SaltsUtils.Native SDK | `find_package(SaltsUtils CONFIG REQUIRED)`; supplies `salts-idlc` |
-| FlowMQ | current `main` source; package qualification resolves the latest stable FlowMQ.Native | current `main` source; package qualification resolves the latest stable FlowMQ.Native | `find_package(FlowMQ 1.2.1 CONFIG REQUIRED)`; TLS certificate/HELLO identity contract is required |
+| FlowMQ | current `main` source for source integration; Native package qualification restores the latest stable released FlowMQ.Native package | current `main` source for source integration; Native package qualification restores the latest stable released FlowMQ.Native package | `find_package(FlowMQ 1.2.1 CONFIG REQUIRED)`; TLS certificate/HELLO identity contract is required |
 | TurboDB | not a Core dependency | not a Core dependency | only opt-in Redis/SQLite application qualification workflows |
 
 TurboRaft source integration intentionally follows current first-party
@@ -92,11 +92,18 @@ silently rebuild a third-party dependency inside a consumer workflow.
 
 ## Package qualification
 
+CMake requires Salts 2.1+, SaltsUtils 4.2+, and FlowMQ 1.2.1+ when
+FlowMQ is selected. The SDKs must use a compatible dependency generation.
+
 TurboRaft 0.3.x publishes `TurboRaft.Native` for the release-qualified
-`linux-x64` and `windows-x64` SDKs only. The package resolves current stable NuGet
-dependencies on Salts.Native, SaltsUtils.Native, and FlowMQ.Native. CMake
-requires Salts 2.1+ and SaltsUtils 4.2+; FlowMQ must use the same SDK generation. macOS and Android remain intentionally absent until they
-gain hosted release qualification.
+`linux-x64` and `windows-x64` SDKs only. The release pipeline restores the
+latest stable released Salts.Native, SaltsUtils.Native, FlowMQ.Native, and
+CHttp.Native packages from a fresh package directory and records the exact
+resolved producer versions in each SDK manifest. These producer packages are
+build/qualification inputs rather than pinned transitive NuGet dependencies of
+`TurboRaft.Native`; installed consumers supply the explicit dependency roots
+required by their selected components. macOS and Android remain intentionally
+absent until they gain hosted release qualification.
 
 A build is not qualified merely because the repository itself compiles.
 
@@ -111,10 +118,10 @@ Installed consumers normalize `TURBORAFT_ROOT` before
 `find_package(TurboRaft ... PATHS ...)`, so the same package tests are valid
 on POSIX and Windows paths.
 
-`TurboRaft::FlowMQ` transitively requires FlowMQ >= 1.2.1, including its
-certificate fingerprint capacity, TLS identity policy, and rejection counter
-APIs. NuGet restoration remains floating (`Version="*"`); the CMake minimum
-rejects incompatible SDKs before compilation.
+`TurboRaft::FlowMQ` requires a compatible FlowMQ SDK through the explicit
+`FLOWMQ_ROOT` package boundary. The Native qualification project restores the
+latest stable released FlowMQ.Native package instead of pinning a producer
+version in TurboRaft.
 
 ## Sanitizer policy
 

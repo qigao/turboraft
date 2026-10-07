@@ -14,9 +14,9 @@
     <NoWarn>$(NoWarn);NU5128</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" />
-    <PackageReference Include="SaltsUtils.Native" Version="*" />
-    <PackageReference Include="FlowMQ.Native" Version="*" />
+    <PackageReference Include="Salts.Native" Version="*" PrivateAssets="all" />
+    <PackageReference Include="SaltsUtils.Native" Version="*" PrivateAssets="all" />
+    <PackageReference Include="FlowMQ.Native" Version="*" PrivateAssets="all" />
     <PackageReference Include="CHttp.Native" Version="*" PrivateAssets="all" />
     <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="$(PackageRoot)/sdk/**/*" Pack="true" PackagePath="sdk/" />

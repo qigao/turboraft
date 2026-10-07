@@ -7,13 +7,16 @@ Release-qualified SDK payloads:
 - `sdk/linux-x64`
 - `sdk/windows-x64`
 
-First-party package dependencies resolve the latest stable release:
+First-party package policy:
 
-- Salts.Native (CMake requires 2.1+)
-- SaltsUtils.Native (CMake requires 4.2+)
-- FlowMQ.Native (built against the matching SDK generation)
+- release builds restore the latest stable released Salts.Native,
+  SaltsUtils.Native, FlowMQ.Native, and CHttp.Native packages;
+- TurboRaft.Native does not publish fixed transitive versions for those
+  producer packages;
+- the release SDK manifest records the exact producer versions resolved for
+  qualification evidence.
 
-The build records the resolved versions in `turboraft-sdk-manifest.txt`.
+CMake requires Salts 2.1+, SaltsUtils 4.2+, and FlowMQ 1.2.1+ when selected.
 CI configures, builds and installs through `native-sdk-linux-user` or
 `native-sdk-windows-user` and its matching `install-` build preset, with vcpkg
 manifest mode enabled. GmSSL-backed hashing is consumed through Salts::Core;
