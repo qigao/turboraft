@@ -396,6 +396,7 @@ if(TARGET Salts::CNet)
               src/transport/raft_cnet_identity.c
               src/transport/raft_cnet_channel.c
               src/transport/raft_cnet_managed_peer.c
+              src/transport/raft_cnet_peer_directory.c
               src/transport/raft_cnet_peer.c
               src/transport/raft_group_queue.c
               src/transport/raft_transport.c

@@ -1,6 +1,7 @@
 #include <turboraft/raft_cnet_peer.h>
 #include <turboraft/raft_cnet_channel.h>
 #include <turboraft/raft_cnet_managed_peer.h>
+#include <turboraft/raft_cnet_peer_directory.h>
 
 #include <type_traits>
 
@@ -40,6 +41,17 @@ static_assert(std::is_same<
     int (*)(tr_raft_cnet_managed_group_binding_t *,
             tr_raft_transport_t *)>::value,
     "Stable owner-bound Raft transport must survive managed dial generations");
+
+static_assert(std::is_same<
+    decltype(&tr_raft_cnet_peer_directory_transport_bind),
+    int (*)(tr_raft_cnet_directory_group_binding_t *,
+            tr_raft_transport_t *)>::value,
+    "Node/Group directory must preserve the canonical Raft Transport signature");
+static_assert(std::is_same<
+    decltype(&tr_raft_cnet_peer_directory_send),
+    int (*)(tr_raft_cnet_peer_directory_t *,
+            const tr_raft_transport_payload_t *)>::value,
+    "Peer directory keeps an exact typed C11/C++17 payload admission boundary");
 
 int main()
 {
