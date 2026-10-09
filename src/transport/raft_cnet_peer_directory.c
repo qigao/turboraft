@@ -217,6 +217,60 @@ int tr_raft_cnet_peer_directory_send(
     return tr_raft_cnet_managed_peer_send(peer, payload);
 }
 
+int tr_raft_cnet_peer_directory_receive(
+    void *ingress_context, const tr_raft_transport_payload_t *payload)
+{
+    tr_raft_cnet_directory_ingress_t *ingress =
+        (tr_raft_cnet_directory_ingress_t *)ingress_context;
+    tr_raft_cnet_channel_status_t status = {0};
+    tr_raft_node_id_t from = 0U;
+    tr_raft_node_id_t to = 0U;
+    tr_raft_cnet_managed_peer_t *authorized_peer = NULL;
+    size_t i;
+    int result;
+
+    if (ingress == NULL || ingress->directory == NULL ||
+        ingress->channel == NULL || ingress->on_payload == NULL ||
+        payload == NULL || payload->group_id == 0U)
+        return SALTS_EINVAL;
+
+    result = tr_directory_owner(ingress->directory);
+    if (result != SALTS_OK) return result;
+
+    /* Only this live TLS channel's CNet-verified identity is authoritative.
+     * An arbitrary remote HELLO or a raw caller-provided Node ID cannot
+     * authorize dispatch. This is the exact same owner as CNet progress. */
+    result = tr_raft_cnet_channel_get_status(ingress->channel, &status);
+    if (result != SALTS_OK) return result;
+    if (status.phase != TR_RAFT_CNET_CHANNEL_ACTIVE)
+        return SALTS_EBUSY;
+    if (status.authenticated_peer_node_id == 0U)
+        return SALTS_EPROTO;
+
+    result = tr_directory_payload_nodes(payload, &from, &to);
+    if (result != SALTS_OK) return result;
+    if (from != status.authenticated_peer_node_id ||
+        to != ingress->directory->config.local_node_id)
+        return SALTS_EPROTO;
+
+    for (i = 0U; i < ingress->directory->config.group_count; ++i) {
+        if (ingress->directory->config.groups[i] == payload->group_id)
+            break;
+    }
+    if (i == ingress->directory->config.group_count)
+        return SALTS_ENOENT;
+
+    result = tr_raft_cnet_peer_directory_lookup(
+        ingress->directory, from, &authorized_peer);
+    if (result != SALTS_OK) return result;
+    if (authorized_peer == NULL) return SALTS_ENOENT;
+
+    /* Borrowed payload is valid during this callback only; do not mutate
+     * another Raft group's Service outside its owner. Host explicitly
+     * chooses a bounded mailbox adapter if CNet and Raft owners differ. */
+    return ingress->on_payload(ingress->context, payload);
+}
+
 static int tr_directory_group_enqueue(void *context,
                                        const tr_raft_message_t *message)
 {

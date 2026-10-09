@@ -75,6 +75,32 @@ int tr_raft_cnet_peer_directory_send(
     tr_raft_cnet_peer_directory_t *directory,
     const tr_raft_transport_payload_t *payload);
 
+/*
+ * Verified inbound callback adapter for a single CNet Owner. This may be
+ * installed directly as tr_raft_cnet_channel_config.on_payload, after the
+ * caller creates a Channel and fills this address-stable context.
+ *
+ * The Channel supplies *CNet-authenticated* Node ID and ACTIVE proof; do NOT
+ * pass caller-claimed Node IDs or certificate strings as the authority.
+ * Checks source Node == authenticated peer, destination == this local Node,
+ * strict final Owner assignment, and the explicitly allowed Group before
+ * forwarding the borrowed payload to on_payload.
+ *
+ * on_payload executes on the CNet progress Owner and MUST either consume it
+ * synchronously or submit a bounded owned copy to the group's distinct Raft
+ * Owner. Direct cross-thread Service mutation and unbounded queuing are
+ * forbidden. No extra TLS parser, Reactor or payload storage is introduced.
+ */
+typedef struct tr_raft_cnet_directory_ingress {
+    tr_raft_cnet_peer_directory_t *directory;
+    tr_raft_cnet_channel_t *channel; /* exact live TLS connection, borrowed */
+    tr_raft_transport_payload_handler_fn on_payload; /* bounded Owner sink */
+    void *context; /* borrowed until final callback */
+} tr_raft_cnet_directory_ingress_t;
+
+int tr_raft_cnet_peer_directory_receive(
+    void *ingress_context, const tr_raft_transport_payload_t *payload);
+
 /* One long-lived Service Transport self routes each message.to to its exact
  * preauthorized ManagedPeer. No per-generation Channel pointers are retained;
  * bind preserves the caller's Snapshot adapter and refuses a second bind.

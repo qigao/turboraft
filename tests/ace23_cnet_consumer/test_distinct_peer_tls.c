@@ -1,4 +1,5 @@
 #include <turboraft/raft_cnet_channel.h>
+#include <turboraft/raft_cnet_peer_directory.h>
 
 #include <cmeta_error.h>
 #include <tinytest.h>
@@ -35,6 +36,13 @@ typedef struct identity_fixture {
     cnet_client server;
     cnet_listener listener;
     cnet_tls_server server_tls;
+    cnet_manager directory_manager;
+    tr_raft_cnet_managed_peer_t *authorized_peers[LINK_COUNT];
+    tr_raft_cnet_peer_directory_entry_t authorized_routes[LINK_COUNT];
+    tr_raft_cnet_peer_directory_t directory;
+    tr_raft_group_id_t admitted_groups[LINK_COUNT];
+    tr_raft_cnet_directory_ingress_t ingress[LINK_COUNT];
+    cnet_tls_client_config directory_profiles[LINK_COUNT];
     tr_raft_cnet_channel_t *outbound[LINK_COUNT];
     tr_raft_cnet_channel_t *inbound[LINK_COUNT];
     cnet_connection outbound_handles[LINK_COUNT];
@@ -50,6 +58,7 @@ typedef struct identity_fixture {
     remote_probe clients_received[LINK_COUNT];
     server_probe server_received;
     int clients_live, server_live, listener_live, server_tls_live;
+    int directory_manager_live;
     int accepted;
 } identity_fixture;
 
@@ -167,6 +176,18 @@ static int fixture_cleanup(identity_fixture *f)
         if (f->inbound[i] != NULL)
             CLEAN_STEP(tr_raft_cnet_channel_destroy(f->inbound[i]));
     }
+    /* No registered Service/Channel may retain a borrowed Directory once
+     * it is destroyed. Route providers never opened sockets of their own. */
+    if (f->directory.active)
+        CLEAN_STEP(tr_raft_cnet_peer_directory_destroy(&f->directory));
+    for (i = 0U; i < LINK_COUNT; ++i) {
+        if (f->authorized_peers[i] != NULL) {
+            CLEAN_STEP(tr_raft_cnet_managed_peer_stop(f->authorized_peers[i]));
+            CLEAN_STEP(tr_raft_cnet_managed_peer_destroy(f->authorized_peers[i]));
+        }
+    }
+    if (f->directory_manager_live)
+        CLEAN_STEP(cnet_manager_destroy(&f->directory_manager));
     if (f->clients_live) CLEAN_STEP(cnet_client_destroy(&f->clients));
     if (f->server_live) CLEAN_STEP(cnet_client_destroy(&f->server));
     if (f->listener_live) {
@@ -246,6 +267,67 @@ static int run_two_distinct_peers(int forge_node_three)
         result = SALTS_EINVAL; failed_stage = "format TLS URI"; goto cleanup;
     }
 
+    /*
+     * Route preflight runs on the SAME CNet Owner as incoming server TLS.
+     * Authorized ManagedPeer descriptors are real Salts::Manager/ManagedDial
+     * instances, but remain undialed: inbound accepted streams use the
+     * listener's CNet lifecycle, never a hidden outbound connection.
+     */
+    {
+        cnet_manager_config manager = {
+            sizeof(cnet_manager_config), CNET_MANAGER_VERSION,
+            &f.server, LINK_COUNT, LINK_COUNT
+        };
+        tr_raft_cnet_peer_directory_config_t directory_config = {0};
+
+        TRY_STAGE(cnet_manager_init(&f.directory_manager, &manager));
+        f.directory_manager_live = 1;
+        for (i = 0U; i < LINK_COUNT; ++i) {
+            tr_raft_cnet_managed_peer_config_t cfg = {0};
+            cnet_reconnect_config reconnect = {0};
+
+            f.directory_profiles[i].size = sizeof(f.directory_profiles[i]);
+            f.directory_profiles[i].ca_file = ca_file;
+            f.directory_profiles[i].server_name = "node-2.mesh";
+            reconnect.size = sizeof(reconnect);
+            reconnect.version = CNET_RECOVERY_POLICY_VERSION;
+            reconnect.max_attempts = 2U;
+            reconnect.deadline_ms = UINT64_MAX - 1U;
+            reconnect.initial_backoff_ms = 4U;
+            reconnect.maximum_backoff_ms = 16U;
+            reconnect.jitter_seed = i + 1U;
+            cfg.manager = &f.directory_manager;
+            cfg.channel.client = &f.server;
+            cfg.channel.identity = &f.server_policy;
+            cfg.channel.handshake = hello_config(2U);
+            cfg.channel.first_outbound_message_id = 1U;
+            cfg.channel.on_payload = on_server_payload;
+            cfg.channel.payload_context = &f.server_received;
+            cfg.expected_peer_node_id = NODE_IDS[i];
+            cfg.uri = "tls://127.0.0.1:1"; /* reserved, never dialed */
+            cfg.tls = &f.directory_profiles[i];
+            cfg.reconnect = reconnect;
+            cfg.recovery_episode_ms = 1000U;
+            TRY_STAGE(tr_raft_cnet_managed_peer_create(
+                &cfg, &f.authorized_peers[i]));
+            f.authorized_routes[i].node_id = NODE_IDS[i];
+            f.authorized_routes[i].peer = f.authorized_peers[i];
+            f.admitted_groups[i] = 100U + NODE_IDS[i];
+        }
+
+        directory_config.version = TR_RAFT_CNET_PEER_DIRECTORY_VERSION;
+        directory_config.local_node_id = 2U;
+        directory_config.owner_index = 0U;
+        directory_config.owner_count = 1U;
+        directory_config.identities = &f.server_policy;
+        directory_config.entries = f.authorized_routes;
+        directory_config.entry_count = LINK_COUNT;
+        directory_config.groups = f.admitted_groups;
+        directory_config.group_count = LINK_COUNT;
+        TRY_STAGE(tr_raft_cnet_peer_directory_init(
+            &f.directory, &directory_config));
+    }
+
     f.server_channel_config.client = &f.server;
     f.server_channel_config.identity = &f.server_policy;
     f.server_channel_config.handshake = hello_config(2U);
@@ -302,9 +384,31 @@ static int run_two_distinct_peers(int forge_node_three)
             TRY_STAGE(cnet_listener_wait(&f.listener, 0U, &ready));
             if (ready) {
                 const size_t position = (size_t)f.accepted;
+                tr_raft_cnet_channel_config_t verified = f.server_channel_config;
+                tr_raft_transport_payload_t preauth = {0};
                 cnet_observer observer;
+
+                f.ingress[position].directory = &f.directory;
+                f.ingress[position].on_payload = on_server_payload;
+                f.ingress[position].context = &f.server_received;
+                verified.on_payload = tr_raft_cnet_peer_directory_receive;
+                verified.payload_context = &f.ingress[position];
                 TRY_STAGE(tr_raft_cnet_channel_create(
-                    &f.server_channel_config, &f.inbound[position]));
+                    &verified, &f.inbound[position]));
+                f.ingress[position].channel = f.inbound[position];
+
+                /* Even a known Node/Group cannot enter before this exact
+                 * TLS Channel has successfully negotiated reciprocal ACK. */
+                preauth.group_id = 101U;
+                preauth.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+                preauth.data.raft.from = 1U;
+                preauth.data.raft.to = 2U;
+                if (tr_raft_cnet_peer_directory_receive(
+                        &f.ingress[position], &preauth) != SALTS_EBUSY) {
+                    result = SALTS_EPROTO;
+                    failed_stage = "pre-TLS directory ingress admission";
+                    goto cleanup;
+                }
                 observer = tr_raft_cnet_channel_observer(f.inbound[position]);
                 TRY_STAGE(cnet_listener_accept_tls(
                     &f.listener, &f.server, &f.server_tls,
@@ -426,6 +530,10 @@ static int run_two_distinct_peers(int forge_node_three)
             }
         }
 
+        if (forge_node_three && sent &&
+            f.server_received.received_from_one == 1U &&
+            f.clients_received[0].received == 1U)
+            break;
         if (sent && f.server_received.received_from_one == 1U &&
             f.server_received.received_from_three == 1U &&
             f.clients_received[0].received == 1U &&
