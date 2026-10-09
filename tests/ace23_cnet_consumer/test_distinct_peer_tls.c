@@ -495,6 +495,42 @@ static int run_two_distinct_peers(int forge_node_three)
             }
             if (!forge_node_three && both_clients_ready &&
                 both_server_links_ready) {
+                /* Reject inconsistent Node/Group even if the TLS channel
+                 * itself is authenticated and the connection is ACTIVE.
+                 * No invalid payload reaches the borrowed Service sink. */
+                for (i = 0U; i < LINK_COUNT; ++i) {
+                    tr_raft_cnet_channel_status_t st = {0};
+                    tr_raft_transport_payload_t invalid = {0};
+                    TRY_STAGE(tr_raft_cnet_channel_get_status(f.inbound[i], &st));
+                    invalid.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+                    invalid.group_id = 100U + st.authenticated_peer_node_id;
+                    invalid.data.raft.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+                    invalid.data.raft.term = 3U;
+                    invalid.data.raft.from =
+                        st.authenticated_peer_node_id == 1U ? 3U : 1U;
+                    invalid.data.raft.to = 2U;
+                    if (tr_raft_cnet_peer_directory_receive(
+                            &f.ingress[i], &invalid) != SALTS_EPROTO) {
+                        result = SALTS_EPROTO;
+                        failed_stage = "valid TLS cannot forge another source";
+                        goto cleanup;
+                    }
+                    invalid.data.raft.from = st.authenticated_peer_node_id;
+                    invalid.group_id = 999U;
+                    if (tr_raft_cnet_peer_directory_receive(
+                            &f.ingress[i], &invalid) != SALTS_ENOENT) {
+                        result = SALTS_EPROTO;
+                        failed_stage = "valid TLS cannot enter unknown Group";
+                        goto cleanup;
+                    }
+                }
+                if (f.server_received.received_from_one != 0U ||
+                    f.server_received.received_from_three != 0U ||
+                    f.server_received.wrong_payloads != 0U) {
+                    result = SALTS_EPROTO;
+                    failed_stage = "invalid ingress reached Service callback";
+                    goto cleanup;
+                }
                 /* Correlate each server connection to its *TLS-authenticated*
                  * Node ID, never to accept order or a raw caller-supplied name. */
                 for (i = 0U; i < LINK_COUNT; ++i) {

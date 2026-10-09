@@ -290,16 +290,49 @@ itself rejects an unapproved Group **before** a Runtime begins. The
 directory creates no socket, credits, scheduler thread, storage writer
 or dynamic Plugin generation.
 
-The initial qualification uses two **different authorized IDs,
-Node 1 and Node 3**, backed by two real but not-connected ManagedPeer
-objects, and validates directory preflight, fixed Owner placement,
-cross-thread rejection, routing capacity non-mutation and C11/C++17
-ABI. This alone does not prove two distinct remote TLS identities
-were connected: the separate loopback suite covers real mTLS
-and multiple links, but still needs a true distinct-node peer-service
-conformance test. The larger cross-Owner dispatch must go through
-the existing bounded owner mailbox; this directory is deliberately
-**not** a cross-thread transport.
+The route-preflight fixture uses distinct Node 1 / Node 3 authorizations
+and two real but undialed ManagedPeer records to prove duplicate rejection,
+strict Owner selection, Group gating, cross-thread denial and zero Manager
+credit mutation. Separately, the executed [distinct-node mTLS acceptance
+lane](https://github.com/qigao/turboraft/actions/runs/37978488299) uses
+**two different real client certificates**, one for Node 1 and one rotated
+client certificate explicitly assigned to Node 3, connecting to Node 2.
+Two fully negotiated TLS/HELLO/ACK channels exchange independent Raft
+Group 101/103 messages; a valid client certificate claiming the wrong
+Node ID is rejected while the healthy Node remains ready.
+
+Ingress now has one optional typed callback gate:
+`tr_raft_cnet_peer_directory_receive`. The caller installs it as the
+authenticated CNet Channel's `on_payload`, with one address-stable
+`tr_raft_cnet_directory_ingress_t` that borrows **that exact live
+Channel** plus the immutable Directory. It asks CNet Channel status
+for the verified Node ID and ACTIVE phase, then checks payload source,
+local destination, authorized Group and strict CNet Owner against the
+Directory **before** invoking the supplied bounded Owner callback.
+No caller-provided fingerprint or raw HELLO may grant authorization.
+
+```c
+tr_raft_cnet_directory_ingress_t ingress = {
+    .directory = &directory,
+    .on_payload = bounded_owner_route,
+    .context = owner_route_context
+};
+tr_raft_cnet_channel_config_t peer = authenticated_channel_config;
+peer.on_payload = tr_raft_cnet_peer_directory_receive;
+peer.payload_context = &ingress;
+tr_raft_cnet_channel_t *channel = NULL;
+/* tr_raft_cnet_channel_create(&peer, &channel); */
+ingress.channel = channel; /* before CNet connect/accept callbacks */
+```
+
+The callback validates a real TLS Channel before forwarding, and never
+starts a second acceptor, thread, scheduler, queue or Plugin generation.
+The bounded sink must remain on this CNet Owner, or explicitly transfer
+owned bytes through the *existing* Raft Owner mailbox before mutating a
+Service. The two logical clients currently share one network test Owner:
+this qualifies simultaneous distinct certificate identity, **not**
+cross-Owner transfer, client-pool lease arbitration or full multi-peer
+Cluster membership. Those remain open.
 
 ## 5. Multicore and CFlow boundary
 

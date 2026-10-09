@@ -50,7 +50,12 @@ Database drivers and dialects belong to TurboDB. Raft Core owns consensus.
   Groups to one fixed CNet Owner using upstream strict-key placement; a known
   foreign-owner peer is not silently stolen when local capacity is exhausted.
   It dispatches through the existing owner-bound Raft Transport callback,
-  without introducing a global registry or second queue.
+  without introducing a global registry or second queue. Incoming data may
+  use `tr_raft_cnet_peer_directory_receive`: only the *live TLS Channel's*
+  authenticated Node ID and reciprocal READY state authorize its Group before
+  the bounded Owner callback runs. Real distinct-cert Node1/Node3 mTLS and
+  wrong-node rejection are qualified in the isolated ACE 2.3 RC test lane;
+  actual cross-Owner mailboxes and full snapshot recovery remain separate.
 - `TurboRaft::FlowMQ` owns one FlowMQ context, one ROUTER, and one DEALER per
   peer. `tr_raft_flowmq_peer_service_step()` drives all progress on the caller's
   owner thread.
@@ -78,7 +83,7 @@ Configure requires active-profile installations provided through:
 The supplied user presets resolve Debug and Release profiles independently and
 use `NO_DEFAULT_PATH` for first-party package discovery. **This development
 branch requires Salts 2.3.0 EXACT with Component/ComponentPlugin/Plugin and
-SaltsUtils 4.3.0 EXACT.** No Salts 2.2 fallback is accepted. For the static Component slice, the published prerelease
+SaltsUtils 4.3.0 EXACT.** No Salts 2.2 fallback is accepted. For the isolated Component/CNet qualification, the published prerelease
 Salts.Native 2.3.0-rc.1 (source 58ff08fc95b4aa1dc493c0b7080426b2c11d4959)
 and SaltsUtils.Native 4.3.0-rc.1 are an explicit, exact **testing**
 baseline. This does not certify the long-lived Draft ACE pattern branch
