@@ -32,7 +32,7 @@ add_test(NAME turboraft.ace23_cnet_identity_policy
 
 add_executable(turboraft_ace23_cnet_identity_tls test_identity_tls.c)
 target_link_libraries(turboraft_ace23_cnet_identity_tls
-                      PRIVATE TurboRaft::CNet Salts::TinyTest)
+                      PRIVATE TurboRaft::CNet Salts::Platform Salts::TinyTest)
 target_compile_definitions(turboraft_ace23_cnet_identity_tls PRIVATE
     TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
 add_test(NAME turboraft.ace23_cnet_identity_tls

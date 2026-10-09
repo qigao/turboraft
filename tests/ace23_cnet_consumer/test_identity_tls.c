@@ -1,5 +1,8 @@
 #include <turboraft/raft_cnet_identity.h>
 #include <cnet/handoff.h>
+#include <salts/thread.h>
+
+#include <stdatomic.h>
 
 #include <cmeta_error.h>
 #include <tinytest.h>
@@ -19,6 +22,7 @@ enum {
     TLS_CASE_WRONG_CERTIFICATE,
     TLS_CASE_FORGED_NODE_ID,
     TLS_CASE_BOUNDED_HANDOFF,
+    TLS_CASE_THREADED_HANDOFF,
     TLS_PROGRESS_MAX = 4000
 };
 
@@ -51,6 +55,9 @@ struct tls_fixture {
     cnet_tls_server tls_server;
     cnet_handoff handoff;
     cnet_handoff_ticket ticket;
+    cmeta_thread_t accept_thread;
+    atomic_int accept_result;
+    atomic_bool accept_done;
     cnet_connection outbound;
     tls_probe_t client_probe;
     tls_probe_t server_probe;
@@ -64,6 +71,7 @@ struct tls_fixture {
     int listener_initialized;
     int tls_initialized;
     int handoff_initialized;
+    int accept_thread_started;
     /* 0 none, 1 reserved, 2 queued, 3 taken, 4 released. */
     int handoff_phase;
     int accepted;
@@ -246,6 +254,39 @@ static int tls_accept_via_handoff(
         &fixture->server_probe.connection);
 }
 
+/* Test-only ACE Acceptor / final-owner handoff: the listener belongs to this
+ * independent worker for the entire wait/detach/publish sequence. It never
+ * polls or invokes the final owner's CNet client, starts TLS, or touches Raft.
+ * CNet's existing bounded cnet_handoff is the ONLY cross-thread queue. */
+static void tls_handoff_accept_thread(void *context)
+{
+    tls_fixture_t *fixture = (tls_fixture_t *)context;
+    cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
+    int result = SALTS_ETIMEDOUT;
+    unsigned i;
+
+    for (i = 0U; i < 200U; ++i) {
+        int ready = 0;
+        int wait_result = cnet_listener_wait(&fixture->listener, 5U, &ready);
+        if (wait_result != SALTS_OK) {
+            result = wait_result;
+            break;
+        }
+        if (!ready) continue;
+
+        result = cnet_listener_accept_detached(&fixture->listener, &accepted);
+        if (result == SALTS_OK) {
+            result = cnet_handoff_publish(
+                &fixture->handoff, fixture->ticket, &accepted);
+            if (result != SALTS_OK)
+                (void)cnet_accepted_stream_close(&accepted);
+        }
+        break;
+    }
+    atomic_store_explicit(&fixture->accept_result, result, memory_order_release);
+    atomic_store_explicit(&fixture->accept_done, true, memory_order_release);
+}
+
 static int tls_case_run(int mode)
 {
     tls_fixture_t fixture = {0};
@@ -272,6 +313,8 @@ static int tls_case_run(int mode)
 } while (0)
 
     fixture.mode = mode;
+    atomic_init(&fixture.accept_result, SALTS_EBUSY);
+    atomic_init(&fixture.accept_done, false);
     fixture.local = tls_config(2U);
     fixture.client_probe.fixture = &fixture;
     fixture.client_probe.owner = &fixture.client;
@@ -308,7 +351,8 @@ static int tls_case_run(int mode)
     fixture.client_initialized = 1;
     TLS_TRY(cnet_listener_init(&fixture.listener, &listener_config));
     fixture.listener_initialized = 1;
-    if (mode == TLS_CASE_BOUNDED_HANDOFF) {
+    if (mode == TLS_CASE_BOUNDED_HANDOFF ||
+        mode == TLS_CASE_THREADED_HANDOFF) {
         cnet_handoff_config config = {
             sizeof(cnet_handoff_config), CNET_HANDOFF_VERSION, 1U, 1U
         };
@@ -346,10 +390,54 @@ static int tls_case_run(int mode)
         .user = &fixture.client_probe
     };
     TLS_TRY(cnet_connect(&fixture.client, &options, &fixture.outbound));
+    if (mode == TLS_CASE_THREADED_HANDOFF) {
+        TLS_TRY(cmeta_thread_create(
+            &fixture.accept_thread, tls_handoff_accept_thread, &fixture));
+        fixture.accept_thread_started = 1;
+    }
 
     for (iteration = 0U; iteration < TLS_PROGRESS_MAX; ++iteration) {
         TLS_TRY(cnet_client_poll(&fixture.client, 1U, &events));
-        if (!fixture.accepted) {
+        if (!fixture.accepted && mode == TLS_CASE_THREADED_HANDOFF) {
+            cnet_handoff_ticket taken = {0};
+            cnet_accepted_stream detached = CNET_ACCEPTED_STREAM_INIT;
+            int take_result = cnet_handoff_take(
+                &fixture.handoff, &taken, &detached);
+            if (take_result == SALTS_OK) {
+                const cnet_observer observer = {
+                    .on_state = tls_state,
+                    .on_receive = tls_receive,
+                    .user = &fixture.server_probe
+                };
+                fixture.handoff_phase = 3;
+                if (taken.incarnation != fixture.ticket.incarnation ||
+                    taken.generation != fixture.ticket.generation ||
+                    taken.slot != fixture.ticket.slot) {
+                    (void)cnet_accepted_stream_close(&detached);
+                    failed_stage = "cross-thread ticket identity";
+                    status = SALTS_EPROTO;
+                    goto cleanup;
+                }
+                TLS_TRY(cnet_client_adopt_accepted_tls(
+                    &fixture.server, &detached, &fixture.tls_server,
+                    &observer, &fixture.server_probe.connection));
+                fixture.accepted = 1;
+            } else if (take_result != SALTS_ENOENT) {
+                failed_stage = "cross-thread inbox take";
+                status = take_result;
+                goto cleanup;
+            }
+            if (!fixture.accepted &&
+                atomic_load_explicit(&fixture.accept_done, memory_order_acquire)) {
+                const int publish_result = atomic_load_explicit(
+                    &fixture.accept_result, memory_order_acquire);
+                if (publish_result != SALTS_OK) {
+                    failed_stage = "cross-thread accept/publish";
+                    status = publish_result;
+                    goto cleanup;
+                }
+            }
+        } else if (!fixture.accepted) {
             TLS_TRY(cnet_listener_wait(&fixture.listener, 0U, &ready));
             if (ready) {
                 const cnet_observer observer = {
@@ -406,7 +494,9 @@ static int tls_case_run(int mode)
             status = SALTS_EPROTO;
         }
     }
-    if (status == SALTS_OK && mode == TLS_CASE_BOUNDED_HANDOFF) {
+    if (status == SALTS_OK &&
+        (mode == TLS_CASE_BOUNDED_HANDOFF ||
+         mode == TLS_CASE_THREADED_HANDOFF)) {
         cnet_handoff_snapshot snapshot = {0};
         TLS_TRY(cnet_handoff_get_snapshot(&fixture.handoff, &snapshot));
         if (snapshot.reserved != 0U || snapshot.queued != 0U ||
@@ -417,6 +507,21 @@ static int tls_case_run(int mode)
     }
 
 cleanup:
+    /* Do not touch/destroy the listener until the independent accept owner
+     * has quiesced. Worker publishes through the existing MPSC only; a
+     * successful TAKEN credit survives until final CNet TLS shutdown. */
+    if (fixture.accept_thread_started) {
+        int join_status = cmeta_thread_join(&fixture.accept_thread);
+        if (status == SALTS_OK && join_status != SALTS_OK) {
+            status = join_status;
+            failed_stage = "cross-thread join";
+        }
+        cmeta_thread_destroy(&fixture.accept_thread);
+        if (atomic_load_explicit(&fixture.accept_result,
+                                 memory_order_acquire) == SALTS_OK &&
+            fixture.handoff_phase == 1)
+            fixture.handoff_phase = 2;
+    }
     if (fixture.client_initialized) {
         int close_status = cnet_client_stop(&fixture.client, 2000U);
         if (status == SALTS_OK && close_status != SALTS_OK) { status = close_status; failed_stage = "client stop"; }
@@ -524,5 +629,10 @@ spec("ACE 2.3 real CNet mTLS Raft Node ID admission")
     it("takes a bounded accepted stream and starts TLS on its final owner")
     {
         check_equal(tls_case_run(TLS_CASE_BOUNDED_HANDOFF), SALTS_OK);
+    }
+
+    it("hands a detached socket across real OS threads before owner-local TLS")
+    {
+        check_equal(tls_case_run(TLS_CASE_THREADED_HANDOFF), SALTS_OK);
     }
 }
