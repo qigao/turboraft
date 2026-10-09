@@ -1,4 +1,5 @@
 #include <turboraft/raft_cnet_identity.h>
+#include <cnet/handoff.h>
 
 #include <cmeta_error.h>
 #include <tinytest.h>
@@ -17,6 +18,7 @@ enum {
     TLS_CASE_VALID = 0,
     TLS_CASE_WRONG_CERTIFICATE,
     TLS_CASE_FORGED_NODE_ID,
+    TLS_CASE_BOUNDED_HANDOFF,
     TLS_PROGRESS_MAX = 4000
 };
 
@@ -47,6 +49,8 @@ struct tls_fixture {
     cnet_client server;
     cnet_listener listener;
     cnet_tls_server tls_server;
+    cnet_handoff handoff;
+    cnet_handoff_ticket ticket;
     cnet_connection outbound;
     tls_probe_t client_probe;
     tls_probe_t server_probe;
@@ -59,6 +63,9 @@ struct tls_fixture {
     int server_initialized;
     int listener_initialized;
     int tls_initialized;
+    int handoff_initialized;
+    /* 0 none, 1 reserved, 2 queued, 3 taken, 4 released. */
+    int handoff_phase;
     int accepted;
     int callback_error;
 };
@@ -204,6 +211,41 @@ static int tls_path(char *destination, size_t capacity, const char *name)
     return n > 0 && (size_t)n < capacity ? SALTS_OK : SALTS_ERANGE;
 }
 
+static int tls_accept_via_handoff(
+    tls_fixture_t *fixture, const cnet_observer *observer)
+{
+    cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
+    cnet_accepted_stream transferred = CNET_ACCEPTED_STREAM_INIT;
+    cnet_handoff_ticket taken = {0};
+    int status;
+
+    status = cnet_listener_accept_detached(&fixture->listener, &accepted);
+    if (status != SALTS_OK) return status;
+
+    /* Reserve/publish moves the accepted socket but creates no TLS state.
+     * Exactly one final CNet owner adopts TLS after taking the ticket. */
+    status = cnet_handoff_publish(
+        &fixture->handoff, fixture->ticket, &accepted);
+    if (status != SALTS_OK) {
+        (void)cnet_accepted_stream_close(&accepted);
+        return status;
+    }
+    fixture->handoff_phase = 2;
+    status = cnet_handoff_take(&fixture->handoff, &taken, &transferred);
+    if (status != SALTS_OK) return status;
+    fixture->handoff_phase = 3;
+    if (taken.incarnation != fixture->ticket.incarnation ||
+        taken.generation != fixture->ticket.generation ||
+        taken.slot != fixture->ticket.slot) {
+        (void)cnet_accepted_stream_close(&transferred);
+        return SALTS_EPROTO;
+    }
+
+    return cnet_client_adopt_accepted_tls(
+        &fixture->server, &transferred, &fixture->tls_server, observer,
+        &fixture->server_probe.connection);
+}
+
 static int tls_case_run(int mode)
 {
     tls_fixture_t fixture = {0};
@@ -266,6 +308,25 @@ static int tls_case_run(int mode)
     fixture.client_initialized = 1;
     TLS_TRY(cnet_listener_init(&fixture.listener, &listener_config));
     fixture.listener_initialized = 1;
+    if (mode == TLS_CASE_BOUNDED_HANDOFF) {
+        cnet_handoff_config config = {
+            sizeof(cnet_handoff_config), CNET_HANDOFF_VERSION, 1U, 1U
+        };
+        cnet_handoff_ticket extra = {0};
+        int capacity_result;
+        TLS_TRY(cnet_handoff_init(&fixture.handoff, &config));
+        fixture.handoff_initialized = 1;
+        TLS_TRY(cnet_handoff_reserve(&fixture.handoff, &fixture.ticket));
+        fixture.handoff_phase = 1;
+        capacity_result = cnet_handoff_reserve(&fixture.handoff, &extra);
+        if (capacity_result != SALTS_ENOBUFS) {
+            if (capacity_result == SALTS_OK)
+                (void)cnet_handoff_release(&fixture.handoff, extra);
+            failed_stage = "handoff credit bound";
+            status = SALTS_EPROTO;
+            goto cleanup;
+        }
+    }
     TLS_TRY(cnet_listener_port(&fixture.listener, &port));
     if (snprintf(uri, sizeof(uri), "tls://127.0.0.1:%u", (unsigned)port) <= 0) {
         status = SALTS_EINVAL;
@@ -296,9 +357,12 @@ static int tls_case_run(int mode)
                     .on_receive = tls_receive,
                     .user = &fixture.server_probe
                 };
-                TLS_TRY(cnet_listener_accept_tls(
-                    &fixture.listener, &fixture.server, &fixture.tls_server,
-                    &observer, &fixture.server_probe.connection));
+                if (mode == TLS_CASE_BOUNDED_HANDOFF)
+                    TLS_TRY(tls_accept_via_handoff(&fixture, &observer));
+                else
+                    TLS_TRY(cnet_listener_accept_tls(
+                        &fixture.listener, &fixture.server, &fixture.tls_server,
+                        &observer, &fixture.server_probe.connection));
                 fixture.accepted = 1;
             }
         }
@@ -342,6 +406,15 @@ static int tls_case_run(int mode)
             status = SALTS_EPROTO;
         }
     }
+    if (status == SALTS_OK && mode == TLS_CASE_BOUNDED_HANDOFF) {
+        cnet_handoff_snapshot snapshot = {0};
+        TLS_TRY(cnet_handoff_get_snapshot(&fixture.handoff, &snapshot));
+        if (snapshot.reserved != 0U || snapshot.queued != 0U ||
+            snapshot.taken != 1U || snapshot.connection_capacity != 1U) {
+            failed_stage = "handoff active ticket accounting";
+            status = SALTS_EPROTO;
+        }
+    }
 
 cleanup:
     if (fixture.client_initialized) {
@@ -369,6 +442,43 @@ cleanup:
         if (status == SALTS_OK && close_status != SALTS_OK) {
             status = close_status;
             failed_stage = "listener destroy";
+        }
+    }
+    if (fixture.handoff_initialized) {
+        int close_status = cnet_handoff_seal(&fixture.handoff);
+        if (status == SALTS_OK && close_status != SALTS_OK) {
+            status = close_status;
+            failed_stage = "handoff seal";
+        }
+        if (fixture.handoff_phase == 2) {
+            cnet_handoff_ticket taken = {0};
+            cnet_accepted_stream pending = CNET_ACCEPTED_STREAM_INIT;
+            close_status = cnet_handoff_take(
+                &fixture.handoff, &taken, &pending);
+            if (close_status == SALTS_OK) {
+                (void)cnet_accepted_stream_close(&pending);
+                fixture.ticket = taken;
+                fixture.handoff_phase = 3;
+            } else if (status == SALTS_OK) {
+                status = close_status;
+                failed_stage = "handoff drain queued";
+            }
+        }
+        if (fixture.handoff_phase == 1 ||
+            fixture.handoff_phase == 3) {
+            close_status = cnet_handoff_release(
+                &fixture.handoff, fixture.ticket);
+            if (status == SALTS_OK && close_status != SALTS_OK) {
+                status = close_status;
+                failed_stage = "handoff release";
+            }
+            if (close_status == SALTS_OK)
+                fixture.handoff_phase = 4;
+        }
+        close_status = cnet_handoff_destroy(&fixture.handoff);
+        if (status == SALTS_OK && close_status != SALTS_OK) {
+            status = close_status;
+            failed_stage = "handoff destroy";
         }
     }
     if (fixture.tls_initialized) {
@@ -409,5 +519,10 @@ spec("ACE 2.3 real CNet mTLS Raft Node ID admission")
     it("rejects a forged Raft HELLO node ID on an authenticated TLS stream")
     {
         check_equal(tls_case_run(TLS_CASE_FORGED_NODE_ID), SALTS_OK);
+    }
+
+    it("takes a bounded accepted stream and starts TLS on its final owner")
+    {
+        check_equal(tls_case_run(TLS_CASE_BOUNDED_HANDOFF), SALTS_OK);
     }
 }
