@@ -620,4 +620,31 @@ spec("ACE 2.3 borrowed CNet Raft frame -> exact existing Multicore Owner")
         check_equal(fixture_destroy(&f), SALTS_OK);
     }
 
+
+    it("rejects all post-stop admissions without consuming Group completion credits")
+    {
+        ingress_fixture f = {0};
+        tr_raft_transport_payload_t packet = heartbeat(101U, 1U);
+        tr_raft_multicore_group_status_t before = {0}, after = {0};
+        tr_raft_multicore_completion_t completion = {0};
+        uint64_t refused = UINT64_C(88);
+
+        check_equal(fixture_create(&f), SALTS_OK);
+        check_equal(wait_for_owners(&f), SALTS_OK);
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 101U, &before), SALTS_OK);
+        tr_raft_multicore_request_stop(f.runtime);
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &packet, &refused), SALTS_ECANCELED);
+        check_equal(refused, UINT64_C(0));
+        check_equal(tr_raft_multicore_ingress_receive(
+            f.ingress, &packet), SALTS_ECANCELED);
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 101U, &after), SALTS_OK);
+        check_equal(after.outstanding, before.outstanding);
+        check_equal(tr_raft_multicore_take(
+            f.runtime, 101U, &completion), SALTS_ENOENT);
+        check_equal(fixture_destroy(&f), SALTS_OK);
+    }
+
 }
