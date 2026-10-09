@@ -156,6 +156,42 @@ qualification should `TurboRaft::FlowMQ`, its source/targets, and
 runtime transports as a silent fallback. The initial research branch still
 contains the existing FlowMQ implementation because this parity is unproven.
 
+### Executed ACE 2.3 RC channel slice (owner-local, not yet full peer service)
+
+As of [#148](https://github.com/qigao/turboraft/pull/148),
+`tr_raft_cnet_channel` has one borrowed caller-owned CNet progress owner,
+one verified certificate-to-Node ID admission policy, a canonical Raft
+HELLO/ACK exchange, and one `tr_raft_transport_session` admitted only after
+reciprocal handshake completion. No additional Reactor, transport queue,
+worker or automatic retry is created. `tr_raft_cnet_channel_observer()`
+belongs to exactly one TLS connection; `attach()` records the resulting
+generation-checked handle. The owner polls CNet, not the channel.
+
+It uses CNet's ordinary finite receive credits: one outstanding receive
+demand is replenished only after its callback returns successfully. A
+payload received before exact mTLS + Node ID + Cluster ID + HELLO/ACK
+authorization is never delivered. Ordinary Raft, group-aware DATA_CHUNK and
+SNAPSHOT_CHUNK traverse the existing wire codec and the caller's explicit
+owner-local payload callback; borrowed chunk bytes expire on callback exit.
+Outbound `send()` uses bounded direct CNet write admission. It reports
+acceptance, **not** remote durability or delivery, and never automatically
+retries an uncertain transaction.
+
+Qualified in the isolated Linux installed
+[ACE 2.3 RC CTest lane](https://github.com/qigao/turboraft/actions/runs/37969773334)
+against exact Salts.Native 2.3.0-rc.1 and SaltsUtils.Native 4.3.0-rc.1:
+7/7 registered CTests, including real mutual TLS, reciprocal handshake,
+forged ID and foreign-cluster rejection, unauthorized certificate rejection,
+actual two-way Raft frames, and multiplexed group-aware snapshot/data frames.
+
+**Still required to replace FlowMQ:** one full multi-peer Node/Owner service,
+CNetManager/dial/reconnect lease semantics, deterministic per-peer fair
+scheduling, large snapshot SG terminal tests, bounded queue-full recovery,
+actual snapshot persistence/catch-up, stop/cancel/seal races, ASan/TSan and
+Windows/macOS final package validation. The dedicated RC qualification is
+not the full native-SDK release gate. No version fallback or FlowMQ deletion
+is authorized by this test result.
+
 ## 5. Multicore and CFlow boundary
 
 `tr_raft_multicore` already owns fixed cmeta threads, completion storage,

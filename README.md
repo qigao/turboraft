@@ -7,8 +7,10 @@ and [new-only runtime policy](docs/NEW_ONLY_RUNTIME_POLICY.md).
 This branch intentionally removes v0.2.0 cross-version compatibility; it is
 **not release-ready** until an exact Salts 2.3.0 ACE SDK candidate and all
 installed consumer/sanitizer gates pass. The upstream Salts ACE Draft PR
-remains **DO NOT MERGE / DO NOT PUBLISH**. It separates
-the deterministic consensus core from transport, durable WAL storage, snapshot
+remains **DO NOT MERGE / DO NOT PUBLISH**.
+
+TurboRaft separates the deterministic consensus core from transport, durable
+WAL storage, snapshot
 transfer, application state machines, and a standalone CHttp JSON-RPC/HTTP
 control plane.
 
@@ -36,6 +38,11 @@ Database drivers and dialects belong to TurboDB. Raft Core owns consensus.
   one owner; storage and state-machine callbacks run on that thread.
 - `TurboRaft::CNet` exposes transport framing plus a bounded adapter around a
   caller-owned CNet client. It never starts an I/O thread.
+- `tr_raft_cnet_channel` is a single CNet-owner authenticated peer channel.
+  Exact verified mTLS certificate identity and both HELLO/ACK messages must
+  complete before any Raft/Snapshot/Data payload reaches its callback.
+  This is an implemented **new-only** ingress/egress slice, not yet a
+  multi-peer service or a FlowMQ replacement.
 - `TurboRaft::FlowMQ` owns one FlowMQ context, one ROUTER, and one DEALER per
   peer. `tr_raft_flowmq_peer_service_step()` drives all progress on the caller's
   owner thread.
