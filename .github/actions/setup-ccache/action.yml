@@ -27,7 +27,6 @@ runs:
         set -euo pipefail
         {
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ci/ccache"
-          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
           echo "CCACHE_COMPILERCHECK=content"
           echo "CMAKE_C_COMPILER_LAUNCHER=ccache"
           echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
