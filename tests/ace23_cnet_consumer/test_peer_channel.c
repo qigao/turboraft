@@ -15,6 +15,7 @@
 
 enum peer_mode {
     PEER_VALID = 0,
+    PEER_STREAMS,
     PEER_FOREIGN_CLUSTER,
     PEER_FORGED_NODE,
     PEER_UNAUTHORIZED_CERT
@@ -24,6 +25,9 @@ typedef struct peer_sink {
     tr_raft_node_id_t expected_from;
     tr_raft_node_id_t expected_to;
     size_t count;
+    size_t raft_count;
+    size_t data_count;
+    size_t snapshot_count;
     int violation;
 } peer_sink_t;
 
@@ -100,17 +104,47 @@ static int peer_record(void *context,
                        const tr_raft_transport_payload_t *payload)
 {
     peer_sink_t *sink = (peer_sink_t *)context;
-    if (payload == NULL || payload->group_id != 42U ||
-        payload->kind != TR_RAFT_WIRE_PAYLOAD_RAFT ||
-        payload->data.raft.from != sink->expected_from ||
-        payload->data.raft.to != sink->expected_to ||
-        (payload->data.raft.type != TR_RAFT_MSG_HEARTBEAT_REQUEST &&
-         payload->data.raft.type != TR_RAFT_MSG_HEARTBEAT_RESPONSE)) {
-        sink->violation = 1;
-        return SALTS_EPROTO;
+    if (payload == NULL) goto invalid;
+
+    if (payload->kind == TR_RAFT_WIRE_PAYLOAD_RAFT &&
+        payload->group_id == 42U &&
+        payload->data.raft.from == sink->expected_from &&
+        payload->data.raft.to == sink->expected_to &&
+        (payload->data.raft.type == TR_RAFT_MSG_HEARTBEAT_REQUEST ||
+         payload->data.raft.type == TR_RAFT_MSG_HEARTBEAT_RESPONSE)) {
+        ++sink->raft_count;
+    } else if (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
+               payload->group_id == 43U &&
+               payload->data.data_chunk.from == sink->expected_from &&
+               payload->data.data_chunk.to == sink->expected_to &&
+               payload->data.data_chunk.stream_id == 9U &&
+               payload->data.data_chunk.stream_size == 3U &&
+               payload->data.data_chunk.data_length == 3U &&
+               payload->data.data_chunk.data != NULL &&
+               memcmp(payload->data.data_chunk.data, "abc", 3U) == 0 &&
+               payload->data.data_chunk.done) {
+        ++sink->data_count;
+    } else if (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK &&
+               payload->group_id == 43U &&
+               payload->data.snapshot_chunk.from == sink->expected_from &&
+               payload->data.snapshot_chunk.to == sink->expected_to &&
+               payload->data.snapshot_chunk.snapshot_index == 19U &&
+               payload->data.snapshot_chunk.snapshot_size == 3U &&
+               payload->data.snapshot_chunk.data_length == 3U &&
+               payload->data.snapshot_chunk.data != NULL &&
+               memcmp(payload->data.snapshot_chunk.data, "xyz", 3U) == 0 &&
+               payload->data.snapshot_chunk.done &&
+               payload->data.snapshot_chunk.has_configuration) {
+        ++sink->snapshot_count;
+    } else {
+        goto invalid;
     }
+
     ++sink->count;
     return SALTS_OK;
+invalid:
+    sink->violation = 1;
+    return SALTS_EPROTO;
 }
 
 static int peer_fixture_path(char *output, size_t capacity,
@@ -261,7 +295,7 @@ static int peer_case_run(int mode)
         PEER_TRY(tr_raft_cnet_channel_get_status(f.client_channel, &cs));
         PEER_TRY(tr_raft_cnet_channel_get_status(f.server_channel, &ss));
 
-        if (mode != PEER_VALID) {
+        if (mode != PEER_VALID && mode != PEER_STREAMS) {
             if (ss.phase == TR_RAFT_CNET_CHANNEL_FAILED)
                 break;
             continue;
@@ -293,19 +327,68 @@ static int peer_case_run(int mode)
             response.data.raft.term = 3U;
             PEER_TRY(tr_raft_cnet_channel_send(f.client_channel, &request));
             PEER_TRY(tr_raft_cnet_channel_send(f.server_channel, &response));
+            if (mode == PEER_STREAMS) {
+                tr_raft_transport_payload_t data = {0};
+                tr_raft_transport_payload_t snapshot = {0};
+                size_t i;
+                data.group_id = 43U;
+                data.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+                data.data.data_chunk.from = 1U;
+                data.data.data_chunk.to = 2U;
+                data.data.data_chunk.term = 3U;
+                data.data.data_chunk.stream_id = 9U;
+                data.data.data_chunk.stream_size = 3U;
+                data.data.data_chunk.data = (const uint8_t *)"abc";
+                data.data.data_chunk.data_length = 3U;
+                data.data.data_chunk.done = true;
+                memset(data.data.data_chunk.stream_digest, 0xa4,
+                       sizeof(data.data.data_chunk.stream_digest));
+
+                snapshot.group_id = 43U;
+                snapshot.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
+                snapshot.data.snapshot_chunk.from = 1U;
+                snapshot.data.snapshot_chunk.to = 2U;
+                snapshot.data.snapshot_chunk.term = 3U;
+                snapshot.data.snapshot_chunk.snapshot_index = 19U;
+                snapshot.data.snapshot_chunk.snapshot_term = 3U;
+                snapshot.data.snapshot_chunk.snapshot_size = 3U;
+                snapshot.data.snapshot_chunk.data = (const uint8_t *)"xyz";
+                snapshot.data.snapshot_chunk.data_length = 3U;
+                snapshot.data.snapshot_chunk.done = true;
+                snapshot.data.snapshot_chunk.has_configuration = true;
+                snapshot.data.snapshot_chunk.configuration.phase =
+                    TR_RAFT_CONF_FINAL;
+                snapshot.data.snapshot_chunk.configuration.member_count = 1U;
+                snapshot.data.snapshot_chunk.configuration.members[0].node_id = 2U;
+                snapshot.data.snapshot_chunk.configuration.members[0].roles =
+                    TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+                for (i = 0U;
+                     i < sizeof(snapshot.data.snapshot_chunk.snapshot_digest);
+                     ++i)
+                    snapshot.data.snapshot_chunk.snapshot_digest[i] =
+                        (uint8_t)(0x50U + i);
+
+                PEER_TRY(tr_raft_cnet_channel_send(f.client_channel, &data));
+                PEER_TRY(tr_raft_cnet_channel_send(f.client_channel, &snapshot));
+            }
             sent = 1;
         }
         if (sent && f.client_sink.count == 1U &&
-            f.server_sink.count == 1U)
+            f.server_sink.count == (mode == PEER_STREAMS ? 3U : 1U))
             break;
     }
 
-    if (mode == PEER_VALID) {
+    if (mode == PEER_VALID || mode == PEER_STREAMS) {
+        const size_t expected_server = mode == PEER_STREAMS ? 3U : 1U;
         if (cs.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
             ss.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
-            f.client_sink.count != 1U || f.server_sink.count != 1U ||
+            f.client_sink.count != 1U || f.server_sink.count != expected_server ||
             f.client_sink.violation || f.server_sink.violation ||
-            cs.payloads_received != 1U || ss.payloads_received != 1U ||
+            f.client_sink.raft_count != 1U || f.server_sink.raft_count != 1U ||
+            f.server_sink.data_count != (mode == PEER_STREAMS ? 1U : 0U) ||
+            f.server_sink.snapshot_count != (mode == PEER_STREAMS ? 1U : 0U) ||
+            cs.payloads_received != 1U ||
+            ss.payloads_received != expected_server ||
             cs.handshake_packets_sent != 2U ||
             ss.handshake_packets_sent != 2U) {
             result = SALTS_EPROTO;
@@ -377,6 +460,11 @@ spec("ACE 2.3 CNet owner-bound authenticated Raft channel")
     it("adopts a verified mTLS peer, completes reciprocal ACKs, and exchanges Raft")
     {
         check_equal(peer_case_run(PEER_VALID), SALTS_OK);
+    }
+
+    it("sends group-aware DATA and SNAPSHOT chunks over the same mTLS channel")
+    {
+        check_equal(peer_case_run(PEER_STREAMS), SALTS_OK);
     }
 
     it("rejects a different cluster before delivering any Raft payload")
