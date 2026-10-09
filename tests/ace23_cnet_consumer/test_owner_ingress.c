@@ -583,4 +583,41 @@ spec("ACE 2.3 borrowed CNet Raft frame -> exact existing Multicore Owner")
         check_equal(fixture_destroy(&f), SALTS_OK);
     }
 
+
+    it("fails closed at correlation ID exhaustion without reusing an accepted ID")
+    {
+        ingress_fixture f = {0};
+        tr_raft_transport_payload_t packet = heartbeat(101U, 1U);
+        tr_raft_multicore_completion_t completion = {0};
+        tr_raft_multicore_group_status_t status = {0};
+        uint64_t accepted_id = 0U, refused_id = UINT64_C(99);
+
+        check_equal(fixture_create(&f), SALTS_OK);
+        check_equal(wait_for_owners(&f), SALTS_OK);
+        /* No callback has borrowed the original ingress yet. Replace it
+         * exclusively to validate the terminal correlation-ID boundary. */
+        check_equal(tr_raft_multicore_ingress_destroy(f.ingress), SALTS_OK);
+        f.ingress = NULL;
+        check_equal(tr_raft_multicore_ingress_create(
+            f.runtime, UINT64_MAX - UINT64_C(1), &f.ingress), SALTS_OK);
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &packet, &accepted_id), SALTS_OK);
+        check_equal(accepted_id, UINT64_MAX - UINT64_C(1));
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &packet, &refused_id), SALTS_ERANGE);
+        check_equal(refused_id, UINT64_C(0));
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 101U, &status), SALTS_OK);
+        check_equal(status.outstanding, (size_t)1U);
+        tr_raft_multicore_request_stop(f.runtime);
+        atomic_store_explicit(&f.release, true, memory_order_release);
+        check_equal(take_completion(&f, 0U, &completion), SALTS_OK);
+        check_equal(completion.result, SALTS_ECANCELED);
+        check_equal(completion.request_id, accepted_id);
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 101U, &status), SALTS_OK);
+        check_equal(status.outstanding, (size_t)0U);
+        check_equal(fixture_destroy(&f), SALTS_OK);
+    }
+
 }
