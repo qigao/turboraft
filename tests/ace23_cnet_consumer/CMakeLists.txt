@@ -39,6 +39,15 @@ add_test(NAME turboraft.ace23_cnet_identity_tls
          COMMAND turboraft_ace23_cnet_identity_tls)
 set_tests_properties(turboraft.ace23_cnet_identity_tls PROPERTIES TIMEOUT 35)
 
+add_executable(turboraft_ace23_peer_channel test_peer_channel.c)
+target_link_libraries(turboraft_ace23_peer_channel
+                      PRIVATE TurboRaft::CNet Salts::TinyTest)
+target_compile_definitions(turboraft_ace23_peer_channel PRIVATE
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+add_test(NAME turboraft.ace23_peer_channel
+         COMMAND turboraft_ace23_peer_channel)
+set_tests_properties(turboraft.ace23_peer_channel PROPERTIES TIMEOUT 35)
+
 add_executable(turboraft_ace23_cnet_cpp cnet_cpp.cpp)
 target_link_libraries(turboraft_ace23_cnet_cpp PRIVATE TurboRaft::CNet)
 add_test(NAME turboraft.ace23_cnet_installed_cpp

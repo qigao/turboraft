@@ -5,6 +5,8 @@ on:
     paths:
       - "include/turboraft/raft_component.h"
       - "src/runtime/raft_component.c"
+      - "include/turboraft/raft_cnet_channel.h"
+      - "src/transport/raft_cnet_channel.c"
       - "include/turboraft/raft_cnet_peer.h"
       - "src/transport/raft_cnet_peer.c"
       - "tests/core/test_raft_cnet_peer.c"
