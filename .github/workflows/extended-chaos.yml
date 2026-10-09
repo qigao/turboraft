@@ -100,12 +100,21 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SaltsNativeCandidateVersion: ${{ vars.TURBORAFT_SALTS_ACE_CANDIDATE_VERSION }}
+          SaltsUtilsNativeVersion: ${{ vars.TURBORAFT_SALTS_UTILS_NATIVE_VERSION }}
+          FlowMQNativeVersion: ${{ vars.TURBORAFT_FLOWMQ_NATIVE_VERSION }}
+          CHttpNativeVersion: ${{ vars.TURBORAFT_CHTTP_NATIVE_VERSION }}
         run: |
           set -euo pipefail
           packages="$RUNNER_TEMP/turboraft-chaos-dependencies"
           dotnet restore packaging/nuget/TurboRaft.Native.csproj \
             --configfile cmake/native-sdk.nuget.config --packages "$packages" \
-            --no-cache --force-evaluate 2>&1 | tee artifacts/sdk-restore.log
+            --no-cache --force-evaluate \
+            "-p:SaltsNativeCandidateVersion=$SaltsNativeCandidateVersion" \
+            "-p:SaltsUtilsNativeVersion=$SaltsUtilsNativeVersion" \
+            "-p:FlowMQNativeVersion=$FlowMQNativeVersion" \
+            "-p:CHttpNativeVersion=$CHttpNativeVersion" \
+            2>&1 | tee artifacts/sdk-restore.log
           python3 tools/ci/export_native_sdks.py --assets packaging/nuget/obj/project.assets.json \
             --rid linux-x64 --packages salts salts-utils flowmq --metadata artifacts/campaign-metadata.txt
 
