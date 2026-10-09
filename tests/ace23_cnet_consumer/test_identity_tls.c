@@ -357,8 +357,19 @@ cleanup:
         if (status == SALTS_OK && close_status != SALTS_OK) status = close_status;
     }
     if (fixture.listener_initialized) {
-        int close_status = cnet_listener_destroy(&fixture.listener);
-        if (status == SALTS_OK && close_status != SALTS_OK) status = close_status;
+        /* A listening socket is a separate, domain-owned CNet resource.
+         * Destroy refuses an OPEN listener with SALTS_EBUSY; first withdraw
+         * admission, then release the closed owner exactly once. */
+        int close_status = cnet_listener_close(&fixture.listener);
+        if (status == SALTS_OK && close_status != SALTS_OK) {
+            status = close_status;
+            failed_stage = "listener close";
+        }
+        close_status = cnet_listener_destroy(&fixture.listener);
+        if (status == SALTS_OK && close_status != SALTS_OK) {
+            status = close_status;
+            failed_stage = "listener destroy";
+        }
     }
     if (fixture.tls_initialized) {
         int close_status = cnet_tls_server_destroy(&fixture.tls_server);
