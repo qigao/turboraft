@@ -203,6 +203,8 @@ spec("ACE 2.3 distinct Node ID CNet directory, strict fixed owner")
         tr_raft_cnet_managed_peer_t *found = NULL;
         tr_raft_transport_t transport = {0};
         tr_raft_cnet_directory_group_binding_t binding = {0};
+        tr_raft_cnet_directory_group_binding_t invalid_binding = {0};
+        tr_raft_transport_t unbound_transport = {0};
         tr_raft_message_t message = {0};
         tr_raft_transport_payload_t payload = {0};
         tr_raft_cnet_managed_peer_status_t peer_status = {0};
@@ -229,6 +231,15 @@ spec("ACE 2.3 distinct Node ID CNet directory, strict fixed owner")
         check_equal(tr_raft_cnet_peer_directory_lookup(
             &f.directory, 2U, &found), SALTS_EINVAL);
         check_null(found);
+
+        /* A future unknown Group cannot acquire an apparently valid
+         * Service callback and only be rejected after WAL commit. */
+        invalid_binding.directory = &f.directory;
+        invalid_binding.group_id = 44U;
+        check_equal(tr_raft_cnet_peer_directory_transport_bind(
+            &invalid_binding, &unbound_transport), SALTS_ENOENT);
+        check_null(unbound_transport.enqueue);
+        check_null(unbound_transport.context);
 
         binding.directory = &f.directory;
         binding.group_id = 42U;
@@ -298,6 +309,14 @@ spec("ACE 2.3 distinct Node ID CNet directory, strict fixed owner")
     {
         directory_fixture f = {0};
         tr_raft_cnet_peer_directory_config_t cfg;
+        tr_raft_cnet_peer_identity_t authorities[3];
+        const char *other_cert[1] = {
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        };
+        tr_raft_cnet_managed_peer_t *foreign = (tr_raft_cnet_managed_peer_t *)
+            (uintptr_t)1U;
+        tr_raft_message_t routed = {0};
+        tr_raft_transport_payload_t payload = {0};
         int result;
 
         check_equal(fixture_init(&f), SALTS_OK);
@@ -307,11 +326,33 @@ spec("ACE 2.3 distinct Node ID CNet directory, strict fixed owner")
         check_equal(tr_raft_cnet_peer_directory_init(
             &f.directory, &cfg), SALTS_EINVAL);
         check_equal(f.directory.active, 0);
+        /* Node 4 is authorized globally, but STRICT_KEY pins its CNet
+         * connection to Owner 0. Owner 1 has no right to borrow it. */
+        authorities[0] = f.identities[0];
+        authorities[1] = f.identities[1];
+        authorities[2] = (tr_raft_cnet_peer_identity_t){
+            4U, other_cert, 1U
+        };
+        f.identity_policy.peers = authorities;
+        f.identity_policy.peer_count = 3U;
         cfg.owner_index = 1U; /* Node 1 and 3 pin to Owner 1. */
         check_equal(tr_raft_cnet_peer_directory_init(
             &f.directory, &cfg), SALTS_OK);
+        check_equal(tr_raft_cnet_peer_directory_lookup(
+            &f.directory, 4U, &foreign), SALTS_EPERM);
+        check_null(foreign);
+        routed.from = 2U;
+        routed.to = 4U;
+        routed.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+        payload.group_id = 42U;
+        payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+        payload.data.raft = routed;
+        check_equal(tr_raft_cnet_peer_directory_send(
+            &f.directory, &payload), SALTS_EPERM);
         check_equal(tr_raft_cnet_peer_directory_destroy(&f.directory),
                     SALTS_OK);
+        f.identity_policy.peers = f.identities;
+        f.identity_policy.peer_count = 2U;
 
         cfg = f.directory_config;
         f.routes[1].node_id = 1U;

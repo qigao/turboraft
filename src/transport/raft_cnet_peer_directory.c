@@ -142,8 +142,15 @@ int tr_raft_cnet_peer_directory_lookup(
             return SALTS_OK;
         }
     }
-    /* Even a known peer routed to a different CNet owner cannot be stolen
-     * from its fixed owner or silently rebalanced on local backpressure. */
+    /* A known but foreign-owner Node ID requires a real bounded handoff to
+     * that Owner, never a local Manager fallback or borrowed peer pointer. */
+    if (tr_directory_peer_allowed(directory->config.identities, node_id)) {
+        size_t owner = SIZE_MAX;
+        result = tr_directory_strict_owner(
+            node_id, directory->config.owner_count, &owner);
+        if (result != SALTS_OK) return result;
+        if (owner != directory->config.owner_index) return SALTS_EPERM;
+    }
     return SALTS_ENOENT;
 }
 
@@ -231,11 +238,24 @@ int tr_raft_cnet_peer_directory_transport_bind(
     tr_raft_cnet_directory_group_binding_t *binding,
     tr_raft_transport_t *transport)
 {
+    size_t i;
+    int result;
+
     if (binding == NULL || binding->directory == NULL ||
         binding->group_id == 0U || transport == NULL)
         return SALTS_EINVAL;
+    result = tr_directory_owner(binding->directory);
+    if (result != SALTS_OK) return result;
     if (transport->enqueue != NULL)
         return SALTS_EALREADY;
+
+    /* Fail before publishing a borrowed Service callback if the Group was
+     * never admitted into this CNet Owner's immutable routing contract. */
+    for (i = 0U; i < binding->directory->config.group_count; ++i)
+        if (binding->directory->config.groups[i] == binding->group_id)
+            break;
+    if (i == binding->directory->config.group_count)
+        return SALTS_ENOENT;
 
     transport->context = binding;
     transport->enqueue = tr_directory_group_enqueue;
