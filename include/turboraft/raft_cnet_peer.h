@@ -64,7 +64,7 @@ typedef struct tr_raft_cnet_group_binding {
     tr_raft_group_id_t group_id;
 } tr_raft_cnet_group_binding_t;
 
-/* Sets enqueue/context only; preserves the caller's snapshot adapter. */
+/* Binds once: a pre-existing enqueue returns SALTS_EALREADY without mutation.\n * Sets enqueue/context only; preserves the caller's snapshot adapter. */
 int tr_raft_cnet_group_transport_bind(
     tr_raft_cnet_group_binding_t *binding, tr_raft_transport_t *transport);
 

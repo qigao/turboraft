@@ -19,5 +19,11 @@ int main()
 {
     const tr_raft_storage_source unbound =
         tr_raft_storage_source_bind(nullptr, nullptr);
+    const cmeta_component_desc *descriptor =
+        tr_raft_component_descriptor(TR_RAFT_COMPONENT_STORAGE);
+    if (descriptor == nullptr || !cmeta_component_desc_valid(descriptor))
+        return 2;
+    if (tr_raft_component_descriptor(static_cast<tr_raft_component_kind_t>(0)) != nullptr)
+        return 3;
     return tr_raft_storage_source_valid(&unbound) ? 1 : 0;
 }

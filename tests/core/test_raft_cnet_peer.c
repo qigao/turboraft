@@ -13,6 +13,14 @@ static int ignore_payload(void *context,
     return SALTS_OK;
 }
 
+static int keep_snapshot_adapter(void *context,
+                                 const tr_raft_snapshot_request_t *request)
+{
+    (void)context;
+    (void)request;
+    return SALTS_OK;
+}
+
 static tr_raft_cnet_peer_t *make_peer(
     cnet_client *client,
     size_t total_capacity,
@@ -105,8 +113,14 @@ spec("Raft CNet peer adapter")
                     SALTS_EINVAL);
         check_equal(tr_raft_cnet_group_transport_bind(&binding, NULL),
                     SALTS_EINVAL);
+        adapter.snapshot_context = &client;
+        adapter.enqueue_snapshot = keep_snapshot_adapter;
         check_equal(tr_raft_cnet_group_transport_bind(&binding, &adapter),
                     SALTS_OK);
+        check_equal(tr_raft_cnet_group_transport_bind(&binding, &adapter),
+                    SALTS_EALREADY);
+        check(adapter.snapshot_context == &client);
+        check(adapter.enqueue_snapshot == keep_snapshot_adapter);
         check(adapter.context == &binding);
         check_not_null(adapter.enqueue);
         check_equal(adapter.enqueue(adapter.context, &msg), SALTS_OK);

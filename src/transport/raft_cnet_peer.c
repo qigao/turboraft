@@ -314,6 +314,8 @@ int tr_raft_cnet_group_transport_bind(
     if (binding == NULL || transport == NULL ||
         binding->peer == NULL || binding->group_id == 0U)
         return SALTS_EINVAL;
+    if (transport->enqueue != NULL)
+        return SALTS_EALREADY;
 
     transport->context = binding;
     transport->enqueue = tr_raft_cnet_group_transport_enqueue;

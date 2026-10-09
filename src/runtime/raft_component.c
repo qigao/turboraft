@@ -27,6 +27,23 @@ enum {
 };
 enum { TR_COMPONENT_DEPENDENCY_COUNT = 3 };
 
+const cmeta_component_desc *tr_raft_component_descriptor(
+    tr_raft_component_kind_t kind)
+{
+    switch (kind) {
+    case TR_RAFT_COMPONENT_STORAGE:
+        return cmeta_component_meta(tr_raft_StorageAdapter);
+    case TR_RAFT_COMPONENT_TRANSPORT:
+        return cmeta_component_meta(tr_raft_TransportAdapter);
+    case TR_RAFT_COMPONENT_STATE_MACHINE:
+        return cmeta_component_meta(tr_raft_StateMachineAdapter);
+    case TR_RAFT_COMPONENT_RUNTIME:
+        return cmeta_component_meta(tr_raft_RuntimeComponent);
+    default:
+        return NULL;
+    }
+}
+
 struct tr_raft_component_domain {
     tr_raft_runtime_config_t config;
     tr_raft_runtime_t *runtime;

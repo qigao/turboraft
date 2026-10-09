@@ -129,6 +129,36 @@ static int tr_component_test_core(tr_raft_core_t **out_core)
 
 spec("Raft CMeta/ACE static Component runtime")
 {
+    it("exports four immutable canonical Component descriptors")
+    {
+        const cmeta_component_desc *storage = tr_raft_component_descriptor(
+            TR_RAFT_COMPONENT_STORAGE);
+        const cmeta_component_desc *transport = tr_raft_component_descriptor(
+            TR_RAFT_COMPONENT_TRANSPORT);
+        const cmeta_component_desc *machine = tr_raft_component_descriptor(
+            TR_RAFT_COMPONENT_STATE_MACHINE);
+        const cmeta_component_desc *runtime = tr_raft_component_descriptor(
+            TR_RAFT_COMPONENT_RUNTIME);
+
+        check_not_null(storage);
+        check_not_null(transport);
+        check_not_null(machine);
+        check_not_null(runtime);
+        check_true(cmeta_component_desc_valid(storage));
+        check_true(cmeta_component_desc_valid(transport));
+        check_true(cmeta_component_desc_valid(machine));
+        check_true(cmeta_component_desc_valid(runtime));
+        check_equal(storage->capability_count, (size_t)1u);
+        check_equal(transport->capability_count, (size_t)1u);
+        check_equal(machine->capability_count, (size_t)1u);
+        check_equal(runtime->capability_count, (size_t)3u);
+        check_equal(storage->capabilities[0].role, CMETA_COMPONENT_PROVIDES);
+        check_equal(runtime->capabilities[0].role, CMETA_COMPONENT_REQUIRES);
+        check_null(tr_raft_component_descriptor(
+            (tr_raft_component_kind_t)0));
+    }
+
+
     it("builds a typed 3-provider graph and keeps WAL before apply")
     {
         tr_raft_core_t *core = NULL;

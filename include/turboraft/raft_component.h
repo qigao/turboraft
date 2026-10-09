@@ -3,6 +3,7 @@
 
 #include <turboraft/raft_runtime.h>
 #include <cmeta/interface.h>
+#include <cmeta/component.h>
 
 /*
  * Declarative, setup-only CMeta interfaces over existing Raft callback tables.
@@ -26,6 +27,19 @@ extern "C" {
 #endif
 
 typedef struct tr_raft_component_domain tr_raft_component_domain_t;
+
+/* Stable selector for immutable provider/component declarations.
+ * Returned descriptions are borrowed static metadata; there is no mutable
+ * global registry and no Component/Plugin runtime is activated by lookup. */
+typedef enum tr_raft_component_kind {
+    TR_RAFT_COMPONENT_STORAGE = 1,
+    TR_RAFT_COMPONENT_TRANSPORT,
+    TR_RAFT_COMPONENT_STATE_MACHINE,
+    TR_RAFT_COMPONENT_RUNTIME
+} tr_raft_component_kind_t;
+
+const cmeta_component_desc *tr_raft_component_descriptor(
+    tr_raft_component_kind_t kind);
 
 /*
  * Create and activate one bounded four-Component dependency graph:
