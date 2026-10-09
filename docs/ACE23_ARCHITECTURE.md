@@ -252,6 +252,55 @@ are implemented. Actual multi-node manager directory + peer-route
 uniqueness and CNet client-pool protocol lease qualification remain open.
 The full native SDK remains separate and currently RED.
 
+### Distinct Node ID directory and fixed CNet Owner route
+
+`tr_raft_cnet_peer_directory` is a **pure, bounded, owner-local routing
+composition**, not a mutable process registry or second service locator.
+The caller declares one unique `NodeID → ManagedPeer` entry for each
+locally handled remote peer and a fixed list of Group IDs that may enter
+this network Owner. Those borrowed arrays remain immutable and outlive
+every Raft Service borrowing a directory-backed Transport.
+
+Initialization checks the complete `tr_raft_cnet_identity_policy`,
+rejects missing/duplicate Node IDs and duplicate live ManagedPeer
+pointers, verifies that each underlying ManagedDial was created for
+that exact peer, and uses Salts
+`cnet_owner_placement_choose(CNET_OWNER_PLACE_STRICT_KEY)` with
+`key_hash = NodeID` to enforce one stable network Owner. A peer that
+belongs to another Owner is **not** rebalanced when local CNet Manager
+credits are full. Actual socket admission still happens exclusively
+through the correct Owner's `cnet_manager_reserve`, `cnet_handoff`
+and CNet I/O.
+
+The canonical Raft `tr_raft_transport_t.enqueue` may borrow a
+`tr_raft_cnet_directory_group_binding_t` instead of binding to a
+single physical peer. For each message it checks local NodeID, the
+message's exact destination NodeID, authorized Group, current CNet
+Owner and the destination's existing ManagedPeer, then delegates
+one admission without an additional message queue or automatic retry.
+Snapshot callbacks remain separately owned. Outgoing SNAPSHOT/DATA
+frames use the same explicit Group/Node preflight through
+`tr_raft_cnet_peer_directory_send`.
+
+Unknown Node/Group returns `SALTS_ENOENT`; misrepresented source,
+self-target or malformed route returns `SALTS_EPROTO`/`SALTS_EINVAL`;
+a known Node pinned to a foreign Owner returns `SALTS_EPERM`; an
+unready peer propagates existing peer-local `SALTS_ENOSPC`. Bind
+itself rejects an unapproved Group **before** a Runtime begins. The
+directory creates no socket, credits, scheduler thread, storage writer
+or dynamic Plugin generation.
+
+The initial qualification uses two **different authorized IDs,
+Node 1 and Node 3**, backed by two real but not-connected ManagedPeer
+objects, and validates directory preflight, fixed Owner placement,
+cross-thread rejection, routing capacity non-mutation and C11/C++17
+ABI. This alone does not prove two distinct remote TLS identities
+were connected: the separate loopback suite covers real mTLS
+and multiple links, but still needs a true distinct-node peer-service
+conformance test. The larger cross-Owner dispatch must go through
+the existing bounded owner mailbox; this directory is deliberately
+**not** a cross-thread transport.
+
 ## 5. Multicore and CFlow boundary
 
 `tr_raft_multicore` already owns fixed cmeta threads, completion storage,

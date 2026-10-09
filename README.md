@@ -43,6 +43,14 @@ Database drivers and dialects belong to TurboDB. Raft Core owns consensus.
   complete before any Raft/Snapshot/Data payload reaches its callback.
   This is an implemented **new-only** ingress/egress slice, not yet a
   multi-peer service or a FlowMQ replacement.
+- `tr_raft_cnet_managed_peer` uses the canonical CNetManager/ManagedDial
+  lifetime and finite explicit reconnect policy. A Node-specific reconnect
+  cannot replay Raft requests or downgrade an untrusted TLS identity.
+- `tr_raft_cnet_peer_directory` binds immutable, unique Node IDs and allowed
+  Groups to one fixed CNet Owner using upstream strict-key placement; a known
+  foreign-owner peer is not silently stolen when local capacity is exhausted.
+  It dispatches through the existing owner-bound Raft Transport callback,
+  without introducing a global registry or second queue.
 - `TurboRaft::FlowMQ` owns one FlowMQ context, one ROUTER, and one DEALER per
   peer. `tr_raft_flowmq_peer_service_step()` drives all progress on the caller's
   owner thread.
