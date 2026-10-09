@@ -296,6 +296,30 @@ int tr_raft_cnet_peer_enqueue_group(
     return tr_raft_cnet_peer_enqueue_payload(peer, &payload);
 }
 
+static int tr_raft_cnet_group_transport_enqueue(
+    void *context, const tr_raft_message_t *message)
+{
+    const tr_raft_cnet_group_binding_t *binding =
+        (const tr_raft_cnet_group_binding_t *)context;
+    if (binding == NULL || binding->peer == NULL ||
+        binding->group_id == 0U || message == NULL)
+        return SALTS_EINVAL;
+    return tr_raft_cnet_peer_enqueue_group(
+        binding->peer, binding->group_id, message);
+}
+
+int tr_raft_cnet_group_transport_bind(
+    tr_raft_cnet_group_binding_t *binding, tr_raft_transport_t *transport)
+{
+    if (binding == NULL || transport == NULL ||
+        binding->peer == NULL || binding->group_id == 0U)
+        return SALTS_EINVAL;
+
+    transport->context = binding;
+    transport->enqueue = tr_raft_cnet_group_transport_enqueue;
+    return SALTS_OK;
+}
+
 static int tr_raft_cnet_send_packet(
     tr_raft_cnet_peer_t *peer,
     const tr_raft_owned_transport_payload_t *owned,

@@ -42,11 +42,15 @@ include(cmake/CmakeUtils.cmake)
 
 set(TURBORAFT_PROFILE_FULL OFF)
 set(TURBORAFT_PROFILE_STORAGE OFF)
+set(TURBORAFT_PROFILE_CNET OFF)
 if(TURBORAFT_BUILD_PROFILE STREQUAL "full")
   set(TURBORAFT_PROFILE_FULL ON)
   set(TURBORAFT_PROFILE_STORAGE ON)
+  set(TURBORAFT_PROFILE_CNET ON)
 elseif(TURBORAFT_BUILD_PROFILE STREQUAL "storage-dev")
   set(TURBORAFT_PROFILE_STORAGE ON)
+elseif(TURBORAFT_BUILD_PROFILE STREQUAL "cnet-dev")
+  set(TURBORAFT_PROFILE_CNET ON)
 endif()
 
 if(TURBORAFT_PROFILE_FULL)
@@ -384,7 +388,7 @@ target_link_libraries(turboraft_service_wal_reload
 
 endif()
 
-if(TURBORAFT_PROFILE_FULL)
+if(TURBORAFT_PROFILE_CNET)
 find_package(Threads REQUIRED)
 
 if(TARGET Salts::CNet)
@@ -403,7 +407,13 @@ if(TARGET Salts::CNet)
     turboraft_cnet
     PUBLIC TurboRaft::Core Salts::CNet
     PRIVATE Salts::CSTL Salts::CMeta)
+else()
+  message(FATAL_ERROR "Required target is unavailable: Salts::CNet")
+endif()
+endif()
 
+# Snapshots, FlowMQ and HTTP integrations remain the full-stack only.
+if(TURBORAFT_PROFILE_FULL)
   add_library(turboraft_snapshot_peer STATIC
               src/service/raft_snapshot_peer.c)
   target_include_directories(turboraft_snapshot_peer
@@ -426,10 +436,6 @@ if(TARGET Salts::CNet)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/service)
   target_link_libraries(turboraft_snapshot_manager
                         PUBLIC TurboRaft::CNet TurboRaft::SnapshotSender)
-
-else()
-  message(FATAL_ERROR "Required target is unavailable: Salts::CNet")
-endif()
 
 if(TARGET Salts::CNet AND TARGET FlowMQ::FlowMQ)
   add_library(turboraft_flowmq STATIC

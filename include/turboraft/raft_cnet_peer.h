@@ -52,6 +52,21 @@ int tr_raft_cnet_peer_enqueue_group(
     tr_raft_group_id_t group_id,
     const tr_raft_message_t *message);
 
+/*
+ * Static ACE Adapter from one CNet peer/group to a Raft Transport.
+ * Caller owns this address-stable binding and borrowed peer until the
+ * consuming Raft Runtime/Service has stopped. All enqueue calls belong to
+ * the CNet peer's owner thread. No worker, queue or socket is created here.
+ */
+typedef struct tr_raft_cnet_group_binding {
+    tr_raft_cnet_peer_t *peer;
+    tr_raft_group_id_t group_id;
+} tr_raft_cnet_group_binding_t;
+
+/* Sets enqueue/context only; preserves the caller's snapshot adapter. */
+int tr_raft_cnet_group_transport_bind(
+    tr_raft_cnet_group_binding_t *binding, tr_raft_transport_t *transport);
+
 /**
  * Admits at most one retained CNet scatter/gather write. The current wire
  * frame is one canonical mem_slice_t over a Salts mem_buffer, so no payload

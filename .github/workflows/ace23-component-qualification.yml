@@ -5,10 +5,15 @@ on:
     paths:
       - "include/turboraft/raft_component.h"
       - "src/runtime/raft_component.c"
+      - "include/turboraft/raft_cnet_peer.h"
+      - "src/transport/raft_cnet_peer.c"
+      - "tests/core/test_raft_cnet_peer.c"
+      - "tests/ace23_cnet_consumer/**"
       - "src/runtime/raft_runtime.c"
       - "tests/core/test_raft_component.c"
       - "tests/ace23_component_consumer/**"
       - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
       - "cmake/TurboRaftConfig.cmake.in"
       - "vcpkg*.json"
       - ".github/actions/setup-ccache/**"
@@ -137,6 +142,38 @@ jobs:
           ctest --test-dir .ci/build-ace23-consumer \
             --output-on-failure --output-junit component-results.xml
 
+      - name: Build isolated CNet-only profile without FlowMQ
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B .ci/build-ace23-cnet -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTURBORAFT_BUILD_PROFILE=cnet-dev \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/ace23-cnet"
+          cmake --build .ci/build-ace23-cnet --parallel 2
+          cmake --install .ci/build-ace23-cnet
+          echo "TURBORAFT_ROOT=$GITHUB_WORKSPACE/stage/ace23-cnet" >> "$GITHUB_ENV"
+
+      - name: Build independent C11/C++17 CNet consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tests/ace23_cnet_consumer -B .ci/build-ace23-cnet-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build-ace23-cnet-consumer --parallel 2
+          ctest --test-dir .ci/build-ace23-cnet-consumer \
+            --output-on-failure --output-junit cnet-results.xml
+
       - name: Report ccache statistics
         if: always()
         run: ccache --show-stats
@@ -149,4 +186,6 @@ jobs:
           path: |
             .ci/build-ace23-consumer/Testing/Temporary
             .ci/build-ace23-consumer/component-results.xml
+            .ci/build-ace23-cnet-consumer/Testing/Temporary
+            .ci/build-ace23-cnet-consumer/cnet-results.xml
           if-no-files-found: ignore
