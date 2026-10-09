@@ -1,0 +1,554 @@
+#include <turboraft/raft_cnet_managed_peer.h>
+
+#include <cmeta_error.h>
+#include <salts/clock.h>
+#include <tinytest.h>
+
+#include <stdio.h>
+#include <string.h>
+
+#ifndef TURBORAFT_ACE23_FIXTURE_DIR
+#error "TURBORAFT_ACE23_FIXTURE_DIR must name the test-only certificates"
+#endif
+
+#define CERT_NODE1 "eb571a92b33237897216c79501066b3e77391047eaeb6be084526c4769657549"
+#define CERT_NODE2 "44e8fe3ce37ede1c2a1b5d36efa345cb662887d4250d17a000ebea2e834aed95"
+
+enum { PEER_COUNT = 2, PROGRESS_BUDGET = 6500 };
+
+typedef struct managed_probe {
+    size_t received;
+    size_t rejected;
+    tr_raft_node_id_t from;
+    tr_raft_node_id_t to;
+} managed_probe;
+
+typedef struct managed_fixture {
+    cnet_client client;
+    cnet_client server;
+    cnet_manager manager;
+    cnet_listener listener;
+    cnet_tls_server server_tls;
+    cnet_tls_client_config client_tls;
+    tr_raft_cnet_managed_peer_t *peers[PEER_COUNT];
+    tr_raft_cnet_channel_t *server_channels[PEER_COUNT];
+    tr_raft_cnet_channel_config_t server_config;
+    managed_probe client_probes[PEER_COUNT];
+    managed_probe server_probes[PEER_COUNT];
+    tr_raft_cnet_peer_identity_t client_identity;
+    tr_raft_cnet_peer_identity_t server_identity;
+    tr_raft_cnet_identity_policy_t client_policy;
+    tr_raft_cnet_identity_policy_t server_policy;
+    const char *server_fingerprint[1];
+    const char *client_fingerprint[1];
+    char ca[512], node1_cert[512], node1_key[512];
+    char node2_cert[512], node2_key[512], uri[128];
+    cnet_managed_connection stale;
+    int manager_open, client_open, server_open, listener_open, server_tls_open;
+    int accept_count;
+} managed_fixture;
+
+static int fixture_path(char *out, size_t size, const char *name)
+{
+    const int written = snprintf(out, size, "%s/%s",
+                                 TURBORAFT_ACE23_FIXTURE_DIR, name);
+    return written > 0 && (size_t)written < size ? SALTS_OK : SALTS_ERANGE;
+}
+
+static cnet_client_config client_config(void)
+{
+    return (cnet_client_config){
+#if defined(_WIN32)
+        .backend = NATIVE_IO_BACKEND_IOCP,
+#elif defined(__linux__)
+        .backend = NATIVE_IO_BACKEND_EPOLL,
+#else
+        .backend = NATIVE_IO_BACKEND_KQUEUE,
+#endif
+        .connection_capacity = 3U,
+        .command_capacity = 24U,
+        .request_capacity = 16U,
+        .completion_batch_capacity = 16U,
+        .event_capacity = 24U,
+        .max_send_bytes = 4096U,
+        .receive_buffer_bytes = 4096U,
+        .connect_timeout_ms = 2000U,
+        .read_timeout_ms = 2000U,
+        .write_timeout_ms = 2000U,
+        .tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES,
+        .tls_handshake_timeout_ms = 2000U
+    };
+}
+
+static tr_raft_handshake_config_t handshake_config(
+    tr_raft_node_id_t local_id)
+{
+    tr_raft_handshake_config_t config = {0};
+    size_t i;
+
+    for (i = 0; i < sizeof(config.cluster_id.bytes); ++i)
+        config.cluster_id.bytes[i] = (uint8_t)(i + 17U);
+    config.local_node_id = local_id;
+    config.process_incarnation.bytes[0] = (uint8_t)local_id;
+    config.config_epoch = 1U;
+    config.wire_major_min = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
+    config.wire_major_max = TR_RAFT_HANDSHAKE_WIRE_MAJOR;
+    config.wire_minor_min = TR_RAFT_HANDSHAKE_WIRE_MINOR;
+    config.wire_minor_max = TR_RAFT_HANDSHAKE_WIRE_MINOR;
+    config.max_frame_size = TR_RAFT_WIRE_MAX_FRAME_SIZE;
+    config.max_snapshot_chunk_size = TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES;
+    return config;
+}
+
+static int capture_payload(void *context,
+                           const tr_raft_transport_payload_t *payload)
+{
+    managed_probe *probe = (managed_probe *)context;
+    if (payload == NULL ||
+        payload->kind != TR_RAFT_WIRE_PAYLOAD_RAFT ||
+        payload->group_id != 42U ||
+        payload->data.raft.type != TR_RAFT_MSG_HEARTBEAT_REQUEST ||
+        payload->data.raft.from != probe->from ||
+        payload->data.raft.to != probe->to) {
+        ++probe->rejected;
+        return SALTS_EPROTO;
+    }
+    ++probe->received;
+    return SALTS_OK;
+}
+
+static int init_fixture(managed_fixture *fixture, int security_reject)
+{
+    cnet_client_config cfg = client_config();
+    cnet_listener_config listener = {
+        .backend = cfg.backend, .host = "127.0.0.1", .port = 0U,
+        .backlog = 3U
+    };
+    cnet_manager_config manager = {0};
+    cnet_tls_server_config tls = {0};
+    uint16_t port = 0U;
+    int result;
+#define INIT_TRY(expr) do { result = (expr); if (result != SALTS_OK) return result; } while (0)
+
+    INIT_TRY(fixture_path(fixture->ca, sizeof(fixture->ca), "ca.pem"));
+    INIT_TRY(fixture_path(fixture->node1_cert, sizeof(fixture->node1_cert),
+                          "node1-cert.pem"));
+    INIT_TRY(fixture_path(fixture->node1_key, sizeof(fixture->node1_key),
+                          "node1-key.pem"));
+    INIT_TRY(fixture_path(fixture->node2_cert, sizeof(fixture->node2_cert),
+                          "node2-cert.pem"));
+    INIT_TRY(fixture_path(fixture->node2_key, sizeof(fixture->node2_key),
+                          "node2-key.pem"));
+    INIT_TRY(cnet_client_init(&fixture->client, &cfg));
+    fixture->client_open = 1;
+    INIT_TRY(cnet_client_init(&fixture->server, &cfg));
+    fixture->server_open = 1;
+    INIT_TRY(cnet_listener_init(&fixture->listener, &listener));
+    fixture->listener_open = 1;
+    INIT_TRY(cnet_listener_port(&fixture->listener, &port));
+    if (snprintf(fixture->uri, sizeof(fixture->uri),
+                 "tls://127.0.0.1:%u", (unsigned)port) <= 0)
+        return SALTS_ERANGE;
+
+    tls.size = sizeof(tls);
+    tls.ca_file = fixture->ca;
+    tls.cert_file = fixture->node2_cert;
+    tls.key_file = fixture->node2_key;
+    tls.client_auth = CNET_TLS_CLIENT_AUTH_REQUIRED;
+    INIT_TRY(cnet_tls_server_init(&fixture->server_tls, &tls));
+    fixture->server_tls_open = 1;
+
+    manager = (cnet_manager_config){
+        sizeof(manager), CNET_MANAGER_VERSION, &fixture->client,
+        PEER_COUNT, PEER_COUNT
+    };
+    INIT_TRY(cnet_manager_init(&fixture->manager, &manager));
+    fixture->manager_open = 1;
+
+    fixture->client_tls.size = sizeof(fixture->client_tls);
+    fixture->client_tls.ca_file = fixture->ca;
+    fixture->client_tls.cert_file = fixture->node1_cert;
+    fixture->client_tls.key_file = fixture->node1_key;
+    fixture->client_tls.server_name = "node-2.mesh";
+
+    fixture->server_fingerprint[0] =
+        security_reject ? CERT_NODE1 : CERT_NODE2;
+    fixture->client_fingerprint[0] = CERT_NODE1;
+    fixture->client_identity = (tr_raft_cnet_peer_identity_t){
+        2U, fixture->server_fingerprint, 1U
+    };
+    fixture->server_identity = (tr_raft_cnet_peer_identity_t){
+        1U, fixture->client_fingerprint, 1U
+    };
+    fixture->client_policy = (tr_raft_cnet_identity_policy_t){
+        1U, &fixture->client_identity, 1U
+    };
+    fixture->server_policy = (tr_raft_cnet_identity_policy_t){
+        2U, &fixture->server_identity, 1U
+    };
+    fixture->server_config.client = &fixture->server;
+    fixture->server_config.identity = &fixture->server_policy;
+    fixture->server_config.handshake = handshake_config(2U);
+    fixture->server_config.first_outbound_message_id = 1U;
+    fixture->server_config.on_payload = capture_payload;
+#undef INIT_TRY
+    return SALTS_OK;
+}
+
+static int make_managed_peer(managed_fixture *f, size_t index,
+                             uint64_t now_ms)
+{
+    tr_raft_cnet_managed_peer_config_t config = {0};
+    tr_raft_handshake_config_t local = handshake_config(1U);
+    cnet_reconnect_config recovery = {0};
+
+    if (index >= PEER_COUNT) return SALTS_EINVAL;
+    f->client_probes[index] = (managed_probe){0U, 0U, 2U, 1U};
+    recovery.size = sizeof(recovery);
+    recovery.version = CNET_RECOVERY_POLICY_VERSION;
+    recovery.max_attempts = 3U;
+    recovery.deadline_ms = now_ms + 16000U;
+    recovery.initial_backoff_ms = 5U;
+    recovery.maximum_backoff_ms = 40U;
+    recovery.jitter_seed = 100U + index;
+    config.manager = &f->manager;
+    config.channel.client = &f->client;
+    config.channel.identity = &f->client_policy;
+    config.channel.handshake = local;
+    config.channel.first_outbound_message_id = 1U;
+    config.channel.on_payload = capture_payload;
+    config.channel.payload_context = &f->client_probes[index];
+    config.expected_peer_node_id = 2U;
+    config.uri = f->uri;
+    config.tls = &f->client_tls;
+    config.reconnect = recovery;
+    config.recovery_episode_ms = 3000U;
+    return tr_raft_cnet_managed_peer_create(&config, &f->peers[index]);
+}
+
+static int accept_server_peer(managed_fixture *f, size_t index)
+{
+    tr_raft_cnet_channel_config_t config = f->server_config;
+    cnet_observer observer;
+    cnet_connection connection = {0};
+    int result;
+
+    if (index >= PEER_COUNT || f->server_channels[index] != NULL)
+        return SALTS_EALREADY;
+    f->server_probes[index] = (managed_probe){0U, 0U, 1U, 2U};
+    config.payload_context = &f->server_probes[index];
+    result = tr_raft_cnet_channel_create(
+        &config, &f->server_channels[index]);
+    if (result != SALTS_OK) return result;
+    observer = tr_raft_cnet_channel_observer(f->server_channels[index]);
+    result = cnet_listener_accept_tls(
+        &f->listener, &f->server, &f->server_tls, &observer, &connection);
+    if (result != SALTS_OK) return result;
+    return tr_raft_cnet_channel_attach(
+        f->server_channels[index], connection);
+}
+
+static int managed_progress(managed_fixture *f,
+                            uint64_t now_ms, int start_first)
+{
+    size_t events = 0U;
+    size_t work = 0U;
+    size_t i;
+    int result;
+
+    result = cnet_client_poll(&f->client, 1U, &events);
+    if (result != SALTS_OK) return result;
+
+    {
+        int ready = 0;
+        result = cnet_listener_wait(&f->listener, 0U, &ready);
+        if (result != SALTS_OK) return result;
+        if (ready) {
+            /* All 2 connections on the same bounded manager share one
+             * target certificate/node in this capacity qualification.
+             * The real Node directory must reject duplicate logical IDs. */
+            for (i = 0U; i < PEER_COUNT; ++i) {
+                if (f->server_channels[i] == NULL) {
+                    result = accept_server_peer(f, i);
+                    if (result != SALTS_OK) return result;
+                    ++f->accept_count;
+                    break;
+                }
+            }
+        }
+    }
+    result = cnet_client_poll(&f->server, 1U, &events);
+    if (result != SALTS_OK) return result;
+    result = cnet_manager_advance(&f->manager, PEER_COUNT, &work);
+    if (result != SALTS_OK) return result;
+
+    for (i = 0U; i < PEER_COUNT; ++i) {
+        uint64_t wait_ms = 0U;
+        if (f->peers[i] == NULL || (!start_first && i == 0U))
+            continue;
+        result = tr_raft_cnet_managed_peer_advance(
+            f->peers[i], now_ms, &wait_ms);
+        if (result == SALTS_ESHUTDOWN) {
+            tr_raft_cnet_managed_peer_status_t status = {0};
+            int inspected = tr_raft_cnet_managed_peer_get_status(
+                f->peers[i], &status);
+            if (inspected != SALTS_OK) return inspected;
+            if (status.dial.recovery.sealed) continue;
+        }
+        if (result != SALTS_OK && result != SALTS_EBUSY &&
+            result != SALTS_ENOBUFS) return result;
+    }
+    return SALTS_OK;
+}
+
+static void cleanup_fixture(managed_fixture *f)
+{
+    size_t i, work;
+    if (f->manager_open)
+        (void)cnet_manager_request_close(&f->manager);
+    for (i = 0U; i < PEER_COUNT; ++i)
+        if (f->peers[i] != NULL)
+            (void)tr_raft_cnet_managed_peer_stop(f->peers[i]);
+    if (f->client_open)
+        (void)cnet_client_stop(&f->client, 2000U);
+    if (f->server_open)
+        (void)cnet_client_stop(&f->server, 2000U);
+    if (f->manager_open) {
+        for (i = 0U; i < PEER_COUNT * 4U; ++i) {
+            cnet_manager_snapshot state = {0};
+            if (cnet_manager_get_snapshot(&f->manager, &state) != SALTS_OK ||
+                state.drained) break;
+            (void)cnet_manager_advance(&f->manager, PEER_COUNT, &work);
+        }
+    }
+    for (i = 0U; i < PEER_COUNT; ++i) {
+        if (f->peers[i] != NULL)
+            (void)tr_raft_cnet_managed_peer_destroy(f->peers[i]);
+        if (f->server_channels[i] != NULL)
+            (void)tr_raft_cnet_channel_destroy(f->server_channels[i]);
+    }
+    if (f->manager_open)
+        (void)cnet_manager_destroy(&f->manager);
+    if (f->client_open)
+        (void)cnet_client_destroy(&f->client);
+    if (f->server_open)
+        (void)cnet_client_destroy(&f->server);
+    if (f->listener_open) {
+        (void)cnet_listener_close(&f->listener);
+        (void)cnet_listener_destroy(&f->listener);
+    }
+    if (f->server_tls_open)
+        (void)cnet_tls_server_destroy(&f->server_tls);
+}
+
+static int send_heartbeat(tr_raft_cnet_managed_peer_t *peer)
+{
+    tr_raft_transport_payload_t payload = {0};
+    payload.group_id = 42U;
+    payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+    payload.data.raft.from = 1U;
+    payload.data.raft.to = 2U;
+    payload.data.raft.term = 3U;
+    payload.data.raft.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+    return tr_raft_cnet_managed_peer_send(peer, &payload);
+}
+
+static int test_bounded_multi_link(void)
+{
+    managed_fixture f = {0};
+    tr_raft_cnet_managed_peer_status_t a = {0}, b = {0};
+    cnet_manager_snapshot slots = {0};
+    const uint64_t began = cmeta_monotonic_ms();
+    unsigned i;
+    int result;
+    const char *failed = "none";
+
+#define CHECK_TRY(expr) do { \
+    result = (expr); \
+    if (result != SALTS_OK) { failed = #expr; goto done; } \
+} while (0)
+
+    CHECK_TRY(init_fixture(&f, 0));
+    CHECK_TRY(make_managed_peer(&f, 0U, began));
+    CHECK_TRY(make_managed_peer(&f, 1U, began));
+
+    if (send_heartbeat(f.peers[0]) != SALTS_ENOSPC) {
+        result = SALTS_EPROTO;
+        failed = "pre-handshake rejects RAFT";
+        goto done;
+    }
+
+    CHECK_TRY(tr_raft_cnet_managed_peer_advance(f.peers[0], began, &(uint64_t){0}));
+    CHECK_TRY(tr_raft_cnet_managed_peer_advance(f.peers[1], began, &(uint64_t){0}));
+    CHECK_TRY(cnet_manager_get_snapshot(&f.manager, &slots));
+    if (slots.bound != PEER_COUNT ||
+        slots.connection_capacity != PEER_COUNT) {
+        result = SALTS_EPROTO;
+        failed = "two physical Manager credits";
+        goto done;
+    }
+    CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
+    f.stale = a.dial.managed;
+
+    for (i = 0U; i < PROGRESS_BUDGET; ++i) {
+        CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
+        CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
+        CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[1], &b));
+        if (a.dial.recovery.protocol_ready &&
+            b.dial.recovery.protocol_ready)
+            break;
+    }
+
+    if (!a.dial.recovery.protocol_ready || !b.dial.recovery.protocol_ready ||
+        a.protocol_ready_count != 1U || b.protocol_ready_count != 1U ||
+        f.accept_count != 2) {
+        result = SALTS_EPROTO;
+        failed = "both connections must complete protocol readiness";
+        goto done;
+    }
+
+    CHECK_TRY(send_heartbeat(f.peers[0]));
+    CHECK_TRY(send_heartbeat(f.peers[1]));
+    for (i = 0U; i < PROGRESS_BUDGET; ++i) {
+        CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
+        if (f.server_probes[0].received == 1U &&
+            f.server_probes[1].received == 1U)
+            break;
+    }
+    if (f.server_probes[0].received != 1U ||
+        f.server_probes[1].received != 1U ||
+        f.server_probes[0].rejected || f.server_probes[1].rejected) {
+        result = SALTS_EPROTO;
+        failed = "two separate authorized link payloads";
+        goto done;
+    }
+
+    /* Transport loss never replays an accepted Raft message. The application
+     * must explicitly decide whether an operation remains unsettled. */
+    CHECK_TRY(tr_raft_cnet_channel_stop(f.server_channels[0]));
+    for (i = 0U; i < PROGRESS_BUDGET; ++i) {
+        tr_raft_cnet_channel_status_t closed = {0};
+        CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 0));
+        CHECK_TRY(tr_raft_cnet_channel_get_status(
+            f.server_channels[0], &closed));
+        if (closed.terminal) break;
+    }
+    if (i == PROGRESS_BUDGET) {
+        result = SALTS_ETIMEDOUT;
+        failed = "terminal old server connection";
+        goto done;
+    }
+    CHECK_TRY(tr_raft_cnet_channel_destroy(f.server_channels[0]));
+    f.server_channels[0] = NULL;
+
+    for (i = 0U; i < PROGRESS_BUDGET; ++i) {
+        CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
+        CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
+        CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[1], &b));
+        if (a.protocol_ready_count >= 2U &&
+            a.dial.recovery.protocol_ready &&
+            b.dial.recovery.protocol_ready)
+            break;
+    }
+    if (a.protocol_ready_count < 2U || a.connections_started < 2U ||
+        b.protocol_ready_count != 1U ||
+        f.accept_count != 3 ||
+        f.server_probes[0].received != 0U) {
+        result = SALTS_EPROTO;
+        failed = "manual reconnect must not replay payload";
+        goto done;
+    }
+
+    if (a.dial.managed.generation == f.stale.generation &&
+        a.dial.managed.incarnation == f.stale.incarnation) {
+        result = SALTS_EPROTO;
+        failed = "reconnected generation must be distinct";
+        goto done;
+    }
+    {
+        cnet_manager_entry stale = {0};
+        if (cnet_manager_lookup(&f.manager, f.stale, &stale) != SALTS_ENOENT) {
+            result = SALTS_EPROTO;
+            failed = "old Manager generation must be stale";
+            goto done;
+        }
+    }
+
+    CHECK_TRY(send_heartbeat(f.peers[0]));
+    for (i = 0U; i < PROGRESS_BUDGET; ++i) {
+        CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
+        if (f.server_probes[0].received == 1U) break;
+    }
+    if (f.server_probes[0].received != 1U) {
+        result = SALTS_EPROTO;
+        failed = "explicit send after authorized reconnect";
+    }
+done:
+    if (result != SALTS_OK)
+        fprintf(stderr, "managed peers: %s result=%d accepting=%d aReady=%zu bReady=%zu aConn=%zu\n",
+                failed, result, f.accept_count, a.protocol_ready_count,
+                b.protocol_ready_count, a.connections_started);
+    cleanup_fixture(&f);
+#undef CHECK_TRY
+    return result;
+}
+
+static int test_security_seals_reconnect(void)
+{
+    managed_fixture f = {0};
+    tr_raft_cnet_managed_peer_status_t status = {0};
+    const uint64_t began = cmeta_monotonic_ms();
+    unsigned i;
+    int result;
+    const char *failed = "none";
+#define SEC_TRY(expr) do { result=(expr); if(result != SALTS_OK) { failed=#expr; goto done; } } while(0)
+    SEC_TRY(init_fixture(&f, 1));
+    SEC_TRY(make_managed_peer(&f, 0U, began));
+    SEC_TRY(tr_raft_cnet_managed_peer_advance(f.peers[0], began, &(uint64_t){0}));
+    for (i = 0U; i < PROGRESS_BUDGET; ++i) {
+        SEC_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
+        SEC_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &status));
+        if (status.dial.recovery.sealed) break;
+    }
+    if (!status.dial.recovery.sealed ||
+        status.protocol_ready_count != 0U ||
+        status.connections_started != 1U ||
+        status.security_rejections == 0U) {
+        failed = "invalid TLS identity must seal reconnect without READY";
+        result = SALTS_EPROTO;
+        goto done;
+    }
+    for (i = 0U; i < 8U; ++i) {
+        uint64_t wait_ms = 0U;
+        result = tr_raft_cnet_managed_peer_advance(
+            f.peers[0], cmeta_monotonic_ms(), &wait_ms);
+        if (result != SALTS_ESHUTDOWN &&
+            result != SALTS_EBUSY) {
+            failed = "sealed dial cannot establish a second connection";
+            result = SALTS_EPROTO;
+            goto done;
+        }
+    }
+    result = SALTS_OK;
+done:
+    if (result != SALTS_OK)
+        fprintf(stderr, "security peer: %s result=%d attempts=%zu seals=%zu\n",
+                failed, result, status.connections_started,
+                status.security_rejections);
+    cleanup_fixture(&f);
+#undef SEC_TRY
+    return result;
+}
+
+spec("ACE 2.3 CNetManager owner-local Raft managed dial")
+{
+    it("bounds two real TLS connections, keeps peer isolation and only caller-drives reconnect")
+    {
+        check_equal(test_bounded_multi_link(), SALTS_OK);
+    }
+
+    it("seals bad TLS fingerprint without downgrade or implicit reconnect")
+    {
+        check_equal(test_security_seals_reconnect(), SALTS_OK);
+    }
+}

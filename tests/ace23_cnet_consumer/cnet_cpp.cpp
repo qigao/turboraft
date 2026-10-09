@@ -1,5 +1,6 @@
 #include <turboraft/raft_cnet_peer.h>
 #include <turboraft/raft_cnet_channel.h>
+#include <turboraft/raft_cnet_managed_peer.h>
 
 #include <type_traits>
 
@@ -23,6 +24,16 @@ static_assert(std::is_same<
     int (*)(tr_raft_cnet_channel_group_binding_t *,
             tr_raft_transport_t *)>::value,
     "Raft Service -> verified CNet Channel uses one typed borrowed transport");
+
+static_assert(std::is_same<
+    decltype(&tr_raft_cnet_managed_peer_advance),
+    int (*)(tr_raft_cnet_managed_peer_t *, uint64_t, uint64_t *)>::value,
+    "Managed Raft CNet dial must preserve owner-local explicit progress ABI");
+static_assert(std::is_same<
+    decltype(&tr_raft_cnet_managed_peer_send),
+    int (*)(tr_raft_cnet_managed_peer_t *,
+            const tr_raft_transport_payload_t *)>::value,
+    "Raft managed peer has a typed, capacity-bounded transport SPI");
 
 int main()
 {
