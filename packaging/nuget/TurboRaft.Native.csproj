@@ -13,11 +13,22 @@
     <PackageProjectUrl>https://github.com/qigao/turboraft</PackageProjectUrl>
     <NoWarn>$(NoWarn);NU5128</NoWarn>
   </PropertyGroup>
+  <!-- No exact candidate: restore must fail, never fall back to current stable. -->
+  <Target Name="RequireExactNativeSdkVersions" BeforeTargets="Restore;Pack">
+    <Error Condition="'$(SaltsNativeCandidateVersion)' == ''"
+           Text="An immutable Salts.Native 2.3.0 ACE SHA candidate version is required." />
+    <Error Condition="'$(SaltsUtilsNativeVersion)' == ''"
+           Text="Exact SaltsUtils.Native version is required." />
+    <Error Condition="'$(FlowMQNativeVersion)' == ''"
+           Text="Exact FlowMQ.Native version is required until CNet replacement passes." />
+    <Error Condition="'$(CHttpNativeVersion)' == ''"
+           Text="Exact CHttp.Native version is required." />
+  </Target>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" PrivateAssets="all" />
-    <PackageReference Include="SaltsUtils.Native" Version="*" PrivateAssets="all" />
-    <PackageReference Include="FlowMQ.Native" Version="*" PrivateAssets="all" />
-    <PackageReference Include="CHttp.Native" Version="*" PrivateAssets="all" />
+    <PackageReference Include="Salts.Native" Version="[$(SaltsNativeCandidateVersion)]" PrivateAssets="all" />
+    <PackageReference Include="SaltsUtils.Native" Version="[$(SaltsUtilsNativeVersion)]" PrivateAssets="all" />
+    <PackageReference Include="FlowMQ.Native" Version="[$(FlowMQNativeVersion)]" PrivateAssets="all" />
+    <PackageReference Include="CHttp.Native" Version="[$(CHttpNativeVersion)]" PrivateAssets="all" />
     <PackageReference Include="TurboDB.Native" Version="[2.3.1]" PrivateAssets="all"
                       Condition="'$(TurboRaftRestoreOrm)' == 'true'" />
     <None Include="README.md" Pack="true" PackagePath="\" />

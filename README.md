@@ -1,6 +1,13 @@
 # TurboRaft
 
-TurboRaft is a C11 Raft library built on the Salts package family. It separates
+TurboRaft is a C11 Raft library built on the Salts package family.
+
+**ACE 2.3 development branch:** [CMeta/CNet/ACE design](docs/ACE23_ARCHITECTURE.md)
+and [new-only runtime policy](docs/NEW_ONLY_RUNTIME_POLICY.md).
+This branch intentionally removes v0.2.0 cross-version compatibility; it is
+**not release-ready** until an exact Salts 2.3.0 ACE SDK candidate and all
+installed consumer/sanitizer gates pass. The upstream Salts ACE Draft PR
+remains **DO NOT MERGE / DO NOT PUBLISH**. It separates
 the deterministic consensus core from transport, durable WAL storage, snapshot
 transfer, application state machines, and a standalone CHttp JSON-RPC/HTTP
 control plane.
@@ -54,11 +61,14 @@ Configure requires active-profile installations provided through:
 - `TURBODB_ROOT` for the opt-in ORM recovery tests
 
 The supplied user presets resolve Debug and Release profiles independently and
-use `NO_DEFAULT_PATH` for first-party package discovery. Salts 2.1+ and
-SaltsUtils 4.2+ are required. CI consumes published Salts/SaltsUtils SDKs;
-FlowMQ and CHttp source gates additionally follow their current branches.
-Native package builds resolve current published SDKs and record the
-resolved versions in each SDK manifest. FlowMQ must be built against the same
+use `NO_DEFAULT_PATH` for first-party package discovery. **This development
+branch requires Salts 2.3.0 EXACT with Component/ComponentPlugin/Plugin and
+SaltsUtils 4.2.1+.** No Salts 2.2 fallback is accepted. An immutable
+Salts.Native 2.3.0-ace.sha<FULL_SHA> candidate has not yet passed upstream
+release qualification: users must not treat currently published SDKs as
+compatible with this branch. Native package restores require explicit exact
+first-party version properties; CI must verify all package ABI/SONAME
+provenance rather than assuming exact version numbers alone prove linkage. FlowMQ must be built against the same
 Salts/SaltsUtils generation; an older SDK that imports `Salts::TbeSchema` is
 incompatible with SaltsUtils 4.2.
 

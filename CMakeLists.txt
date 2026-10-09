@@ -106,10 +106,20 @@ unset(Salts_DIR CACHE)
 unset(Salts_DIR)
 unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
-find_package(Salts 2.1 CONFIG REQUIRED
+find_package(Salts 2.3.0 EXACT CONFIG REQUIRED
              PATHS "${TURBORAFT_SALTS_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_package(SaltsUtils 4.2 CONFIG REQUIRED
+find_package(SaltsUtils 4.2.1 CONFIG REQUIRED
              PATHS "${TURBORAFT_SALTS_UTILS_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+
+# Fail closed: ACE 2.3 and Component/Plugin are required even in focused profiles.
+foreach(_turboraft_ace_target IN ITEMS
+        Salts::CMeta Salts::Component Salts::ComponentPlugin Salts::Plugin)
+  if(NOT TARGET ${_turboraft_ace_target})
+    message(FATAL_ERROR
+            "TurboRaft Next requires exact Salts 2.3 ACE target: ${_turboraft_ace_target}")
+  endif()
+endforeach()
+unset(_turboraft_ace_target)
 
 if(TURBORAFT_PROFILE_FULL)
   file(TO_CMAKE_PATH "$ENV{FLOWMQ_ROOT}" TURBORAFT_FLOWMQ_ROOT_PATH)
@@ -336,12 +346,6 @@ target_include_directories(
 target_link_libraries(turboraft_wal_storage
                       PUBLIC TurboRaft::Core
                       PRIVATE Salts::Core xxHash::xxhash)
-
-add_executable(turboraft_compat_check tools/turboraft_compat_check.c)
-target_link_libraries(turboraft_compat_check
-                      PRIVATE Salts::Core xxHash::xxhash)
-set_target_properties(turboraft_compat_check
-                      PROPERTIES FOLDER "TurboRaft/tools")
 
 endif()
 
@@ -679,10 +683,6 @@ install(
   PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/tools/turboraft_incident_bundle.py"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/tools")
 
-if(TARGET turboraft_compat_check)
-  install(TARGETS turboraft_compat_check
-          RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-endif()
 install(
   FILES "${CMAKE_CURRENT_SOURCE_DIR}/docs/PUBLIC_CALLBACK_CONTRACTS.json"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/abi")
