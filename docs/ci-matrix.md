@@ -8,7 +8,7 @@ TurboRaft keeps functional correctness, sanitizer, performance, compatibility an
 | Windows full stack | `windows-msvc-release.yml` | MSVC / Ninja, Release | CTest and installed package consumers |
 | Linux sanitizers | `linux-sanitizers.yml` | GCC / Ninja, Debug | ASan + UBSan together; independent TSan |
 | Native SDK | `native-sdk-qualification.yml` and `native-sdk-pipeline.yml` | Linux GCC and Windows MSVC | Build, pack and installed SDK consumer qualification |
-| Specialized | `cflow-orm.yml`, `extended-chaos.yml`, `durable-fsync-benchmark.yml`, `release-compat-v020.yml`, `v020-live-mixed-peer.yml`, `v020-upgrade-compat.yml` | Linux GCC / Ninja | Recovery, long-running chaos, retained performance and prior-release compatibility |
+| Specialized | `cflow-orm.yml`, `extended-chaos.yml`, `durable-fsync-benchmark.yml` | Linux GCC / Ninja | Current-SDK recovery, long-running chaos and retained performance |
 
 The sanitizer matrix runs **two jobs**, `asan-ubsan` and `tsan`. CMake's sanitizer module supports the combined AddressSanitizer/UndefinedBehaviorSanitizer flags and explicitly prohibits combining ThreadSanitizer with AddressSanitizer.
 
@@ -20,4 +20,4 @@ The sanitizer matrix runs **two jobs**, `asan-ubsan` and `tsan`. CMake's sanitiz
 - Only **compiler objects** are cached. CMake build directories, test results, runtime state, packaged SDKs and benchmark results are rebuilt or exercised on every applicable run.
 - MSVC builds remain uncached by ccache pending a validated Windows compiler-cache lane; they are not removed from coverage.
 
-Changes affecting `src/**`, `include/**`, and CMake/SDK contracts must continue through the full acceptance and native SDK qualification gates. Performance and compatibility evidence remains separate rather than being treated as cached build output.
+Changes affecting `src/**`, `include/**`, and CMake/SDK contracts must continue through full acceptance and native SDK qualification. Durable crash/corruption, wire, snapshot and current-version network correctness tests remain required. Historical v0.2.0 upgrade/downgrade and mixed-version-peer CI workflows are intentionally retired by #142/#143. There is no old-version fallback or mixed-ABI admission.
