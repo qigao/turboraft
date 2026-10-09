@@ -222,10 +222,11 @@ static int tls_case_run(int mode)
     unsigned iteration;
     int ready = 0;
     int status = SALTS_OK;
+    const char *failed_stage = "none";
 
 #define TLS_TRY(expression) do { \
     status = (expression); \
-    if (status != SALTS_OK) goto cleanup; \
+    if (status != SALTS_OK) { failed_stage = #expression; goto cleanup; } \
 } while (0)
 
     fixture.mode = mode;
@@ -345,13 +346,13 @@ static int tls_case_run(int mode)
 cleanup:
     if (fixture.client_initialized) {
         int close_status = cnet_client_stop(&fixture.client, 2000U);
-        if (status == SALTS_OK && close_status != SALTS_OK) status = close_status;
+        if (status == SALTS_OK && close_status != SALTS_OK) { status = close_status; failed_stage = "client stop"; }
         close_status = cnet_client_destroy(&fixture.client);
         if (status == SALTS_OK && close_status != SALTS_OK) status = close_status;
     }
     if (fixture.server_initialized) {
         int close_status = cnet_client_stop(&fixture.server, 2000U);
-        if (status == SALTS_OK && close_status != SALTS_OK) status = close_status;
+        if (status == SALTS_OK && close_status != SALTS_OK) { status = close_status; failed_stage = "server stop"; }
         close_status = cnet_client_destroy(&fixture.server);
         if (status == SALTS_OK && close_status != SALTS_OK) status = close_status;
     }
@@ -364,6 +365,21 @@ cleanup:
         if (status == SALTS_OK && close_status != SALTS_OK) status = close_status;
     }
 #undef TLS_TRY
+    if (status != SALTS_OK)
+        fprintf(stderr,
+                "mTLS case=%d status=%d stage=%s client_connected=%d "
+                "server_connected=%d auth=%d done=%d nego=%d sent=%d "
+                "client_callback=%d server_callback=%d client_failed=%d "
+                "server_failed=%d received=%zu\\n",
+                mode, status, failed_stage, fixture.client_probe.connected,
+                fixture.server_probe.connected, fixture.server_probe.auth_status,
+                fixture.server_probe.negotiated_done,
+                fixture.server_probe.negotiation_status,
+                fixture.client_probe.sent,
+                fixture.client_probe.callback_error,
+                fixture.server_probe.callback_error,
+                fixture.client_probe.failed, fixture.server_probe.failed,
+                fixture.server_probe.received_size);
     return status;
 }
 
