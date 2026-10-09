@@ -35,6 +35,12 @@ static_assert(std::is_same<
             const tr_raft_transport_payload_t *)>::value,
     "Raft managed peer has a typed, capacity-bounded transport SPI");
 
+static_assert(std::is_same<
+    decltype(&tr_raft_cnet_managed_group_transport_bind),
+    int (*)(tr_raft_cnet_managed_group_binding_t *,
+            tr_raft_transport_t *)>::value,
+    "Stable owner-bound Raft transport must survive managed dial generations");
+
 int main()
 {
     tr_raft_transport_t transport = {};

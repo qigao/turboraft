@@ -31,6 +31,8 @@ typedef struct managed_fixture {
     cnet_tls_server server_tls;
     cnet_tls_client_config client_tls;
     tr_raft_cnet_managed_peer_t *peers[PEER_COUNT];
+    tr_raft_cnet_managed_group_binding_t groups[PEER_COUNT];
+    tr_raft_transport_t runtime_transports[PEER_COUNT];
     tr_raft_cnet_channel_t *server_channels[PEER_COUNT];
     tr_raft_cnet_channel_config_t server_config;
     managed_probe client_probes[PEER_COUNT];
@@ -223,7 +225,27 @@ static int make_managed_peer(managed_fixture *f, size_t index,
     config.tls = &f->client_tls;
     config.reconnect = recovery;
     config.recovery_episode_ms = 3000U;
-    return tr_raft_cnet_managed_peer_create(&config, &f->peers[index]);
+    {
+        int status = tr_raft_cnet_managed_peer_create(
+            &config, &f->peers[index]);
+        if (status != SALTS_OK) return status;
+    }
+
+    f->groups[index].peer = f->peers[index];
+    f->groups[index].group_id = 42U;
+    f->runtime_transports[index].snapshot_context = f;
+    {
+        int status = tr_raft_cnet_managed_group_transport_bind(
+            &f->groups[index], &f->runtime_transports[index]);
+        if (status != SALTS_OK) return status;
+    }
+    if (f->runtime_transports[index].snapshot_context != f ||
+        f->runtime_transports[index].context != &f->groups[index] ||
+        tr_raft_cnet_managed_group_transport_bind(
+            &f->groups[index],
+            &f->runtime_transports[index]) != SALTS_EALREADY)
+        return SALTS_EPROTO;
+    return SALTS_OK;
 }
 
 static int accept_server_peer(managed_fixture *f, size_t index)
@@ -341,16 +363,26 @@ static void cleanup_fixture(managed_fixture *f)
         (void)cnet_tls_server_destroy(&f->server_tls);
 }
 
-static int send_heartbeat(tr_raft_cnet_managed_peer_t *peer)
+static int send_heartbeat(managed_fixture *f, size_t index)
 {
+    tr_raft_message_t message = {0};
     tr_raft_transport_payload_t payload = {0};
+
+    if (f == NULL || index >= PEER_COUNT) return SALTS_EINVAL;
+    message.from = 1U;
+    message.to = 2U;
+    message.term = 3U;
+    message.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+    if (index == 0U) {
+        /* Raft Service uses this SAME stable callback before and after
+         * connection N -> N+1, without rebinding its borrowed self. */
+        return f->runtime_transports[index].enqueue(
+            f->runtime_transports[index].context, &message);
+    }
     payload.group_id = 42U;
     payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
-    payload.data.raft.from = 1U;
-    payload.data.raft.to = 2U;
-    payload.data.raft.term = 3U;
-    payload.data.raft.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
-    return tr_raft_cnet_managed_peer_send(peer, &payload);
+    payload.data.raft = message;
+    return tr_raft_cnet_managed_peer_send(f->peers[index], &payload);
 }
 
 static int test_bounded_multi_link(void)
@@ -372,7 +404,7 @@ static int test_bounded_multi_link(void)
     CHECK_TRY(make_managed_peer(&f, 0U, began));
     CHECK_TRY(make_managed_peer(&f, 1U, began));
 
-    if (send_heartbeat(f.peers[0]) != SALTS_ENOSPC) {
+    if (send_heartbeat(&f, 0U) != SALTS_ENOSPC) {
         result = SALTS_EPROTO;
         failed = "pre-handshake rejects RAFT";
         goto done;
@@ -407,8 +439,8 @@ static int test_bounded_multi_link(void)
         goto done;
     }
 
-    CHECK_TRY(send_heartbeat(f.peers[0]));
-    CHECK_TRY(send_heartbeat(f.peers[1]));
+    CHECK_TRY(send_heartbeat(&f, 0U));
+    CHECK_TRY(send_heartbeat(&f, 1U));
     for (i = 0U; i < PROGRESS_BUDGET; ++i) {
         CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
         if (f.server_probes[0].received == 1U &&
@@ -474,7 +506,7 @@ static int test_bounded_multi_link(void)
         }
     }
 
-    CHECK_TRY(send_heartbeat(f.peers[0]));
+    CHECK_TRY(send_heartbeat(&f, 0U));
     for (i = 0U; i < PROGRESS_BUDGET; ++i) {
         CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
         if (f.server_probes[0].received == 1U) break;

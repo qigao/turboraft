@@ -301,6 +301,39 @@ int tr_raft_cnet_managed_peer_send(
                ? SALTS_ENOSPC : result;
 }
 
+static int tr_managed_group_enqueue(
+    void *context,
+    const tr_raft_message_t *message)
+{
+    tr_raft_cnet_managed_group_binding_t *binding =
+        (tr_raft_cnet_managed_group_binding_t *)context;
+    tr_raft_transport_payload_t payload = {0};
+
+    if (binding == NULL || binding->peer == NULL ||
+        binding->group_id == 0U || message == NULL)
+        return SALTS_EINVAL;
+
+    payload.group_id = binding->group_id;
+    payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+    payload.data.raft = *message;
+    return tr_raft_cnet_managed_peer_send(binding->peer, &payload);
+}
+
+int tr_raft_cnet_managed_group_transport_bind(
+    tr_raft_cnet_managed_group_binding_t *binding,
+    tr_raft_transport_t *transport)
+{
+    if (binding == NULL || binding->peer == NULL ||
+        binding->group_id == 0U || transport == NULL)
+        return SALTS_EINVAL;
+    if (transport->enqueue != NULL)
+        return SALTS_EALREADY;
+
+    transport->context = binding;
+    transport->enqueue = tr_managed_group_enqueue;
+    return SALTS_OK;
+}
+
 int tr_raft_cnet_managed_peer_get_status(
     tr_raft_cnet_managed_peer_t *peer,
     tr_raft_cnet_managed_peer_status_t *out_status)

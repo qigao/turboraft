@@ -70,6 +70,22 @@ int tr_raft_cnet_managed_peer_send(
     tr_raft_cnet_managed_peer_t *peer,
     const tr_raft_transport_payload_t *payload);
 
+/*
+ * Stable Raft Service transport binding: unlike a single Channel binding,
+ * its self remains valid across a managed connection generation change.
+ * Caller owns this address-stable group record and the ManagedPeer until
+ * Runtime/Service teardown. No hidden queue or settlement retry is created.
+ * Snapshot callback/context remain caller-owned and are never overwritten.
+ */
+typedef struct tr_raft_cnet_managed_group_binding {
+    tr_raft_cnet_managed_peer_t *peer;
+    tr_raft_group_id_t group_id;
+} tr_raft_cnet_managed_group_binding_t;
+
+int tr_raft_cnet_managed_group_transport_bind(
+    tr_raft_cnet_managed_group_binding_t *binding,
+    tr_raft_transport_t *transport);
+
 int tr_raft_cnet_managed_peer_get_status(
     tr_raft_cnet_managed_peer_t *peer,
     tr_raft_cnet_managed_peer_status_t *out_status);

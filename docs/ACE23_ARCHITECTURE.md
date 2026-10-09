@@ -192,6 +192,66 @@ Windows/macOS final package validation. The dedicated RC qualification is
 not the full native-SDK release gate. No version fallback or FlowMQ deletion
 is authorized by this test result.
 
+### ManagedDial with stable Raft Service transport (owner-local)
+
+`tr_raft_cnet_managed_peer` composes exactly one upstream
+`cnet_managed_dial` per configured peer and borrows a single, shared
+`cnet_manager` owned by the CNet final Owner. Manager allocates bounded
+records, validates incarnation/generation identities and recycles only after
+terminal callbacks; ManagedDial owns finite reconnect attempts, absolute
+deadline and jittered backoff. The caller advances these functions alongside
+the existing CNet progress loop: **no TurboRaft retry thread or queue**.
+
+```c
+/* Per Owner, initialized exactly once (configuration simplified). */
+cnet_manager manager = {0};
+/* cnet_manager_init(&manager, &strict_config); */
+
+/* Per peer: exact Node ID, TLS policy, Raft HELLO, bounded retry policy.
+ * All borrowed config/credential storage survives until manager recycle. */
+tr_raft_cnet_managed_peer_t *peer = NULL;
+/* tr_raft_cnet_managed_peer_create(&peer_config, &peer); */
+
+/* Long-lived Service transport self: NOT a pointer to a recycled CNet
+ * connection or a per-generation tr_raft_cnet_channel. */
+tr_raft_cnet_managed_group_binding_t group = {peer, 42};
+tr_raft_transport_t transport = {0};
+tr_raft_cnet_managed_group_transport_bind(&group, &transport);
+
+/* Host owns normal progress, e.g.:
+ * cnet_client_poll(owner_client, 1, &events);
+ * cnet_manager_advance(&manager, capacity, &work);
+ * tr_raft_cnet_managed_peer_advance(peer, cmeta_monotonic_ms(), &wait);
+ */
+```
+
+`CONNECTED` is not protocol admission. Only verified client/server TLS
+peer certificate → *configured exact* Node ID → same Cluster/HELLO plus
+reciprocal ACK transitions the Raft Channel to ACTIVE. Only then does the
+owner explicitly mark `cnet_managed_dial_protocol_ready`. Security rejection
+seals the recovery state rather than downgrading to plaintext or choosing
+a different peer. Remote transport loss may schedule a *connection*
+attempt subject to the finite policy, but never replays accepted Raft
+messages or retries uncertain WAL/apply settlements.
+
+Critically, the `tr_raft_cnet_managed_group_binding` retains a stable
+Raft `Transport.enqueue` self across connection N → N+1. The Component,
+Service and WAL owner do not retain stale `cnet_connection` handles.
+Unready/delayed/CNet-capacity-full send returns `SALTS_ENOSPC` to the
+existing Service peer-suffix owner. An explicit stop seals the managed
+dial; Manager recycle and terminal CNet callbacks must finish before
+peer destruction. Manager/client destruction follows last; all belong to
+one Owner.
+
+The initial live TLS test deliberately exercises **two simultaneous physical
+connections to one authorized certificate/Node ID**, to verify Manager
+credits and generation recycling independently of cluster membership.
+It is **not** a claim that the full Node directory / distinct multiple
+peer identity admission, multi-owner placement or membership changes
+are implemented. Actual multi-node manager directory + peer-route
+uniqueness and CNet client-pool protocol lease qualification remain open.
+The full native SDK remains separate and currently RED.
+
 ## 5. Multicore and CFlow boundary
 
 `tr_raft_multicore` already owns fixed cmeta threads, completion storage,
