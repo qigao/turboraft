@@ -21,6 +21,7 @@ enum {
     TLS_CASE_VALID = 0,
     TLS_CASE_WRONG_CERTIFICATE,
     TLS_CASE_FORGED_NODE_ID,
+    TLS_CASE_WRONG_CLUSTER,
     TLS_CASE_BOUNDED_HANDOFF,
     TLS_CASE_THREADED_HANDOFF,
     TLS_PROGRESS_MAX = 4000
@@ -147,6 +148,8 @@ static void tls_state(void *context, cnet_connection connection,
             tr_raft_handshake_config_t peer =
                 tls_config(fixture->mode == TLS_CASE_FORGED_NODE_ID ? 3U : 1U);
             tr_raft_handshake_message_t hello;
+            if (fixture->mode == TLS_CASE_WRONG_CLUSTER)
+                peer.cluster_id.bytes[0] ^= 0x55U;
             uint8_t packet[TR_RAFT_HANDSHAKE_PACKET_SIZE];
             size_t size = 0U;
             mem_buffer_t *buffer;
@@ -484,7 +487,8 @@ static int tls_case_run(int mode)
             !fixture.server_probe.negotiated_done ||
             !fixture.client_probe.sent) {
             status = SALTS_EPROTO;
-        } else if (mode == TLS_CASE_FORGED_NODE_ID) {
+        } else if (mode == TLS_CASE_FORGED_NODE_ID ||
+                   mode == TLS_CASE_WRONG_CLUSTER) {
             if (fixture.server_probe.negotiation_status != SALTS_EPROTO ||
                 fixture.server_probe.handshake.complete)
                 status = SALTS_EPROTO;
@@ -624,6 +628,11 @@ spec("ACE 2.3 real CNet mTLS Raft Node ID admission")
     it("rejects a forged Raft HELLO node ID on an authenticated TLS stream")
     {
         check_equal(tls_case_run(TLS_CASE_FORGED_NODE_ID), SALTS_OK);
+    }
+
+    it("rejects a foreign cluster HELLO despite a valid TLS client certificate")
+    {
+        check_equal(tls_case_run(TLS_CASE_WRONG_CLUSTER), SALTS_OK);
     }
 
     it("takes a bounded accepted stream and starts TLS on its final owner")
