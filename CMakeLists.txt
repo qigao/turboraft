@@ -267,6 +267,17 @@ target_link_libraries(turboraft_cflow_state_machine
 
 endif()
 
+# ACE/Component composes borrowed Raft adapters; Core remains deterministic.
+add_library(turboraft_component STATIC src/runtime/raft_component.c)
+add_library(TurboRaft::Component ALIAS turboraft_component)
+set_target_properties(turboraft_component PROPERTIES EXPORT_NAME Component
+                      FOLDER "libraries/runtime")
+target_include_directories(turboraft_component
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(turboraft_component
+  PUBLIC TurboRaft::Core Salts::Component Salts::CMeta)
+
 add_library(turboraft_service STATIC src/service/raft_service.c)
 add_library(TurboRaft::Service ALIAS turboraft_service)
 set_target_properties(turboraft_service PROPERTIES EXPORT_NAME Service)
@@ -616,7 +627,7 @@ if(TURBORAFT_PROFILE_FULL AND BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-set(TURBORAFT_INSTALL_TARGETS turboraft_core turboraft_service turboraft_multicore)
+set(TURBORAFT_INSTALL_TARGETS turboraft_core turboraft_component turboraft_service turboraft_multicore)
 foreach(_turboraft_install_candidate IN ITEMS
         turboraft_snapshot_receiver
         turboraft_node_config
