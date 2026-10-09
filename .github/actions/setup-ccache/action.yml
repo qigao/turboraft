@@ -1,0 +1,38 @@
+name: Set up Linux ccache
+description: Restore compiler objects and enable CMake launchers without caching build trees
+
+inputs:
+  scope:
+    description: Stable workflow, compiler and configuration cache namespace
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify ccache is installed
+      shell: bash
+      run: ccache --version
+
+    - name: Restore compiler object cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.ci/ccache
+        key: turboraft-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.scope }}-${{ hashFiles('CMakeLists.txt', 'CMakeOptions.cmake', 'cmake/**', 'presets/**', 'vcpkg.json', 'vcpkg-configuration.json') }}
+        restore-keys: |
+          turboraft-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.scope }}-
+
+    - name: Initialize CMake compiler launchers
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ci/ccache"
+          echo "CCACHE_COMPILERCHECK=content"
+          echo "CMAKE_C_COMPILER_LAUNCHER=ccache"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
+        } >> "$GITHUB_ENV"
+        export CCACHE_DIR="$GITHUB_WORKSPACE/.ci/ccache"
+        mkdir -p "$CCACHE_DIR"
+        ccache --max-size=500M
+        ccache --zero-stats
+        ccache --show-stats

@@ -135,7 +135,12 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm ccache
+      - name: Restore ccache (native-sdk-linux)
+        uses: ./.github/actions/setup-ccache
+        with:
+          scope: native-sdk-linux
+
       - name: Restore released native SDK dependencies
         shell: bash
         env:
@@ -186,6 +191,11 @@ jobs:
           chttp=$CHTTP_SDK_VERSION
           profile=Release
           EOF
+      - name: Report ccache statistics (Linux SDK)
+        if: always()
+        shell: bash
+        run: ccache --show-stats
+
       - uses: actions/upload-artifact@v4
         with:
           name: turboraft-sdk-linux-x64
@@ -386,7 +396,13 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm ccache
+      - name: Restore ccache (native-sdk-consumer-linux)
+        if: matrix.os == 'linux'
+        uses: ./.github/actions/setup-ccache
+        with:
+          scope: native-sdk-consumer-linux
+
       - name: Prepare Windows qualification host
         if: matrix.os == 'windows'
         shell: pwsh
@@ -531,6 +547,11 @@ jobs:
             "build\package-component-%%C\turboraft_component_package_consumer.exe"
             if errorlevel 1 exit /b 1
           )
+
+      - name: Report ccache statistics (Linux SDK consumers)
+        if: ${{ always() && matrix.os == 'linux' }}
+        shell: bash
+        run: ccache --show-stats
 
   publish:
     name: Publish package and GitHub Release
