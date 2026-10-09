@@ -1,0 +1,152 @@
+name: ACE 2.3 installed Component qualification
+
+on:
+  pull_request:
+    paths:
+      - "include/turboraft/raft_component.h"
+      - "src/runtime/raft_component.c"
+      - "src/runtime/raft_runtime.c"
+      - "tests/core/test_raft_component.c"
+      - "tests/ace23_component_consumer/**"
+      - "CMakeLists.txt"
+      - "cmake/TurboRaftConfig.cmake.in"
+      - "vcpkg*.json"
+      - ".github/actions/setup-ccache/**"
+      - ".github/workflows/ace23-component-qualification.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: turboraft-ace23-component-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installed-component:
+    name: Linux GCC C11 and C++17 installed SDK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact TurboRaft head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Configure read-only shared vcpkg cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore generated-schema tool
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install native host compiler and build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential ninja-build pkg-config nasm ccache
+
+      - name: Restore ccache for exact 2.3 RC component
+        uses: ./.github/actions/setup-ccache
+        with:
+          scope: ace23-component-gcc-rc1
+
+      - name: Restore exactly two published prerelease SDK packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore tests/ace23_component_consumer/dependencies.csproj \
+            --configfile cmake/native-sdk.nuget.config \
+            --packages "$RUNNER_TEMP/turboraft-ace23-packages" \
+            --no-cache --force-evaluate
+          python3 tools/ci/export_native_sdks.py \
+            --assets tests/ace23_component_consumer/obj/project.assets.json \
+            --rid linux-x64 --packages salts salts-utils --runtime-paths
+
+      - name: Verify immutable package source and SONAME generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SALTS_SDK_VERSION" = '2.3.0-rc.1'
+          test "$SALTS_UTILS_SDK_VERSION" = '4.3.0-rc.1'
+          test -f "$SALTS_ROOT/salts-sdk-manifest.txt"
+          test -f "$SALTS_UTILS_ROOT/salts-utils-sdk-manifest.txt"
+          grep -Fx 'version=2.3.0-rc.1' "$SALTS_ROOT/salts-sdk-manifest.txt"
+          grep -Fx 'commit=58ff08fc95b4aa1dc493c0b7080426b2c11d4959' "$SALTS_ROOT/salts-sdk-manifest.txt"
+          grep -Fx 'profile=release' "$SALTS_ROOT/salts-sdk-manifest.txt"
+          grep -Fx 'version=4.3.0-rc.1' "$SALTS_UTILS_ROOT/salts-utils-sdk-manifest.txt"
+          grep -Fx 'commit=049f8e39e1d19ff21e9825df7c497e40b75a8ddf' "$SALTS_UTILS_ROOT/salts-utils-sdk-manifest.txt"
+          test -f "$SALTS_ROOT/include/salts/component.h"
+          test -f "$SALTS_ROOT/include/cmeta/component.h"
+          test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/bin/salts-idlc"
+          # Reject any accidentally imported old 2.2 shared runtime.
+          if find "$SALTS_ROOT/lib" -maxdepth 1 -name '*.so.2.2*' | grep -q .; then
+            echo 'Salts 2.2 SONAME unexpectedly present in exact 2.3 SDK' >&2
+            exit 1
+          fi
+
+      - name: Restore only cached native link dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root=. \
+            --x-install-root="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            --triplet x64-linux --only-binarycaching
+
+      - name: Configure and install new-only Core/Component
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B .ci/build-ace23-component -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTURBORAFT_BUILD_PROFILE=core-dev \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/ace23-component"
+          cmake --build .ci/build-ace23-component --parallel 2
+          cmake --install .ci/build-ace23-component
+          echo "TURBORAFT_ROOT=$GITHUB_WORKSPACE/stage/ace23-component" >> "$GITHUB_ENV"
+
+      - name: Build independently installed C11/C++17 component consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tests/ace23_component_consumer -B .ci/build-ace23-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build-ace23-consumer --parallel 2
+          ctest --test-dir .ci/build-ace23-consumer \
+            --output-on-failure --output-junit component-results.xml
+
+      - name: Report ccache statistics
+        if: always()
+        run: ccache --show-stats
+
+      - name: Upload independent consumer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turboraft-ace23-component-consumers
+          path: |
+            .ci/build-ace23-consumer/Testing/Temporary
+            .ci/build-ace23-consumer/component-results.xml
+          if-no-files-found: ignore

@@ -63,10 +63,11 @@ Configure requires active-profile installations provided through:
 The supplied user presets resolve Debug and Release profiles independently and
 use `NO_DEFAULT_PATH` for first-party package discovery. **This development
 branch requires Salts 2.3.0 EXACT with Component/ComponentPlugin/Plugin and
-SaltsUtils 4.2.1+.** No Salts 2.2 fallback is accepted. An immutable
-Salts.Native 2.3.0-ace.sha<FULL_SHA> candidate has not yet passed upstream
-release qualification: users must not treat currently published SDKs as
-compatible with this branch. Native package restores require explicit exact
+SaltsUtils 4.3.0 EXACT.** No Salts 2.2 fallback is accepted. For the static Component slice, the published prerelease
+Salts.Native 2.3.0-rc.1 (source 58ff08fc95b4aa1dc493c0b7080426b2c11d4959)
+and SaltsUtils.Native 4.3.0-rc.1 are an explicit, exact **testing**
+baseline. This does not certify the long-lived Draft ACE pattern branch
+or make a final stable SDK available. Native package restores require explicit exact
 first-party version properties; CI must verify all package ABI/SONAME
 provenance rather than assuming exact version numbers alone prove linkage. FlowMQ must be built against the same
 Salts/SaltsUtils generation; an older SDK that imports `Salts::TbeSchema` is

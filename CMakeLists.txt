@@ -108,7 +108,7 @@ unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
 find_package(Salts 2.3.0 EXACT CONFIG REQUIRED
              PATHS "${TURBORAFT_SALTS_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_package(SaltsUtils 4.2.1 CONFIG REQUIRED
+find_package(SaltsUtils 4.3.0 EXACT CONFIG REQUIRED
              PATHS "${TURBORAFT_SALTS_UTILS_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 # Fail closed: ACE 2.3 and Component/Plugin are required even in focused profiles.
