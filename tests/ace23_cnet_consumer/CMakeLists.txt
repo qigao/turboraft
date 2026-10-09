@@ -73,7 +73,16 @@ add_test(NAME turboraft.ace23_distinct_peer_tls
          COMMAND turboraft_ace23_distinct_peer_tls)
 set_tests_properties(turboraft.ace23_distinct_peer_tls PROPERTIES TIMEOUT 45)
 
+# Transport-neutral Multicore ingress: CNet owner -> existing fixed Group
+# Owner, no additional queue/executor/FlowMQ source tree.
+add_executable(turboraft_ace23_owner_ingress test_owner_ingress.c)
+target_link_libraries(turboraft_ace23_owner_ingress
+                      PRIVATE TurboRaft::Multicore Salts::Platform Salts::TinyTest)
+add_test(NAME turboraft.ace23_owner_ingress
+         COMMAND turboraft_ace23_owner_ingress)
+set_tests_properties(turboraft.ace23_owner_ingress PROPERTIES TIMEOUT 20)
+
 add_executable(turboraft_ace23_cnet_cpp cnet_cpp.cpp)
-target_link_libraries(turboraft_ace23_cnet_cpp PRIVATE TurboRaft::CNet)
+target_link_libraries(turboraft_ace23_cnet_cpp PRIVATE TurboRaft::CNet TurboRaft::Multicore)
 add_test(NAME turboraft.ace23_cnet_installed_cpp
          COMMAND turboraft_ace23_cnet_cpp)

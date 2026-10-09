@@ -16,6 +16,8 @@ on:
       - "tests/core/test_raft_cnet_peer.c"
       - "tests/ace23_cnet_consumer/**"
       - "src/runtime/raft_runtime.c"
+      - "src/runtime/raft_multicore_ingress.c"
+      - "include/turboraft/raft_multicore_ingress.h"
       - "tests/core/test_raft_component.c"
       - "tests/ace23_component_consumer/**"
       - "CMakeLists.txt"

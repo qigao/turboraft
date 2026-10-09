@@ -2,6 +2,7 @@
 #include <turboraft/raft_cnet_channel.h>
 #include <turboraft/raft_cnet_managed_peer.h>
 #include <turboraft/raft_cnet_peer_directory.h>
+#include <turboraft/raft_multicore_ingress.h>
 
 #include <type_traits>
 
@@ -52,6 +53,16 @@ static_assert(std::is_same<
     int (*)(tr_raft_cnet_peer_directory_t *,
             const tr_raft_transport_payload_t *)>::value,
     "Peer directory keeps an exact typed C11/C++17 payload admission boundary");
+
+static_assert(std::is_same<
+    decltype(&tr_raft_multicore_ingress_receive),
+    int (*)(void *, const tr_raft_transport_payload_t *)>::value,
+    "Bounded Multicore ingress must be an exact transport-neutral callback");
+static_assert(std::is_same<
+    decltype(&tr_raft_multicore_ingress_submit),
+    int (*)(tr_raft_multicore_ingress_t *,
+            const tr_raft_transport_payload_t *, uint64_t *)>::value,
+    "Cross-owner copied Raft admission must return a typed correlation identity");
 
 int main()
 {

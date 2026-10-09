@@ -291,7 +291,9 @@ target_include_directories(
          $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(turboraft_service PUBLIC TurboRaft::Core)
 
-add_library(turboraft_multicore STATIC src/runtime/raft_multicore.c)
+add_library(turboraft_multicore STATIC
+            src/runtime/raft_multicore.c
+            src/runtime/raft_multicore_ingress.c)
 add_library(TurboRaft::Multicore ALIAS turboraft_multicore)
 set_target_properties(turboraft_multicore PROPERTIES EXPORT_NAME Multicore
                       FOLDER "libraries/runtime")
