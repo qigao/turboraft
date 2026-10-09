@@ -349,6 +349,73 @@ second message mechanism. Keep one admission / one completion, explicit
 cancel and bounded wait on stop. No peer callback mutates Service from
 the wrong owner thread.
 
+### Transport-neutral Raft Owner handoff (executed in existing Multicore)
+
+The CNet callback path is **one** admission, not a second Actor scheduler:
+
+```text
+mTLS CNet/NativeIO progress Owner
+   -> Raft reciprocal HELLO/ACK -> tr_raft_cnet_channel ACTIVE
+   -> tr_raft_cnet_peer_directory_receive (verified Node/Group/Owner)
+   -> tr_raft_multicore_ingress_receive (INLINE Raft message copy)
+   -> EXISTING tr_raft_multicore_submit(Group, TR_RAFT_MULTICORE_STEP)
+   -> one fixed Raft Group Owner -> Service::step -> Core/WAL/Apply
+   -> EXISTING tr_raft_multicore_take(Group) completion
+```
+
+The `tr_raft_multicore_ingress` callback belongs to **TurboRaft::Multicore**,
+not TurboRaft::CNet, so no network provider dependency leaks into the Raft
+scheduler. It allocates one small address-stable correlation generator but
+**no separate queue, timer, transport connection or thread**. A single
+atomic request-ID namespace may be shared by multiple CNet ingress
+producers, and the host must reserve disjoint ranges for unrelated submit
+callers. Only Raft messages are admitted; the complete
+`tr_raft_message_t` is inline so it is copied into Multicore's existing
+bounded request ring before the borrowed CNet decode callback returns.
+Request and completion credits are reserved together; completion space
+is held until the application calls `tr_raft_multicore_take()`.
+Per-Group capacity exhaustion returns `SALTS_ENOSPC` and never steals
+another Group's credits or silently retries an uncommitted message.
+After stop, each already-accepted request produces exactly one
+`SALTS_ECANCELED` completion rather than disappearing.
+
+The **CNet Channel** currently treats a negative payload callback result
+(including full capacity) as a failed connection and closes that Channel.
+This is fail-closed rather than lossless flow control: upstream peers must
+recover replication from Raft protocol progress, not by an automatic local
+replay of an uncertain message. A later flow-control slice may establish
+bounded pause/resume with retained frame ownership and receive demand;
+until proven, do not claim zero-copy/lossless backpressure under overload.
+
+Snapshot/data chunks carry **borrowed byte pointers** and thus are
+explicitly rejected with `SALTS_ENOTSUP` by this bridge. They must use
+the future bounded SG buffer lease/terminal-ACK handoff, preserving
+ownership through the receiving Raft Owner and actual durable storage,
+not shallow-copying a descriptor into an inline Raft request.
+
+The bridge is also exercised **through a real mTLS wire receive** in
+`test_distinct_peer_tls.c`: two differently certified clients (Node 1
+and Node 3) connect to Node 2. Each message passes the live CNet
+certificate/Node ID + reciprocal HELLO/ACK, the immutable Group/Owner
+directory and the transport-neutral Multicore copy, and is then
+processed by **two distinct Raft Group Owner threads**. The test takes
+the independent per-Group `TR_RAFT_MULTICORE_STEP` completions and
+verifies each succeeded, including after the original network decode
+buffer's callback lifetime ended. A valid client certificate with a
+forged HELLO cannot create a completion for the other Group; the
+healthy Peer remains unaffected. This was executed against exact
+Salts.Native 2.3.0-rc.1 and SaltsUtils.Native 4.3.0-rc.1 installed
+packages in [CI #37980929678](https://github.com/qigao/turboraft/actions/runs/37980929678),
+which passed **11/11 registered CTests** (2 standalone Component
+consumers, 9 CNet/Multicore consumers).
+
+The ingress is borrowed by CNet and only destroyed after its final CNet
+callback is quiescent, before the Multicore runtime is freed. Stopping
+the adapter itself never stops or drains another owner or CNet instance.
+The host remains responsible for collecting every accepted completion
+and deciding whether the corresponding message generated a legal durable
+or applied transition. No raw runtime state is serialized.
+
 ## 6. New-only packaging and gates
 
 - Single exact `Salts.Native 2.3.0-ace.sha<FULL_SHA>` candidate only after

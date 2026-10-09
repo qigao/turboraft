@@ -56,6 +56,15 @@ Database drivers and dialects belong to TurboDB. Raft Core owns consensus.
   the bounded Owner callback runs. Real distinct-cert Node1/Node3 mTLS and
   wrong-node rejection are qualified in the isolated ACE 2.3 RC test lane;
   actual cross-Owner mailboxes and full snapshot recovery remain separate.
+- `tr_raft_multicore_ingress_receive` is the transport-neutral, C11/C++17
+  cross-Owner bridge from an already verified CNet directory callback to
+  **the existing Multicore Group ring**. Accepted inline Raft messages get one
+  completion credit; the host drains `tr_raft_multicore_take()`. Unsupported
+  borrowed Snapshot/Data chunks fail closed until explicit SG ownership is
+  implemented. An executed real mTLS test forwards independently certified
+  Node1/Node3 frames into two distinct Raft Group owner threads and verifies
+  the corresponding step completions. No second Actor loop or automatic
+  settlement retry.
 - `TurboRaft::FlowMQ` owns one FlowMQ context, one ROUTER, and one DEALER per
   peer. `tr_raft_flowmq_peer_service_step()` drives all progress on the caller's
   owner thread.
