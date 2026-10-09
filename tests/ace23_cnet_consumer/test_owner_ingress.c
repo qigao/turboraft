@@ -287,6 +287,19 @@ static void parallel_submit(void *arg)
         p->ingress, &packet, &p->request_id);
 }
 
+typedef struct parallel_stop {
+    tr_raft_multicore_t *runtime;
+    atomic_bool *start;
+} parallel_stop;
+
+static void parallel_request_stop(void *arg)
+{
+    parallel_stop *p = (parallel_stop *)arg;
+    while (!atomic_load_explicit(p->start, memory_order_acquire))
+        cmeta_thread_yield();
+    tr_raft_multicore_request_stop(p->runtime);
+}
+
 spec("ACE 2.3 borrowed CNet Raft frame -> exact existing Multicore Owner")
 {
     it("copies accepted messages and preserves independent Group owner credits")
@@ -471,6 +484,98 @@ spec("ACE 2.3 borrowed CNet Raft frame -> exact existing Multicore Owner")
             check_equal(take_completion(&f, i, &completion), SALTS_OK);
             check_equal(completion.result, SALTS_ECANCELED);
             check_equal(completion.request_id, accepted_ids[i]);
+            check_equal(tr_raft_multicore_group_status(
+                f.runtime, GROUP_IDS[i], &status), SALTS_OK);
+            check_equal(status.outstanding, (size_t)0U);
+        }
+        check_equal(fixture_destroy(&f), SALTS_OK);
+    }
+
+
+    it("races concurrent producer admission against runtime stop without losing completions")
+    {
+        ingress_fixture f = {0};
+        parallel_producer producers[PARALLEL_PRODUCERS] = {{0}};
+        cmeta_thread_t threads[PARALLEL_PRODUCERS] = {0};
+        cmeta_thread_t stopper = NULL;
+        parallel_stop stop_context = {0};
+        atomic_bool start;
+        atomic_uint ready;
+        unsigned accepted[GROUP_COUNT] = {0};
+        uint64_t accepted_ids[GROUP_COUNT] = {0};
+        tr_raft_multicore_group_status_t status = {0};
+        tr_raft_multicore_completion_t completion = {0};
+        unsigned i, started = 0U;
+        int result = SALTS_OK;
+        const uint64_t deadline = cmeta_monotonic_ms() + TEST_TIMEOUT_MS;
+
+        atomic_init(&start, false);
+        atomic_init(&ready, 0U);
+        check_equal(fixture_create(&f), SALTS_OK);
+        check_equal(wait_for_owners(&f), SALTS_OK);
+        stop_context.runtime = f.runtime;
+        stop_context.start = &start;
+        for (i = 0U; i < PARALLEL_PRODUCERS; ++i) {
+            producers[i].ingress = f.ingress;
+            producers[i].start = &start;
+            producers[i].ready = &ready;
+            producers[i].group_id = GROUP_IDS[i % GROUP_COUNT];
+            producers[i].from = (i % GROUP_COUNT) == 0U ? 1U : 3U;
+            result = cmeta_thread_create(
+                &threads[i], parallel_submit, &producers[i]);
+            if (result != SALTS_OK) break;
+            ++started;
+        }
+        if (result == SALTS_OK)
+            result = cmeta_thread_create(
+                &stopper, parallel_request_stop, &stop_context);
+        while (atomic_load_explicit(&ready, memory_order_acquire) < started &&
+               cmeta_monotonic_ms() < deadline)
+            cmeta_sleep_ms(1U);
+        /* Always open the barrier and join before any borrowed ingress
+         * or Multicore runtime can be freed, even on creation failure. */
+        atomic_store_explicit(&start, true, memory_order_release);
+        if (stopper != NULL) {
+            int joined = cmeta_thread_join(&stopper);
+            if (joined != SALTS_OK && result == SALTS_OK) result = joined;
+            cmeta_thread_destroy(&stopper);
+        } else {
+            tr_raft_multicore_request_stop(f.runtime);
+        }
+        for (i = 0U; i < started; ++i) {
+            int joined = cmeta_thread_join(&threads[i]);
+            if (joined != SALTS_OK && result == SALTS_OK) result = joined;
+            cmeta_thread_destroy(&threads[i]);
+        }
+        check_equal(result, SALTS_OK);
+        check_equal(started, (unsigned)PARALLEL_PRODUCERS);
+        for (i = 0U; i < started; ++i) {
+            const unsigned g = i % GROUP_COUNT;
+            if (producers[i].result == SALTS_OK) {
+                ++accepted[g];
+                accepted_ids[g] = producers[i].request_id;
+                check_true(producers[i].request_id != UINT64_C(0));
+            } else {
+                check_true(producers[i].result == SALTS_ENOSPC ||
+                           producers[i].result == SALTS_ECANCELED);
+                check_equal(producers[i].request_id, UINT64_C(0));
+            }
+        }
+        for (i = 0U; i < GROUP_COUNT; ++i) {
+            check_true(accepted[i] <= 1U);
+            check_equal(tr_raft_multicore_group_status(
+                f.runtime, GROUP_IDS[i], &status), SALTS_OK);
+            check_equal(status.outstanding, (size_t)accepted[i]);
+        }
+        if (accepted[0] != 0U && accepted[1] != 0U)
+            check_true(accepted_ids[0] != accepted_ids[1]);
+        atomic_store_explicit(&f.release, true, memory_order_release);
+        for (i = 0U; i < GROUP_COUNT; ++i) {
+            if (accepted[i] != 0U) {
+                check_equal(take_completion(&f, i, &completion), SALTS_OK);
+                check_equal(completion.result, SALTS_ECANCELED);
+                check_equal(completion.request_id, accepted_ids[i]);
+            }
             check_equal(tr_raft_multicore_group_status(
                 f.runtime, GROUP_IDS[i], &status), SALTS_OK);
             check_equal(status.outstanding, (size_t)0U);
