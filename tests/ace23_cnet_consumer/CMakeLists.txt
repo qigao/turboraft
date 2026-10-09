@@ -30,6 +30,15 @@ target_link_libraries(turboraft_ace23_cnet_identity
 add_test(NAME turboraft.ace23_cnet_identity_policy
          COMMAND turboraft_ace23_cnet_identity)
 
+add_executable(turboraft_ace23_cnet_identity_tls test_identity_tls.c)
+target_link_libraries(turboraft_ace23_cnet_identity_tls
+                      PRIVATE TurboRaft::CNet Salts::TinyTest)
+target_compile_definitions(turboraft_ace23_cnet_identity_tls PRIVATE
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+add_test(NAME turboraft.ace23_cnet_identity_tls
+         COMMAND turboraft_ace23_cnet_identity_tls)
+set_tests_properties(turboraft.ace23_cnet_identity_tls PROPERTIES TIMEOUT 35)
+
 add_executable(turboraft_ace23_cnet_cpp cnet_cpp.cpp)
 target_link_libraries(turboraft_ace23_cnet_cpp PRIVATE TurboRaft::CNet)
 add_test(NAME turboraft.ace23_cnet_installed_cpp
