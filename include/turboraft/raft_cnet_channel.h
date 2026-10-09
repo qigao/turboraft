@@ -3,6 +3,7 @@
 
 #include <turboraft/raft_cnet_identity.h>
 #include <turboraft/raft_transport.h>
+#include <turboraft/raft_runtime.h>
 #include <cnet/cnet.h>
 
 #ifdef __cplusplus
@@ -81,6 +82,27 @@ int tr_raft_cnet_channel_get_status(
 int tr_raft_cnet_channel_send(
     tr_raft_cnet_channel_t *channel,
     const tr_raft_transport_payload_t *payload);
+
+/*
+ * ACE typed Adapter to the existing Raft Runtime/Service transport callback.
+ * Caller owns the address-stable binding, the active CNet channel and its
+ * final CNet owner until the borrowing Runtime/Service has stopped.
+ *
+ * No new queue, background retry or second transport authority. An unready
+ * handshake or CNet-local capacity rejection reports SALTS_ENOSPC: the Raft
+ * Service already preserves exactly the unsent peer suffix and may decide
+ * when to retry. Other errors pass through unchanged.
+ */
+typedef struct tr_raft_cnet_channel_group_binding {
+    tr_raft_cnet_channel_t *channel;
+    tr_raft_group_id_t group_id;
+} tr_raft_cnet_channel_group_binding_t;
+
+/* Binds once; a preexisting enqueue remains untouched (SALTS_EALREADY).
+ * Only enqueue/context are assigned; any Snapshot adapter is preserved. */
+int tr_raft_cnet_channel_group_transport_bind(
+    tr_raft_cnet_channel_group_binding_t *binding,
+    tr_raft_transport_t *transport);
 
 /* Idempotent request-close. Host must continue progressing CNet until the
  * terminal callback before channel_destroy; this does not stop CNet itself.

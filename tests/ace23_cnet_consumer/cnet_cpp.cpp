@@ -18,6 +18,12 @@ static_assert(std::is_same<
     int (*)(tr_raft_cnet_channel_t *, cnet_connection)>::value,
     "Authenticated CNet Raft channel has one exact final-owner connection");
 
+static_assert(std::is_same<
+    decltype(&tr_raft_cnet_channel_group_transport_bind),
+    int (*)(tr_raft_cnet_channel_group_binding_t *,
+            tr_raft_transport_t *)>::value,
+    "Raft Service -> verified CNet Channel uses one typed borrowed transport");
+
 int main()
 {
     tr_raft_transport_t transport = {};
@@ -25,6 +31,10 @@ int main()
     tr_raft_cnet_channel_status_t status = {};
     if (tr_raft_cnet_group_transport_bind(&group, &transport) != SALTS_EINVAL)
         return 1;
+    tr_raft_cnet_channel_group_binding_t unbound = {};
+    if (tr_raft_cnet_channel_group_transport_bind(&unbound, &transport) !=
+        SALTS_EINVAL)
+        return 5;
     if (tr_raft_cnet_channel_get_status(nullptr, &status) != SALTS_EINVAL)
         return 2;
     if (tr_raft_cnet_channel_stop(nullptr) != SALTS_EINVAL)

@@ -370,6 +370,45 @@ int tr_raft_cnet_channel_send(
     return result;
 }
 
+/* Bounded peer-local admission uses the existing Service capacity protocol.
+ * A not-yet-authorized TLS channel never accepts a Raft Ready, and the
+ * Component/Service caller decides when to resume the exact staged suffix. */
+static int tr_channel_group_enqueue(void *context,
+                                    const tr_raft_message_t *message)
+{
+    tr_raft_cnet_channel_group_binding_t *binding =
+        (tr_raft_cnet_channel_group_binding_t *)context;
+    tr_raft_transport_payload_t payload = {0};
+    int result;
+
+    if (binding == NULL || binding->channel == NULL ||
+        binding->group_id == 0U || message == NULL)
+        return SALTS_EINVAL;
+
+    payload.group_id = binding->group_id;
+    payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+    payload.data.raft = *message;
+    result = tr_raft_cnet_channel_send(binding->channel, &payload);
+    if (result == SALTS_EBUSY || result == SALTS_ENOBUFS)
+        return SALTS_ENOSPC;
+    return result;
+}
+
+int tr_raft_cnet_channel_group_transport_bind(
+    tr_raft_cnet_channel_group_binding_t *binding,
+    tr_raft_transport_t *transport)
+{
+    if (binding == NULL || binding->channel == NULL ||
+        binding->group_id == 0U || transport == NULL)
+        return SALTS_EINVAL;
+    if (transport->enqueue != NULL)
+        return SALTS_EALREADY;
+
+    transport->context = binding;
+    transport->enqueue = tr_channel_group_enqueue;
+    return SALTS_OK;
+}
+
 int tr_raft_cnet_channel_stop(tr_raft_cnet_channel_t *channel)
 {
     int result;

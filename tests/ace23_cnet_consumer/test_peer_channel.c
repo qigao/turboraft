@@ -147,6 +147,15 @@ invalid:
     return SALTS_EPROTO;
 }
 
+/* The Raft-specific binding must not replace the caller's snapshot SPI. */
+static int peer_snapshot_stub(void *context,
+                              const tr_raft_snapshot_request_t *request)
+{
+    (void)context;
+    (void)request;
+    return SALTS_OK;
+}
+
 static int peer_fixture_path(char *output, size_t capacity,
                              const char *file)
 {
@@ -172,6 +181,8 @@ static int peer_case_run(int mode)
     tr_raft_cnet_channel_status_t cs = {0};
     tr_raft_cnet_channel_status_t ss = {0};
     cnet_connect_options options = {0};
+    tr_raft_cnet_channel_group_binding_t raft_group = {0};
+    tr_raft_transport_t raft_transport = {0};
     char ca_file[512], client_cert[512], client_key[512];
     char server_cert[512], server_key[512], uri[128];
     uint16_t port = 0U;
@@ -253,13 +264,33 @@ static int peer_case_run(int mode)
     PEER_TRY(tr_raft_cnet_channel_create(
         &server_channel, &f.server_channel));
 
+    /* Compose the existing Service/Runtime Transport SPI without creating a
+     * second queue or moving the network connection across owners. */
+    raft_group.channel = f.client_channel;
+    raft_group.group_id = 42U;
+    raft_transport.snapshot_context = &f;
+    raft_transport.enqueue_snapshot = peer_snapshot_stub;
+    PEER_TRY(tr_raft_cnet_channel_group_transport_bind(
+        &raft_group, &raft_transport));
+    if (raft_transport.context != &raft_group ||
+        raft_transport.snapshot_context != &f ||
+        raft_transport.enqueue_snapshot != peer_snapshot_stub ||
+        tr_raft_cnet_channel_group_transport_bind(
+            &raft_group, &raft_transport) != SALTS_EALREADY) {
+        error_stage = "single-bind owned transport adapter";
+        result = SALTS_EPROTO;
+        goto cleanup;
+    }
+
     /* A Raft payload cannot be emitted before reciprocal HELLO/ACK. */
     {
         tr_raft_transport_payload_t premature = {0};
         premature.group_id = 42U;
         premature.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
         if (tr_raft_cnet_channel_send(f.client_channel, &premature) !=
-            SALTS_EBUSY) {
+                SALTS_EBUSY ||
+            raft_transport.enqueue(raft_transport.context,
+                                   &premature.data.raft) != SALTS_ENOSPC) {
             error_stage = "admission before TLS";
             result = SALTS_EPROTO;
             goto cleanup;
@@ -325,7 +356,8 @@ static int peer_case_run(int mode)
             response.data.raft.from = 2U;
             response.data.raft.to = 1U;
             response.data.raft.term = 3U;
-            PEER_TRY(tr_raft_cnet_channel_send(f.client_channel, &request));
+            PEER_TRY(raft_transport.enqueue(raft_transport.context,
+                                             &request.data.raft));
             PEER_TRY(tr_raft_cnet_channel_send(f.server_channel, &response));
             if (mode == PEER_STREAMS) {
                 tr_raft_transport_payload_t data = {0};
