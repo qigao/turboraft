@@ -66,10 +66,10 @@ static cnet_client_config client_config(void)
         .backend = NATIVE_IO_BACKEND_KQUEUE,
 #endif
         .connection_capacity = 3U,
-        .command_capacity = 24U,
+        .command_capacity = 32U,
         .request_capacity = 16U,
         .completion_batch_capacity = 16U,
-        .event_capacity = 24U,
+        .event_capacity = 32U,
         .max_send_bytes = 4096U,
         .receive_buffer_bytes = 4096U,
         .connect_timeout_ms = 2000U,
