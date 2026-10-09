@@ -89,7 +89,12 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm ccache
+
+      - name: Restore ccache (extended-chaos)
+        uses: ./.github/actions/setup-ccache
+        with:
+          scope: extended-chaos
 
       - name: Restore released native SDK dependencies
         shell: bash

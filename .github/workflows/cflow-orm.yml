@@ -47,7 +47,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           orm: "true"
       - name: Install host build tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm ccache
+      - name: Restore ccache (orm-recovery)
+        uses: ./.github/actions/setup-ccache
+        with:
+          scope: orm-recovery
+
       - name: Configure ORM qualification
         run: cmake --preset ci-linux-orm-user
       - name: Build complete configured graph
