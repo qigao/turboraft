@@ -393,6 +393,7 @@ find_package(Threads REQUIRED)
 
 if(TARGET Salts::CNet)
   add_library(turboraft_cnet STATIC
+              src/transport/raft_cnet_identity.c
               src/transport/raft_cnet_peer.c
               src/transport/raft_group_queue.c
               src/transport/raft_transport.c

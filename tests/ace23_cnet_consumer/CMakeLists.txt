@@ -24,6 +24,12 @@ target_link_libraries(turboraft_ace23_cnet_c
 add_test(NAME turboraft.ace23_cnet_installed_c
          COMMAND turboraft_ace23_cnet_c)
 
+add_executable(turboraft_ace23_cnet_identity test_identity.c)
+target_link_libraries(turboraft_ace23_cnet_identity
+                      PRIVATE TurboRaft::CNet Salts::TinyTest)
+add_test(NAME turboraft.ace23_cnet_identity_policy
+         COMMAND turboraft_ace23_cnet_identity)
+
 add_executable(turboraft_ace23_cnet_cpp cnet_cpp.cpp)
 target_link_libraries(turboraft_ace23_cnet_cpp PRIVATE TurboRaft::CNet)
 add_test(NAME turboraft.ace23_cnet_installed_cpp
