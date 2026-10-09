@@ -66,7 +66,8 @@ set_tests_properties(turboraft.ace23_peer_directory PROPERTIES TIMEOUT 15)
 
 add_executable(turboraft_ace23_distinct_peer_tls test_distinct_peer_tls.c)
 target_link_libraries(turboraft_ace23_distinct_peer_tls
-                      PRIVATE TurboRaft::CNet Salts::TinyTest)
+                      PRIVATE TurboRaft::CNet TurboRaft::Multicore
+                              Salts::Platform Salts::TinyTest)
 target_compile_definitions(turboraft_ace23_distinct_peer_tls PRIVATE
     TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
 add_test(NAME turboraft.ace23_distinct_peer_tls

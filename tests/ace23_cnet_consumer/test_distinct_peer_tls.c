@@ -1,5 +1,8 @@
 #include <turboraft/raft_cnet_channel.h>
 #include <turboraft/raft_cnet_peer_directory.h>
+#include <turboraft/raft_multicore_ingress.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 
 #include <cmeta_error.h>
 #include <tinytest.h>
@@ -31,7 +34,20 @@ typedef struct server_probe {
     size_t wrong_payloads;
 } server_probe;
 
+typedef struct owner_raft_probe {
+    const void *thread;
+    int wrong_owner;
+    int closed;
+    size_t egress_replies;
+} owner_raft_probe;
+
 typedef struct identity_fixture {
+    tr_raft_multicore_t *raft_owners;
+    tr_raft_multicore_ingress_t *owner_ingress;
+    tr_raft_group_assignment_t owner_assignments[LINK_COUNT];
+    tr_raft_multicore_config_t owner_config;
+    owner_raft_probe owner_groups[LINK_COUNT];
+    tr_raft_node_id_t owner_voters[3];
     cnet_client clients; /* one CNet I/O Owner for the two different logical test nodes */
     cnet_client server;
     cnet_listener listener;
@@ -136,6 +152,161 @@ invalid:
     return SALTS_EPROTO;
 }
 
+/* Two independent Raft group owners, separate from the TLS/CNet progress
+ * Owner. This is the exact production Multicore inbox, not a shadow queue. */
+static size_t raft_group_slot(uint64_t group_id)
+{
+    return group_id == 101U ? 0U : 1U;
+}
+
+static int owner_storage(void *context)
+{
+    owner_raft_probe *probe = (owner_raft_probe *)context;
+    if (probe->thread != cmeta_thread_current_token())
+        probe->wrong_owner = 1;
+    return SALTS_OK;
+}
+static int owner_storage_hard(void *context, tr_raft_term_t term,
+                              tr_raft_node_id_t vote)
+{
+    (void)term; (void)vote;
+    return owner_storage(context);
+}
+static int owner_storage_index(void *context, tr_raft_index_t index)
+{
+    (void)index;
+    return owner_storage(context);
+}
+static int owner_storage_append(void *context, const tr_raft_entry_t *entries,
+                                size_t count)
+{
+    (void)entries; (void)count;
+    return owner_storage(context);
+}
+static int owner_transport_send(void *context, const tr_raft_message_t *message)
+{
+    owner_raft_probe *probe = (owner_raft_probe *)context;
+    if (message == NULL) return SALTS_EINVAL;
+    ++probe->egress_replies; /* network responses have a distinct Host path */
+    return owner_storage(context);
+}
+static int owner_apply(void *context, const tr_raft_entry_t *entries,
+                       size_t count)
+{
+    (void)entries; (void)count;
+    return owner_storage(context);
+}
+
+static int owner_group_open(void *context, tr_raft_owner_t *owner,
+                            uint64_t group_id, tr_raft_service_t **out_service)
+{
+    identity_fixture *fixture = (identity_fixture *)context;
+    const size_t index = raft_group_slot(group_id);
+    owner_raft_probe *probe = &fixture->owner_groups[index];
+    tr_raft_service_config_t service = {0};
+
+    *out_service = NULL;
+    probe->thread = cmeta_thread_current_token();
+    if (!tr_raft_owner_contains(owner, group_id) ||
+        tr_raft_owner_index(owner) != index)
+        probe->wrong_owner = 1;
+
+    service.core.self_id = 2U;
+    service.core.voters = fixture->owner_voters;
+    service.core.voter_count = 3U;
+    service.core.heartbeat_ticks = 2U;
+    service.core.election_min_ticks = 5U;
+    service.core.election_max_ticks = 9U;
+    service.core.initial_election_timeout_ticks = 5U;
+    service.core.max_log_entries = 32U;
+    service.storage.context = probe;
+    service.storage.begin = owner_storage;
+    service.storage.write_hard_state = owner_storage_hard;
+    service.storage.truncate_log = owner_storage_index;
+    service.storage.append_log = owner_storage_append;
+    service.storage.write_commit_index = owner_storage_index;
+    service.storage.commit = owner_storage;
+    service.storage.rollback = owner_storage;
+    service.transport.context = probe;
+    service.transport.enqueue = owner_transport_send;
+    service.state_machine.context = probe;
+    service.state_machine.apply_batch = owner_apply;
+    return tr_raft_service_create(&service, out_service);
+}
+
+static void owner_group_close(void *context, tr_raft_owner_t *owner,
+                              uint64_t group_id)
+{
+    identity_fixture *fixture = (identity_fixture *)context;
+    owner_raft_probe *probe = &fixture->owner_groups[
+        raft_group_slot(group_id)];
+    if (probe->thread != cmeta_thread_current_token() ||
+        tr_raft_owner_service(owner, group_id) != NULL)
+        probe->wrong_owner = 1;
+    probe->closed = 1;
+}
+
+static int start_raft_group_owners(identity_fixture *f)
+{
+    tr_raft_multicore_factory_t factory = {0};
+    size_t i;
+    int result;
+
+    f->owner_voters[0] = 1U;
+    f->owner_voters[1] = 2U;
+    f->owner_voters[2] = 3U;
+    for (i = 0U; i < LINK_COUNT; ++i) {
+        f->owner_assignments[i].group_id = 100U + NODE_IDS[i];
+        f->owner_assignments[i].owner_index = (uint32_t)i;
+        f->owner_assignments[i].election_min_ticks = 5U;
+        f->owner_assignments[i].election_max_ticks = 9U;
+    }
+    f->owner_config.version = TR_RAFT_MULTICORE_VERSION;
+    f->owner_config.owner_count = LINK_COUNT;
+    f->owner_config.capacity = 2U;
+    f->owner_config.work_budget = 1U;
+    f->owner_config.tick_ms = 1000U;
+    f->owner_config.idle_ms = 1U;
+    f->owner_config.groups = f->owner_assignments;
+    f->owner_config.group_count = LINK_COUNT;
+    factory.context = f;
+    factory.group_open = owner_group_open;
+    factory.group_close = owner_group_close;
+    result = tr_raft_multicore_create(
+        &f->owner_config, &factory, &f->raft_owners);
+    if (result != SALTS_OK) return result;
+    return tr_raft_multicore_ingress_create(
+        f->raft_owners, 7001U, &f->owner_ingress);
+}
+
+static int on_server_payload_and_forward(
+    void *context, const tr_raft_transport_payload_t *payload)
+{
+    identity_fixture *fixture = (identity_fixture *)context;
+    int result = on_server_payload(&fixture->server_received, payload);
+    if (result != SALTS_OK) return result;
+    /* First TLS/Directory authenticated the borrowed CNet frame.
+     * Then Multicore copies it into the target Group's only bounded ring. */
+    return tr_raft_multicore_ingress_receive(
+        fixture->owner_ingress, payload);
+}
+
+static int take_owner_completion(
+    identity_fixture *f, size_t index,
+    tr_raft_multicore_completion_t *out)
+{
+    const uint64_t end = cmeta_monotonic_ms() + 4000U;
+    int result;
+
+    do {
+        result = tr_raft_multicore_take(
+            f->raft_owners, 100U + NODE_IDS[index], out);
+        if (result != SALTS_ENOENT) return result;
+        cmeta_sleep_ms(1U);
+    } while (cmeta_monotonic_ms() < end);
+    return SALTS_ETIMEDOUT;
+}
+
 static int on_client_payload(void *user, const tr_raft_transport_payload_t *msg)
 {
     remote_probe *sink = (remote_probe *)user;
@@ -176,6 +347,22 @@ static int fixture_cleanup(identity_fixture *f)
         if (f->inbound[i] != NULL)
             CLEAN_STEP(tr_raft_cnet_channel_destroy(f->inbound[i]));
     }
+
+    /* CNet callbacks are now quiescent. Retire the two Raft owner threads
+     * and their exact Group Services, then release the borrowed ingress. */
+    if (f->raft_owners != NULL) {
+        tr_raft_multicore_request_stop(f->raft_owners);
+        CLEAN_STEP(tr_raft_multicore_stop(f->raft_owners));
+    }
+    if (f->owner_ingress != NULL)
+        CLEAN_STEP(tr_raft_multicore_ingress_destroy(f->owner_ingress));
+    tr_raft_multicore_destroy(f->raft_owners);
+    for (i = 0U; i < LINK_COUNT; ++i)
+        if (f->raft_owners != NULL &&
+            (!f->owner_groups[i].closed || f->owner_groups[i].wrong_owner) &&
+            first == SALTS_OK)
+            first = SALTS_EPROTO;
+
     /* No registered Service/Channel may retain a borrowed Directory once
      * it is destroyed. Route providers never opened sockets of their own. */
     if (f->directory.active)
@@ -328,6 +515,8 @@ static int run_two_distinct_peers(int forge_node_three)
             &f.directory, &directory_config));
     }
 
+    TRY_STAGE(start_raft_group_owners(&f));
+
     f.server_channel_config.client = &f.server;
     f.server_channel_config.identity = &f.server_policy;
     f.server_channel_config.handshake = hello_config(2U);
@@ -389,8 +578,9 @@ static int run_two_distinct_peers(int forge_node_three)
                 cnet_observer observer;
 
                 f.ingress[position].directory = &f.directory;
-                f.ingress[position].on_payload = on_server_payload;
-                f.ingress[position].context = &f.server_received;
+                f.ingress[position].on_payload =
+                    on_server_payload_and_forward;
+                f.ingress[position].context = &f;
                 verified.on_payload = tr_raft_cnet_peer_directory_receive;
                 verified.payload_context = &f.ingress[position];
                 TRY_STAGE(tr_raft_cnet_channel_create(
@@ -610,6 +800,38 @@ static int run_two_distinct_peers(int forge_node_three)
                f.server_received.wrong_payloads != 0U) {
         result = SALTS_EPROTO;
         failed_stage = "forgery must have no delivered payload";
+    }
+
+    /* A successful TLS receive has one Multicore completion on the exact
+     * different Raft Group Owner. A forged Node3 HELLO admits none to
+     * Group103; it cannot fake a terminal or steal that completion credit. */
+    if (result == SALTS_OK && f.owner_ingress != NULL) {
+        for (i = 0U; i < LINK_COUNT; ++i) {
+            tr_raft_multicore_completion_t completion = {0};
+            const int expected = !forge_node_three || i == 0U;
+            int observed = SALTS_ENOENT;
+
+            if (expected)
+                observed = take_owner_completion(&f, i, &completion);
+            else
+                observed = tr_raft_multicore_take(
+                    f.raft_owners, 100U + NODE_IDS[i], &completion);
+
+            if (expected &&
+                (observed != SALTS_OK ||
+                 completion.operation != TR_RAFT_MULTICORE_STEP ||
+                 completion.result != SALTS_OK ||
+                 completion.request_id == 0U)) {
+                failed_stage = "verified Raft payload did not finish on Group Owner";
+                result = SALTS_EPROTO;
+                break;
+            }
+            if (!expected && observed != SALTS_ENOENT) {
+                failed_stage = "forged TLS peer reached the other Raft Group";
+                result = SALTS_EPROTO;
+                break;
+            }
+        }
     }
 
 cleanup:
