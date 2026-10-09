@@ -2,6 +2,7 @@
 #define TURBORAFT_RAFT_CNET_PEER_H
 
 #include <turboraft/raft_transport.h>
+#include <turboraft/raft_runtime.h>
 
 #include <cnet/cnet.h>
 
