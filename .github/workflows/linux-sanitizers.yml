@@ -182,6 +182,11 @@ jobs:
           ctest --test-dir ".ci/build-${{ matrix.name }}/turboraft" \
             --output-on-failure
 
+      - name: Report ccache statistics
+        if: always()
+        shell: bash
+        run: ccache --show-stats
+
       - name: Upload sanitizer diagnostics
         if: always()
         uses: actions/upload-artifact@v4

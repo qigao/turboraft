@@ -306,6 +306,11 @@ jobs:
           set -euo pipefail
           ctest --test-dir .ci/build/turboraft --output-on-failure
 
+      - name: Report ccache statistics
+        if: always()
+        shell: bash
+        run: ccache --show-stats
+
       - name: Upload CTest diagnostics
         if: always()
         uses: actions/upload-artifact@v4
