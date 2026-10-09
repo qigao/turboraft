@@ -323,44 +323,68 @@ static int managed_progress(managed_fixture *f,
     return SALTS_OK;
 }
 
-static void cleanup_fixture(managed_fixture *f)
+/* Cleanup is part of acceptance: no test silently ignores stale managed
+ * contexts, unfinished native connection callbacks or leaked owner credits. */
+static int cleanup_fixture(managed_fixture *f)
 {
     size_t i, work;
+    int first_error = SALTS_OK;
+    int status;
+#define CLEAN_STEP(expr) do { \
+    status = (expr); \
+    if (first_error == SALTS_OK && status != SALTS_OK) \
+        first_error = status; \
+} while (0)
     if (f->manager_open)
-        (void)cnet_manager_request_close(&f->manager);
-    for (i = 0U; i < PEER_COUNT; ++i)
+        CLEAN_STEP(cnet_manager_request_close(&f->manager));
+    for (i = 0U; i < PEER_COUNT; ++i) {
         if (f->peers[i] != NULL)
-            (void)tr_raft_cnet_managed_peer_stop(f->peers[i]);
+            CLEAN_STEP(tr_raft_cnet_managed_peer_stop(f->peers[i]));
+    }
+
+    /* The final CNet owner settles terminal callbacks. stop() may report a
+     * genuine handshake/progress error in the negative identity fixture;
+     * final destroy and Manager drained status remain mandatory. */
     if (f->client_open)
         (void)cnet_client_stop(&f->client, 2000U);
     if (f->server_open)
         (void)cnet_client_stop(&f->server, 2000U);
+
     if (f->manager_open) {
-        for (i = 0U; i < PEER_COUNT * 4U; ++i) {
-            cnet_manager_snapshot state = {0};
-            if (cnet_manager_get_snapshot(&f->manager, &state) != SALTS_OK ||
-                state.drained) break;
-            (void)cnet_manager_advance(&f->manager, PEER_COUNT, &work);
+        cnet_manager_snapshot snapshot = {0};
+        for (i = 0U; i < PEER_COUNT * 8U; ++i) {
+            CLEAN_STEP(cnet_manager_get_snapshot(&f->manager, &snapshot));
+            if (first_error != SALTS_OK || snapshot.drained)
+                break;
+            CLEAN_STEP(cnet_manager_advance(
+                &f->manager, PEER_COUNT, &work));
+            if (first_error != SALTS_OK)
+                break;
         }
+        if (first_error == SALTS_OK && !snapshot.drained)
+            first_error = SALTS_EBUSY;
     }
     for (i = 0U; i < PEER_COUNT; ++i) {
         if (f->peers[i] != NULL)
-            (void)tr_raft_cnet_managed_peer_destroy(f->peers[i]);
+            CLEAN_STEP(tr_raft_cnet_managed_peer_destroy(f->peers[i]));
         if (f->server_channels[i] != NULL)
-            (void)tr_raft_cnet_channel_destroy(f->server_channels[i]);
+            CLEAN_STEP(tr_raft_cnet_channel_destroy(f->server_channels[i]));
     }
+
     if (f->manager_open)
-        (void)cnet_manager_destroy(&f->manager);
+        CLEAN_STEP(cnet_manager_destroy(&f->manager));
     if (f->client_open)
-        (void)cnet_client_destroy(&f->client);
+        CLEAN_STEP(cnet_client_destroy(&f->client));
     if (f->server_open)
-        (void)cnet_client_destroy(&f->server);
+        CLEAN_STEP(cnet_client_destroy(&f->server));
     if (f->listener_open) {
-        (void)cnet_listener_close(&f->listener);
-        (void)cnet_listener_destroy(&f->listener);
+        CLEAN_STEP(cnet_listener_close(&f->listener));
+        CLEAN_STEP(cnet_listener_destroy(&f->listener));
     }
     if (f->server_tls_open)
-        (void)cnet_tls_server_destroy(&f->server_tls);
+        CLEAN_STEP(cnet_tls_server_destroy(&f->server_tls));
+#undef CLEAN_STEP
+    return first_error;
 }
 
 static int send_heartbeat(managed_fixture *f, size_t index)
@@ -383,6 +407,16 @@ static int send_heartbeat(managed_fixture *f, size_t index)
     payload.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
     payload.data.raft = message;
     return tr_raft_cnet_managed_peer_send(f->peers[index], &payload);
+}
+
+static void ignore_third_state(void *user, cnet_connection connection,
+                               cnet_connection_state state,
+                               const cnet_error *error)
+{
+    (void)user;
+    (void)connection;
+    (void)state;
+    (void)error;
 }
 
 static int test_bounded_multi_link(void)
@@ -419,6 +453,23 @@ static int test_bounded_multi_link(void)
         failed = "two physical Manager credits";
         goto done;
     }
+    /* The shared Manager must reject a third physical connection without
+     * fabricating a callback, connection or new record. */
+    {
+        cnet_manager_attachment unexpected = {0};
+        cnet_managed_connection third = {0};
+        int rejected;
+        unexpected.observer.on_state = ignore_third_state;
+        rejected = cnet_manager_reserve(&f.manager, &unexpected, &third);
+        if (rejected == SALTS_OK)
+            (void)cnet_manager_cancel(&f.manager, third);
+        if (rejected != SALTS_ENOBUFS || third.slot != 0U) {
+            result = SALTS_EPROTO;
+            failed = "shared Manager third-credit rejection";
+            goto done;
+        }
+    }
+
     CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
     f.stale = a.dial.managed;
 
@@ -520,7 +571,13 @@ done:
         fprintf(stderr, "managed peers: %s result=%d accepting=%d aReady=%zu bReady=%zu aConn=%zu\n",
                 failed, result, f.accept_count, a.protocol_ready_count,
                 b.protocol_ready_count, a.connections_started);
-    cleanup_fixture(&f);
+    {
+        const int cleanup = cleanup_fixture(&f);
+        if (result == SALTS_OK && cleanup != SALTS_OK) {
+            fprintf(stderr, "managed peer cleanup failed: %d\n", cleanup);
+            result = cleanup;
+        }
+    }
 #undef CHECK_TRY
     return result;
 }
@@ -567,7 +624,13 @@ done:
         fprintf(stderr, "security peer: %s result=%d attempts=%zu seals=%zu\n",
                 failed, result, status.connections_started,
                 status.security_rejections);
-    cleanup_fixture(&f);
+    {
+        const int cleanup = cleanup_fixture(&f);
+        if (result == SALTS_OK && cleanup != SALTS_OK) {
+            fprintf(stderr, "security peer cleanup failed: %d\n", cleanup);
+            result = cleanup;
+        }
+    }
 #undef SEC_TRY
     return result;
 }
