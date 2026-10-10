@@ -19,7 +19,7 @@ PACKAGES = {
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", type=Path, required=True)
-    parser.add_argument("--rid", choices=("linux-x64", "windows-x64"), required=True)
+    parser.add_argument("--rid", choices=("linux-x64", "windows-x64", "macos-arm64"), required=True)
     parser.add_argument("--packages", nargs="+", choices=PACKAGES,
                         default=["salts", "salts-utils", "flowmq", "chttp"])
     parser.add_argument("--metadata", type=Path)
@@ -48,10 +48,11 @@ def main():
                             f"{prefix}_SDK_VERSION={version}"))
         metadata.append(f"{prefix.lower()}_package={name}")
 
-    if args.runtime_paths and args.rid == "linux-x64":
+    if args.runtime_paths and args.rid in ("linux-x64", "macos-arm64"):
+        variable = "LD_LIBRARY_PATH" if args.rid == "linux-x64" else "DYLD_LIBRARY_PATH"
         libraries = [str(root / "lib") for root in sdk_roots]
-        libraries.extend(filter(None, [os.environ.get("LD_LIBRARY_PATH", "")]))
-        environment.append("LD_LIBRARY_PATH=" + ":".join(libraries))
+        libraries.extend(filter(None, [os.environ.get(variable, "")]))
+        environment.append(variable + "=" + ":".join(libraries))
 
     # Validate every package before publishing any environment changes.
     if any("\n" in line or "\r" in line for line in environment + metadata):
