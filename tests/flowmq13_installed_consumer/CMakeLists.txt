@@ -319,3 +319,28 @@ add_test(NAME turboraft.flowmq13.cnet_byte_pressure
 set_tests_properties(turboraft.flowmq13.cnet_byte_pressure
                      PROPERTIES TIMEOUT 65
                                 LABELS "cnet-snapshot-lifecycle;cnet-byte-pressure")
+
+# Real fail-closed Group overload followed by explicit host-controlled N+1
+# certified TLS reconnect. Prove BOTH old CNet send terminals settle before
+# physical reuse, captured Group103 N origin fails N+1 fencing, no automatic
+# replay, new Node3 Snapshot/Node1 Raft activity both finish, and credits
+# return to their original Group. Two different admission faults are checked:
+# (1) item/completion ring=2 and (2) bytes=24 with ring capacity=3.
+foreach(pressure IN ITEMS item byte)
+  add_executable(turboraft_flowmq13_cnet_${pressure}_rejoin
+                 ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+  target_compile_definitions(turboraft_flowmq13_cnet_${pressure}_rejoin PRIVATE
+      TURBORAFT_TEST_TLS_GROUP_PRESSURE=1
+      TURBORAFT_TEST_TLS_PRESSURE_RECONNECT=1
+      TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+  target_link_libraries(turboraft_flowmq13_cnet_${pressure}_rejoin PRIVATE
+      TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+      Salts::Platform Salts::TinyTest)
+  add_test(NAME turboraft.flowmq13.cnet_${pressure}_rejoin
+           COMMAND turboraft_flowmq13_cnet_${pressure}_rejoin)
+  set_tests_properties(turboraft.flowmq13.cnet_${pressure}_rejoin
+                       PROPERTIES TIMEOUT 65
+                                  LABELS "cnet-snapshot-lifecycle;cnet-overload-rejoin")
+endforeach()
+target_compile_definitions(turboraft_flowmq13_cnet_byte_rejoin PRIVATE
+    TURBORAFT_TEST_TLS_BYTE_PRESSURE=1)
