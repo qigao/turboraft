@@ -77,22 +77,15 @@ typedef struct peer_dso_harness {
     salts_component_plugin_module modules_b[1];
     tr_ace23_dso_callback callback_b;
     const tr_ace23_dso_callback_state *module_b;
-    cmeta_thread_t worker_b;
-    int worker_b_live, worker_b_result;
+    tr_raft_cnet_channel_t *verified_channel_b;
+    tr_raft_transport_reply_origin_t captured_origin_b;
     int loaded_b, started_b, published_b, scope_b_live;
+    unsigned network_callbacks_b;
     cmeta_plugin_status unload_b_before_drain;
     salts_component_plugin_status drain_a_while_b_published;
     salts_component_plugin_status drain_b_while_callback;
     atomic_bool b_ready;
-    atomic_bool release_b;
 } peer_dso_harness;
-
-static void peer_dso_b_callback_thread(void *context)
-{
-    peer_dso_harness *dso = (peer_dso_harness *)context;
-    dso->worker_b_result =
-        tr_ace23_dso_callback_invoke(&dso->callback_b) == 1;
-}
 
 static int peer_dso_publish_b(peer_dso_harness *dso)
 {
@@ -113,7 +106,6 @@ static int peer_dso_publish_b(peer_dso_harness *dso)
     cmeta_plugin_lease query = {0};
     const cmeta_plugin_manifest *manifest = NULL;
     cmeta_plugin_lifecycle_info info = {0};
-    const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(5000);
 
     if (cmeta_plugin_registry_load(
             &dso->registry, TURBORAFT_ACE23_EPOCH_DSO_B_PATH,
@@ -164,18 +156,8 @@ static int peer_dso_publish_b(peer_dso_harness *dso)
         info.active_leases != 1U ||
         !cmeta_plugin_lease_valid(dso->modules_b[0].lease))
         return SALTS_EPROTO;
-    /* B executes from its OWN provider image while the original A
-     * callback still borrows its own distinct module/scope. */
-    if (cmeta_thread_create(
-            &dso->worker_b, peer_dso_b_callback_thread,
-            dso) != SALTS_OK)
-        return SALTS_EPROTO;
-    dso->worker_b_live = 1;
-    while (atomic_load_explicit(
-               &dso->module_b->callback_entered, memory_order_acquire) == 0U) {
-        if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-        cmeta_thread_yield();
-    }
+    /* CNet progress Owner now owns admission to the fresh TLS B Channel.
+     * No duplicate worker/direct invocation of the Plugin DSO exists. */
     atomic_store_explicit(&dso->b_ready, true, memory_order_release);
     return SALTS_OK;
 }
@@ -214,57 +196,65 @@ static void peer_dso_controller(void *context)
         dso->unload_b_before_drain =
             cmeta_plugin_registry_unload(&dso->registry, dso->plugin_b);
     }
-    /* Both distinct DSO code images still have exactly one generation-
-     * owned lease and the original CNet callback cannot be unloaded. */
+    /* The old Channel A is borrowed by its CNet callback. B's separately
+     * published ComponentPlugin Scope pins B and admits a new CNet Channel
+     * while the old A generation becomes DRAINING. */
     dso->unload_while_callback =
-        cmeta_plugin_registry_unload(&dso->registry, dso->plugin);
-    /* Closing publication is allowed while a Scope has already admitted
-     * the CNet callback. Draining the provider/DSO must remain BUSY. The
-     * controller never touches or releases the original Scope object. */
-    dso->close_while_callback =
-        salts_component_plugin_runtime_close(
-            &dso->host, &dso->retired_by_controller);
-    if (dso->close_while_callback == SALTS_COMPONENT_PLUGIN_OK &&
-        dso->retired_by_controller ==
-            (dso->ab_publication ? &dso->generation_b : &dso->generation)) {
-        dso->controller_closed_publication = 1;
-        dso->drain_while_callback =
-            salts_component_plugin_generation_drain(
-                &dso->host,
-                dso->ab_publication ? &dso->generation_b : &dso->generation);
-    } else {
-        dso->drain_while_callback = SALTS_COMPONENT_PLUGIN_INVALID_STATE;
-    }
-    /* Module A receives stop while B stays active, to test that the
-     * publication switch does not couple the two callback lifetimes. */
-    dso->stop_result =
-        cmeta_plugin_registry_request_stop(&dso->registry, dso->plugin);
-    dso->unload_after_stop =
         cmeta_plugin_registry_unload(&dso->registry, dso->plugin);
 
     if (dso->ab_publication) {
-        const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(5000);
-        while (!atomic_load_explicit(
-                   &dso->release_b, memory_order_acquire)) {
-            if (cmeta_monotonic_ms() >= deadline) {
+        const uint64_t deadline_b =
+            cmeta_monotonic_ms() + UINT64_C(5000);
+        /* Only stop A, not B. A's on_payload can complete so the same
+         * caller-driven CNet Owner can establish a second verified TLS
+         * connection and invoke B's typed Component callback. */
+        dso->stop_result =
+            cmeta_plugin_registry_request_stop(&dso->registry, dso->plugin);
+        dso->unload_after_stop =
+            cmeta_plugin_registry_unload(&dso->registry, dso->plugin);
+        while (atomic_load_explicit(
+                   &dso->module_b->callback_entered,
+                   memory_order_acquire) == 0U) {
+            if (cmeta_monotonic_ms() >= deadline_b) {
                 dso->controller_result = SALTS_ETIMEDOUT;
                 break;
             }
             cmeta_thread_yield();
         }
+        /* Revocation of the new publication occurs WHILE B's real TLS
+         * on_payload holds its original ComponentPlugin Scope. */
+        dso->close_while_callback =
+            salts_component_plugin_runtime_close(
+                &dso->host, &dso->retired_by_controller);
+        if (dso->close_while_callback == SALTS_COMPONENT_PLUGIN_OK &&
+            dso->retired_by_controller == &dso->generation_b) {
+            dso->controller_closed_publication = 1;
+            dso->drain_while_callback =
+                salts_component_plugin_generation_drain(
+                    &dso->host, &dso->generation_b);
+        } else
+            dso->drain_while_callback = SALTS_COMPONENT_PLUGIN_INVALID_STATE;
         if (cmeta_plugin_registry_request_stop(
                 &dso->registry, dso->plugin_b) != CMETA_PLUGIN_OK ||
             cmeta_plugin_registry_unload(
                 &dso->registry, dso->plugin_b) != CMETA_PLUGIN_BUSY)
             dso->controller_result = SALTS_EPROTO;
-        if (dso->worker_b_live) {
-            if (cmeta_thread_join(&dso->worker_b) != SALTS_OK)
-                dso->controller_result = SALTS_EPROTO;
-            cmeta_thread_destroy(&dso->worker_b);
-            dso->worker_b_live = 0;
-            if (!dso->worker_b_result)
-                dso->controller_result = SALTS_EPROTO;
-        }
+    } else {
+        dso->close_while_callback =
+            salts_component_plugin_runtime_close(
+                &dso->host, &dso->retired_by_controller);
+        if (dso->close_while_callback == SALTS_COMPONENT_PLUGIN_OK &&
+            dso->retired_by_controller == &dso->generation) {
+            dso->controller_closed_publication = 1;
+            dso->drain_while_callback =
+                salts_component_plugin_generation_drain(
+                    &dso->host, &dso->generation);
+        } else
+            dso->drain_while_callback = SALTS_COMPONENT_PLUGIN_INVALID_STATE;
+        dso->stop_result =
+            cmeta_plugin_registry_request_stop(&dso->registry, dso->plugin);
+        dso->unload_after_stop =
+            cmeta_plugin_registry_unload(&dso->registry, dso->plugin);
     }
     if (dso->controller_result == SALTS_OK || !dso->ab_publication)
         dso->controller_result = SALTS_OK;
