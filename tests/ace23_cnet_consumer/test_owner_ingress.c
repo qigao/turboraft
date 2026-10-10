@@ -738,4 +738,135 @@ spec("ACE 2.3 borrowed CNet Raft frame -> exact existing Multicore Owner")
         check_equal(fixture_destroy(&f), SALTS_OK);
     }
 
+    it("materializes bounded DATA/SNAPSHOT leases for exact Group Owners")
+    {
+        ingress_fixture f = {0};
+        uint8_t data[400], snapshot[224], refused_data[200];
+        tr_raft_transport_payload_t a, b, rejected, following;
+        tr_raft_multicore_completion_t ca = {0}, cb = {0};
+        tr_raft_multicore_group_status_t sa = {0}, sb = {0};
+        uint64_t a_id = 0U, b_id = 0U, refused_id = 77U, next_id = 0U;
+
+        memset(data, 0x39, sizeof(data));
+        memset(snapshot, 0x7b, sizeof(snapshot));
+        memset(refused_data, 0x39, sizeof(refused_data));
+        a = stream_chunk(101U, 1U, false, data, sizeof(data));
+        b = stream_chunk(103U, 3U, true, snapshot, sizeof(snapshot));
+        rejected = stream_chunk(101U, 1U, false,
+                                refused_data, sizeof(refused_data));
+        check_equal(fixture_create_mode(&f, true), SALTS_OK);
+        check_equal(wait_for_owners(&f), SALTS_OK);
+
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &a, &a_id), SALTS_OK);
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &b, &b_id), SALTS_OK);
+        check_true(a_id != 0U && b_id != 0U && a_id != b_id);
+        /* Group101 still has a spare ITEM credit, but its 512-byte BYTE
+         * allowance cannot fit another 200-byte owned chunk. */
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &rejected, &refused_id), SALTS_ENOSPC);
+        check_equal(refused_id, UINT64_C(0));
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 101U, &sa), SALTS_OK);
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 103U, &sb), SALTS_OK);
+        check_equal(sa.owned_chunk_bytes, (size_t)400U);
+        check_equal(sb.owned_chunk_bytes, (size_t)224U);
+        check_equal(sa.outstanding, (size_t)1U);
+        check_equal(sb.outstanding, (size_t)1U);
+        check_equal(sa.rejected, UINT64_C(1));
+        check_equal(sb.rejected, UINT64_C(0));
+
+        /* Source views can be recycled immediately after admission. The
+         * owner must still observe the exact 0x39/0x7b original bytes. */
+        memset(data, 0xff, sizeof(data));
+        memset(snapshot, 0xff, sizeof(snapshot));
+        atomic_store_explicit(&f.release, true, memory_order_release);
+        check_equal(take_completion(&f, 0U, &ca), SALTS_OK);
+        check_equal(take_completion(&f, 1U, &cb), SALTS_OK);
+        check_equal(ca.operation, TR_RAFT_MULTICORE_RECEIVE_CHUNK);
+        check_equal(cb.operation, TR_RAFT_MULTICORE_RECEIVE_CHUNK);
+        check_equal(ca.request_id, a_id);
+        check_equal(cb.request_id, b_id);
+        check_equal(ca.result, SALTS_OK);
+        check_equal(cb.result, SALTS_OK);
+        check_equal(ca.value.chunk.kind, TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK);
+        check_equal(cb.value.chunk.kind, TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK);
+        check_true(!ca.value.chunk.ack_valid &&
+                   !cb.value.chunk.ack_valid);
+        check_true(!ca.value.chunk.durable_or_installed &&
+                   !cb.value.chunk.durable_or_installed);
+        check_equal(f.groups[0].chunk_calls, (size_t)1U);
+        check_equal(f.groups[1].chunk_calls, (size_t)1U);
+        check_true(!f.groups[0].chunk_invalid &&
+                   !f.groups[1].chunk_invalid);
+        check_equal(f.groups[0].chunk_bytes, sizeof(data));
+        check_equal(f.groups[1].chunk_bytes, sizeof(snapshot));
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 101U, &sa), SALTS_OK);
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 103U, &sb), SALTS_OK);
+        check_equal(sa.owned_chunk_bytes, (size_t)0U);
+        check_equal(sb.owned_chunk_bytes, (size_t)0U);
+        check_equal(sa.outstanding, (size_t)0U);
+        check_equal(sb.outstanding, (size_t)0U);
+
+        /* Byte and completion credits have returned to the SAME Group,
+         * without introducing a separate stream mailbox. */
+        memset(snapshot, 0x7b, sizeof(snapshot));
+        following = stream_chunk(101U, 1U, true, snapshot, 96U);
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &following, &next_id), SALTS_OK);
+        memset(snapshot, 0x11, sizeof(snapshot));
+        check_equal(take_completion(&f, 0U, &ca), SALTS_OK);
+        check_equal(ca.request_id, next_id);
+        check_equal(ca.result, SALTS_OK);
+        check_equal(f.groups[0].chunk_calls, (size_t)2U);
+        check_equal(f.groups[0].chunk_bytes, sizeof(data) + 96U);
+        check_equal(fixture_destroy(&f), SALTS_OK);
+    }
+
+    it("cancels owned DATA/SNAPSHOT exactly once and releases all bytes on stop")
+    {
+        ingress_fixture f = {0};
+        uint8_t bytes_a[192], bytes_b[128];
+        tr_raft_transport_payload_t a, b;
+        tr_raft_multicore_completion_t ca = {0}, cb = {0};
+        tr_raft_multicore_group_status_t status = {0};
+        uint64_t id_a = 0U, id_b = 0U;
+
+        memset(bytes_a, 0x39, sizeof(bytes_a));
+        memset(bytes_b, 0x7b, sizeof(bytes_b));
+        a = stream_chunk(101U, 1U, false, bytes_a, sizeof(bytes_a));
+        b = stream_chunk(103U, 3U, true, bytes_b, sizeof(bytes_b));
+        check_equal(fixture_create_mode(&f, true), SALTS_OK);
+        check_equal(wait_for_owners(&f), SALTS_OK);
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &a, &id_a), SALTS_OK);
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &b, &id_b), SALTS_OK);
+        tr_raft_multicore_request_stop(f.runtime);
+        memset(bytes_a, 0U, sizeof(bytes_a));
+        memset(bytes_b, 0U, sizeof(bytes_b));
+        atomic_store_explicit(&f.release, true, memory_order_release);
+        check_equal(take_completion(&f, 0U, &ca), SALTS_OK);
+        check_equal(take_completion(&f, 1U, &cb), SALTS_OK);
+        check_equal(ca.request_id, id_a);
+        check_equal(cb.request_id, id_b);
+        check_equal(ca.result, SALTS_ECANCELED);
+        check_equal(cb.result, SALTS_ECANCELED);
+        check_equal(f.groups[0].chunk_calls, (size_t)0U);
+        check_equal(f.groups[1].chunk_calls, (size_t)0U);
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 101U, &status), SALTS_OK);
+        check_equal(status.owned_chunk_bytes, (size_t)0U);
+        check_equal(status.outstanding, (size_t)0U);
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 103U, &status), SALTS_OK);
+        check_equal(status.owned_chunk_bytes, (size_t)0U);
+        check_equal(status.outstanding, (size_t)0U);
+        check_equal(fixture_destroy(&f), SALTS_OK);
+    }
+
 }
