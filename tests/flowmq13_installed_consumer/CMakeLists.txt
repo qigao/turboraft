@@ -264,6 +264,27 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                                   LABELS "raft-three-process-bootstrap;wal-process-isolation")
 endif()
 
+# #149 P1: THREE live independent OS processes, genuine CNet/mTLS/HELLO
+# Vote/Append/ACK between three distinct RaftCore instances and three
+# separately fsynced production WalStorage writers. Node1 has an active
+# certified TLS link but intentionally ignores its Raft Core callback;
+# only Node2+Node3 authentic 2/3 quorum may commit indices 1..3.
+# Parent IPC carries scalar test commands/status ONLY, no Raft messages.
+# This is real network quorum, NOT a partition/recovery claim.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(turboraft_flowmq13_three_process_cnet_quorum
+                 test_three_process_cnet_quorum.c)
+  target_compile_definitions(turboraft_flowmq13_three_process_cnet_quorum PRIVATE
+      TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+  target_link_libraries(turboraft_flowmq13_three_process_cnet_quorum PRIVATE
+      TurboRaft::CNet TurboRaft::Core TurboRaft::WalStorage Salts::Platform)
+  add_test(NAME turboraft.flowmq13.three_process_cnet_quorum
+           COMMAND turboraft_flowmq13_three_process_cnet_quorum)
+  set_tests_properties(turboraft.flowmq13.three_process_cnet_quorum
+                       PROPERTIES TIMEOUT 70
+                                  LABELS "raft-three-process-real-tls;wal-process-isolation")
+endif()
+
 # Independent installed-SDK 64 MiB end-to-end SnapshotSender -> Raft wire
 # codec -> SnapshotReceiver/stream sink. No 64 MiB heap allocation or socket
 # simulation: sender uses a deterministic read_at source, fixed 64-KiB chunks,

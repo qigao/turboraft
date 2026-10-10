@@ -627,6 +627,42 @@ under [#145](https://github.com/qigao/turboraft/issues/145); do not
 mislabel this bootstrap as full release/parity evidence. No production
 queue, fallbacks, public ABI or runtime-state persistence is added.
 
+### #149 genuine three-process certified CNet majority with independent WALs
+
+A second **Linux-only** installed-SDK CTest,
+`turboraft.flowmq13.three_process_cnet_quorum`, extends (does not
+replace) the independent-WAL process bootstrap. The controller launches
+THREE simultaneously live, independently exec'ed Raft Core + WalStorage
+processes with three separate WAL namespaces, process locks and *distinct
+CNet progress owners*. Node2 binds one real TLS listener; independently
+running Node1 and Node3 establish two different CNet/mTLS connections,
+pass CNet certificate-fingerprint -> NodeID policy, and negotiate exact
+Raft Cluster HELLO/ACK over their own sockets.
+
+Parent control messages are only **scalar startup, connect, campaign,
+proposal and immutable status snapshots**. Actual pre-votes, voting
+requests/responses, AppendEntries and acknowledgements travel only
+through the authenticated TLS Channels: there is no Raft IPC proxy.
+Node1's **TEST Core callback remains deliberately muted** while the
+physical mTLS Channel is active. Node2 and Node3 must obtain real 2-of-3
+votes and commit three commands through authentic Append ACKs, with
+local Ready -> authoritative production WalStorage transaction/fsync
+before outbound message enqueue and separate application progress.
+All three WALs are reopened by the controller only after each child
+owner has stopped and released its writer lock. Node2/Node3 must have
+byte-identical committed indices1..3, while Node1's independent WAL
+remains empty. An independently labelled 25 fresh-process Linux repeat
+gate keeps this conformance separate from the one-process mTLS suite.
+
+**Still not qualified:** actual severed network paths or SIGKILL after
+a real Raft proposal, new term barrier under distributed process loss,
+multi-process automatic catch-up/rebalance, independently ticking
+election clocks, and three-process failover quorum after healing.
+This is a genuine three-process positive Raft quorum, NOT completion of
+[#149](https://github.com/qigao/turboraft/issues/149) or permission
+to remove FlowMQ/fallback constraints. Exact full-SHA native candidate
+release gates remain separate and intentionally fail closed.
+
 ## 6. New-only packaging and gates
 
 - Single exact `Salts.Native 2.3.0-ace.sha<FULL_SHA>` candidate only after

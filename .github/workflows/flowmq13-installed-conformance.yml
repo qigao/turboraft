@@ -156,6 +156,15 @@ jobs:
             --output-on-failure --no-tests=error \
             --output-junit flowmq13-three-process-wal-repeat.xml
 
+          # #149 three simultaneously live certified CNet/TLS Core+WAL
+          # workers, 25 fresh OS clusters: actual Vote+Append 2/3, never
+          # controller-forwarded Raft packets, each WAL fsynced/reopened.
+          # Separate label and JUnit; NOT a partition/crash recovery claim.
+          ctest --test-dir .ci/build-flowmq13-consumer \
+            -L raft-three-process-real-tls --repeat until-fail:25 \
+            --output-on-failure --no-tests=error \
+            --output-junit flowmq13-three-process-tls-repeat.xml
+
           # Independent 64-MiB wire stream: print high-water RSS and
           # bounded chunk/ACK counters without changing the test gates.
           # Not an actual CNet socket bandwidth measurement.
@@ -177,5 +186,6 @@ jobs:
             .ci/build-flowmq13-consumer/flowmq13-results.xml
             .ci/build-flowmq13-consumer/flowmq13-snapshot-repeat.xml
             .ci/build-flowmq13-consumer/flowmq13-three-process-wal-repeat.xml
+            .ci/build-flowmq13-consumer/flowmq13-three-process-tls-repeat.xml
             .ci/build-flowmq13-full/CMakeCache.txt
           if-no-files-found: warn
