@@ -47,6 +47,11 @@ typedef struct tr_raft_cnet_channel_status {
     uint64_t handshake_packets_sent;
     uint64_t payloads_admitted;
     uint64_t payloads_received;
+    /* Owner-local logical-write settlement, distinct from remote delivery.
+     * CNet retains payload buffers; this is bounded metadata, NOT a queue. */
+    uint64_t payloads_completed;
+    uint64_t payloads_canceled;
+    size_t payload_writes_pending;
     int last_error;
     int terminal;
 } tr_raft_cnet_channel_status_t;
@@ -75,9 +80,11 @@ int tr_raft_cnet_channel_get_status(
     tr_raft_cnet_channel_status_t *out_status);
 
 /* Enqueue one wire payload directly into CNet's bounded owner-local send.
- * Successful admission does not prove remote delivery, commit or apply.
- * Failure does NOT cause automatic retry/settlement; caller owns that policy.
- * No second TurboRaft queue is maintained by this channel.
+ * On success, exactly one pending logical write is owned by CNet; the matching
+ * on_send marks it completed, or the terminal Channel callback marks it
+ * canceled. These counters never imply remote delivery/commit/WAL fsync.
+ * Rejected admission creates no pending write, no automatic retry, and no
+ * second TurboRaft queue. All calls/status access are owner-thread only.
  */
 int tr_raft_cnet_channel_send(
     tr_raft_cnet_channel_t *channel,
