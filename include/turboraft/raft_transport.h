@@ -56,6 +56,11 @@ typedef struct tr_raft_transport_payload {
  * All zero means an unbound ingress request: it can be consumed locally,
  * but must NEVER be used to send a network ACK. */
 typedef struct tr_raft_transport_reply_origin {
+    /* Issued by the stable host/component domain, NOT by a reloadable DSO.
+     * Nonzero and never reused for any past or live module generation in
+     * this host's lifetime. Together with channel_instance this closes the
+     * local static-counter reset ABA after unload/reload. */
+    uint64_t host_module_generation;
     uint64_t channel_instance;
     tr_raft_node_id_t authenticated_peer_node_id;
     tr_raft_group_id_t group_id;
