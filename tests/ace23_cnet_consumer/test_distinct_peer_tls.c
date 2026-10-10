@@ -1569,13 +1569,25 @@ static int pressure_reconnect(
         f->raft_owners, 101U, &group_one));
     PRT(tr_raft_multicore_group_status(
         f->raft_owners, 103U, &group_three));
-    PRT(tr_raft_cnet_channel_get_status(f->inbound[0], &healthy));
-    PRC(group_one.outstanding == 0U && group_one.rejected == 0U &&
+    /* Accept order is NOT a Node ID. Locate the peer by its verified
+     * certificate identity after the physical slot has been reused. */
+    healthy.phase = TR_RAFT_CNET_CHANNEL_FAILED;
+    for (n = 0U; n < LINK_COUNT; ++n) {
+        tr_raft_cnet_channel_status_t candidate = {0};
+        PRT(tr_raft_cnet_channel_get_status(f->inbound[n], &candidate));
+        if (candidate.authenticated_peer_node_id == 1U) {
+            healthy = candidate;
+            break;
+        }
+    }
+    PRC(n < LINK_COUNT &&
+        group_one.outstanding == 0U && group_one.rejected == 0U &&
         group_three.outstanding == 0U && group_three.rejected == 1U &&
         group_three.owned_chunk_bytes == 0U &&
+        healthy.authenticated_peer_node_id == 1U &&
         healthy.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
         !healthy.terminal,
-        "post-overload explicit re-admission settles and sibling remains live");
+        "post-overload new admission settles and exact certified Node1 stays live");
 #undef PRT
 #undef PRC
     return SALTS_OK;
