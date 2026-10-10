@@ -571,7 +571,10 @@ through a simulated delivery function:
   leave index4 uncommitted during eight elapsed-time ticks. The host then
   explicitly establishes a NEW authenticated mTLS/HELLO N+1 with a
   different Channel instance and CNet slot-generation token on the same
-  listener and owners; no accepted send is replayed. Only after fresh
+  listener and owners. Before N+1 authentication, any test-only Ready
+  output left for the terminal old Node3 channel is explicitly rejected;
+  Node1's independent output remains FIFO-ordered. No accepted or unsent
+  old-generation Raft output is automatically replayed. Only after fresh
   higher-term votes and a current-term index5 majority ACK can index4
   and index5 commit, after which Node1 rejoins and converges. This is
   an actual socket teardown/re-establishment, not an involuntary network

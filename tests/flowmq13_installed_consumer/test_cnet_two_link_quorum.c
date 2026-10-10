@@ -94,6 +94,7 @@ typedef struct quorum_fixture {
     unsigned node_three_socket_slot;
     unsigned node_three_reconnected;
     size_t offline_raft_outputs;
+    size_t stale_ready_rejected_at_reconnect;
     tr_raft_transport_reply_origin_t node_three_old_origin;
     tr_raft_transport_reply_origin_t node_three_new_origin;
 #endif
@@ -723,6 +724,33 @@ static int physical_reconnect_node_three(quorum_fixture_t *f)
     if (!f->node_three_link_down || socket >= PEERS ||
         f->inbound[socket] != NULL || f->outbound[1] != NULL)
         return SALTS_EPROTO;
+    {
+        size_t read, write = 0U;
+        /* The TEST fixture has a bounded array of Core Ready outputs.
+         * A Raft frame queued while connection N was terminal was NEVER
+         * CNet-admitted. Explicitly discard those peer-local outputs
+         * BEFORE authenticated N+1 becomes eligible for new work.
+         * Otherwise the test harness itself could silently replay a
+         * previous-term Append over a new TLS generation. Preserve any
+         * independent Node1 output in its original FIFO order. */
+        for (read = 0U; read < f->pending_count; ++read) {
+            const tr_raft_message_t message = f->pending[read];
+            if (message.to == 3U || message.from == 3U) {
+                ++f->stale_ready_rejected_at_reconnect;
+                ++f->offline_raft_outputs;
+                if (message.to == 3U &&
+                    message.type == TR_RAFT_MSG_APPEND_REQUEST)
+                    ++f->lost_append_three;
+                continue;
+            }
+            f->pending[write++] = message;
+        }
+        f->pending_count = write;
+        for (read = 0U; read < f->pending_count; ++read) {
+            if (f->pending[read].to == 3U || f->pending[read].from == 3U)
+                return SALTS_EPROTO;
+        }
+    }
     CHECK_PHYSICAL(cnet_listener_port(&f->listener,&port));
     if (snprintf(uri,sizeof(uri),"tls://127.0.0.1:%u",
                  (unsigned)port) <= 0) return SALTS_EINVAL;
