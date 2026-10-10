@@ -135,6 +135,12 @@ jobs:
           ctest --test-dir .ci/build-flowmq13-macos-consumer \
             --output-on-failure --no-tests=error \
             --output-junit flowmq13-results.xml
+          # New process + bounded authentic Kqueue/TLS/Owner/WAL per run,
+          # never an automatic replay of a previously admitted operation.
+          ctest --test-dir .ci/build-flowmq13-macos-consumer \
+            -L cnet-snapshot-lifecycle --repeat until-fail:25 \
+            --output-on-failure --no-tests=error \
+            --output-junit flowmq13-snapshot-repeat.xml
 
       - name: Compiler cache report
         if: always()
@@ -149,6 +155,7 @@ jobs:
           path: |
             .ci/build-flowmq13-macos-consumer/Testing/Temporary
             .ci/build-flowmq13-macos-consumer/flowmq13-results.xml
+            .ci/build-flowmq13-macos-consumer/flowmq13-snapshot-repeat.xml
             .ci/build-flowmq13-macos/CMakeCache.txt
           if-no-files-found: warn
 
@@ -261,6 +268,10 @@ jobs:
           if errorlevel 1 exit /b 1
           ctest --test-dir .ci\build-flowmq13-windows-consumer --output-on-failure --no-tests=error --output-junit flowmq13-results.xml
           if errorlevel 1 exit /b 1
+          rem 25 completely independent IOCP/TLS/Owner/WAL test processes.
+          rem CTest repetition is not an automatic Raft settlement retry.
+          ctest --test-dir .ci\build-flowmq13-windows-consumer -L cnet-snapshot-lifecycle --repeat until-fail:25 --output-on-failure --no-tests=error --output-junit flowmq13-snapshot-repeat.xml
+          if errorlevel 1 exit /b 1
 
       - name: Upload Windows conformance diagnostics
         if: always()
@@ -270,5 +281,6 @@ jobs:
           path: |
             .ci/build-flowmq13-windows-consumer/Testing/Temporary
             .ci/build-flowmq13-windows-consumer/flowmq13-results.xml
+            .ci/build-flowmq13-windows-consumer/flowmq13-snapshot-repeat.xml
             .ci/build-flowmq13-windows/CMakeCache.txt
           if-no-files-found: warn
