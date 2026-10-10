@@ -130,7 +130,11 @@ static int load_core(tr_raft_wal_storage_t *wal, unsigned node_id,
     tr_raft_core_config_t config = {0};
     tr_raft_status_t status = {0};
     int result = tr_raft_wal_storage_load(wal, &recovered);
-    if (result != SALTS_OK) return result;
+    if (result != SALTS_OK) {
+        fprintf(stderr,"three-process load WAL failed: node=%u rc=%d\n",
+                node_id,result);
+        return result;
+    }
     *command_id = 0U;
     if (recovered.term != 1U || recovered.voted_for != node_id ||
         recovered.commit_index != 0U ||
@@ -166,7 +170,11 @@ static int load_core(tr_raft_wal_storage_t *wal, unsigned node_id,
     config.max_log_entries = LOG_LIMIT;
     result = tr_raft_core_create(&config, out_core);
     tr_raft_wal_recovery_destroy(&recovered);
-    if (result != SALTS_OK) return result;
+    if (result != SALTS_OK) {
+        fprintf(stderr,"three-process create Core failed: node=%u rc=%d\n",
+                node_id,result);
+        return result;
+    }
     result = tr_raft_core_status(*out_core, &status);
     if (result != SALTS_OK || status.role != TR_RAFT_FOLLOWER ||
         status.term != 1U || status.commit_index != 0U ||
@@ -203,14 +211,18 @@ static int worker_main(unsigned node_id, const char *wal_prefix,
     tr_raft_core_t *core = NULL;
     uint64_t command_id = 0U;
     unsigned char command;
+    const char *stage = "WalStorage.open";
     int rc = tr_raft_wal_storage_open(&config, &wal);
     if (rc != SALTS_OK) goto done;
     if (!recovering) {
+        stage = "WalStorage.seed";
         rc = seed_wal(wal, node_id);
         if (rc != SALTS_OK) goto done;
     }
+    stage = "WalStorage.load+RaftCore.create";
     rc = load_core(wal, node_id, &core, &command_id);
     if (rc != SALTS_OK) goto done;
+    stage = "IPC.status";
     if (child_reply(control_fd, core, node_id, 'R', command_id) != 0) {
         rc = SALTS_EPROTO;
         goto done;
@@ -235,8 +247,8 @@ done:
     }
     (void)close(control_fd);
     if (rc != SALTS_OK)
-        fprintf(stderr, "three-process WAL worker %u failed: %d\n",
-                node_id, rc);
+        fprintf(stderr, "three-process WAL worker %u failed at %s: %d\n",
+                node_id, stage, rc);
     return rc == SALTS_OK ? 0 : 1;
 }
 
