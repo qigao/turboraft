@@ -224,6 +224,7 @@ static int init_fixture(managed_fixture *fixture, int security_reject)
     fixture->server_config.identity = &fixture->server_policy;
     fixture->server_config.handshake = handshake_config(2U);
     fixture->server_config.first_outbound_message_id = 1U;
+    fixture->server_config.host_module_generation = UINT64_C(90010001);
     fixture->server_config.on_payload = capture_payload;
 #undef INIT_TRY
     return SALTS_OK;
@@ -250,6 +251,7 @@ static int make_managed_peer(managed_fixture *f, size_t index,
     config.channel.identity = &f->client_policy;
     config.channel.handshake = local;
     config.channel.first_outbound_message_id = 1U;
+    config.channel.host_module_generation = UINT64_C(90010001);
     config.channel.on_payload = capture_payload;
     config.channel.payload_context = &f->client_probes[index];
     config.expected_peer_node_id = 2U;
@@ -569,7 +571,8 @@ static int test_bounded_multi_link(void)
 
     CHECK_TRY(tr_raft_cnet_managed_peer_capture_reply_origin(
         f.peers[0], 43U, &old_origin));
-    if (old_origin.channel_instance == 0U ||
+    if (old_origin.host_module_generation != UINT64_C(90010001) ||
+        old_origin.channel_instance == 0U ||
         old_origin.authenticated_peer_node_id != 2U ||
         old_origin.group_id != 43U ||
         old_origin.connection_token == 0U) {
@@ -748,7 +751,8 @@ static int test_bounded_multi_link(void)
 
     CHECK_TRY(tr_raft_cnet_managed_peer_capture_reply_origin(
         f.peers[0], 43U, &fresh_origin));
-    if (fresh_origin.channel_instance == 0U ||
+    if (fresh_origin.host_module_generation != UINT64_C(90010001) ||
+        fresh_origin.channel_instance == 0U ||
         fresh_origin.channel_instance == old_origin.channel_instance ||
         fresh_origin.authenticated_peer_node_id !=
             old_origin.authenticated_peer_node_id) {
@@ -777,6 +781,18 @@ static int test_bounded_multi_link(void)
                 f.peers[0], &invalid) != SALTS_ECANCELED) {
             result = SALTS_EPROTO;
             failed = "ticketless completion escaped generation fence";
+            goto done;
+        }
+        /* Simulate a module reload ABA: even if the DSO-local serial and
+         * underlying CNet token happened to repeat, an older host epoch
+         * must reject the reply before touching a single send credit. */
+        invalid = partial_ack(&fresh_origin);
+        invalid.reply_origin.host_module_generation =
+            fresh_origin.host_module_generation - 1U;
+        if (tr_raft_cnet_managed_peer_send_chunk_completion(
+                f.peers[0], &invalid) != SALTS_ECANCELED) {
+            result = SALTS_EPROTO;
+            failed = "DSO reload host generation ABA escaped ACK fence";
             goto done;
         }
         invalid = partial_ack(&fresh_origin);
