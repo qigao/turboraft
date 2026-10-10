@@ -247,6 +247,39 @@ spec("ACE 2.3 actual owner-local Snapshot/Data receiver ACK semantics")
         check_equal(fclose(sink.file), 0);
     }
 
+    it("never marks a digest-corrupted SNAPSHOT as installed or durable")
+    {
+        synced_sink sink = {0};
+        tr_raft_snapshot_receiver_t *receiver = NULL;
+        tr_raft_snapshot_receiver_config_t config;
+        tr_raft_multicore_chunk_receivers_t bind = {0};
+        tr_raft_multicore_chunk_result_t result = {0};
+        tr_raft_transport_payload_t first, last;
+
+        sink.file = tmpfile();
+        check_not_null(sink.file);
+        config = snap_config(&sink);
+        check_equal(tr_raft_snapshot_receiver_create(&config, &receiver),
+                    SALTS_OK);
+        bind.snapshot = receiver;
+        first = snapshot_chunk((const uint8_t *)"abc", 0U, 3U, false);
+        last = snapshot_chunk((const uint8_t *)"def", 3U, 3U, true);
+        first.data.snapshot_chunk.snapshot_digest[0] ^= 0xffU;
+        last.data.snapshot_chunk.snapshot_digest[0] ^= 0xffU;
+        check_equal(tr_raft_multicore_chunk_receivers_handle(
+            &bind, &first, &result), SALTS_OK);
+        check_true(result.ack_valid);
+        check_false(result.durable_or_installed);
+        check_equal(tr_raft_multicore_chunk_receivers_handle(
+            &bind, &last, &result), SALTS_EPROTO);
+        check_false(result.ack_valid);
+        check_false(result.durable_or_installed);
+        check_equal(sink.fsynced, 0U);
+        check_equal(sink.aborted, 1U);
+        tr_raft_snapshot_receiver_destroy(receiver);
+        check_equal(fclose(sink.file), 0);
+    }
+
     it("does not invent a positive ACK on commit error or invalid route")
     {
         synced_sink sink = {0};
