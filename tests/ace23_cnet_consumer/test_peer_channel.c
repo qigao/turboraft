@@ -716,8 +716,12 @@ static int peer_case_run(int mode)
     cnet_tls_client_config client_tls = {0};
     tr_raft_cnet_channel_config_t client_channel = {0};
     tr_raft_cnet_channel_config_t server_channel = {0};
+    tr_raft_cnet_channel_config_t client_channel_b = {0};
+    tr_raft_cnet_channel_config_t server_channel_b = {0};
     tr_raft_cnet_channel_status_t cs = {0};
     tr_raft_cnet_channel_status_t ss = {0};
+    tr_raft_cnet_channel_status_t cs_b = {0};
+    tr_raft_cnet_channel_status_t ss_b = {0};
     cnet_connect_options options = {0};
     tr_raft_cnet_channel_group_binding_t raft_group = {0};
     tr_raft_transport_t raft_transport = {0};
@@ -728,6 +732,9 @@ static int peer_case_run(int mode)
     unsigned iteration;
     int accepted = 0;
     int sent = 0;
+    int connected_b = 0;
+    int accepted_b = 0;
+    int sent_b = 0;
     int result = SALTS_OK;
     const char *error_stage = "none";
 
@@ -750,6 +757,13 @@ static int peer_case_run(int mode)
     f.client_sink.expected_to = mode == PEER_FORGED_NODE ? 3U : 1U;
     f.server_sink.expected_from = 1U;
     f.server_sink.expected_to = 2U;
+    f.client_sink_b.expected_from = 2U;
+    f.client_sink_b.expected_to = 1U;
+    f.server_sink_b.expected_from = 1U;
+    f.server_sink_b.expected_to = 2U;
+    f.server_sink_b.provider_b = 1;
+    if (mode == PEER_DSO_AB_PUBLICATION)
+        f.server_sink_b.dso = &dso;
 
     f.client_fingerprints[0] = CERT_NODE2;
     f.server_fingerprints[0] = mode == PEER_UNAUTHORIZED_CERT
