@@ -146,6 +146,30 @@ jobs:
             -L cnet-snapshot-lifecycle --repeat until-fail:25 \
             --output-on-failure --no-tests=error \
             --output-junit flowmq13-snapshot-repeat.xml
+          # Print measured 64-MiB/1024-chunk wire streaming resource counters
+          # as plain job diagnostics. This is NOT a throughput comparison
+          # against real network CNet; full SDK/functional tests ran above.
+          ctest --test-dir .ci/build-flowmq13-consumer \
+            -R '^turboraft[.]flowmq13[.]large_snapshot_stream
+
+      - name: Report ccache statistics
+        if: always()
+        shell: bash
+        run: ccache --show-stats
+
+      - name: Upload FlowMQ 1.3.0 conformance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turboraft-flowmq13-conformance-linux-x64
+          path: |
+            .ci/build-flowmq13-consumer/Testing/Temporary
+            .ci/build-flowmq13-consumer/flowmq13-results.xml
+            .ci/build-flowmq13-consumer/flowmq13-snapshot-repeat.xml
+            .ci/build-flowmq13-full/CMakeCache.txt
+          if-no-files-found: warn
+ \
+            --verbose --no-tests=error
 
       - name: Report ccache statistics
         if: always()
