@@ -419,6 +419,34 @@ under **two simultaneous real TLS clients**, not a claim of lossless
 pause/resume, three independently operating Raft servers, distributed
 quorum convergence or wire-level throughput equality with FlowMQ.
 
+The installed-SDK `turboraft.flowmq13.cnet_item_rejoin` and
+`turboraft.flowmq13.cnet_byte_rejoin` fixtures now extend **each**
+overload type through an actual physical Node3 **N → N+1** TLS reconnect.
+Before reusing its connection slot, the test waits for **both** terminal
+CNet endpoints and asserts `payloads_admitted == payloads_completed +
+payloads_canceled` with **zero** writes pending. It preserves the exact
+old Group103 completion's authenticated `reply_origin` as copied data,
+then constructs a new physical connection, validates certificate + reciprocal
+HELLO and requires a distinct Channel instance and NativeIO slot token.
+
+The old request had **no valid storage ACK**; a *test-only synthetic ACK*
+is presented only as a **negative generation-fencing probe** and must
+return `SALTS_ECANCELED` before consuming any new CNet send credit.
+It is never delivered or used as a durable confirmation. There is no
+implicit resend after the TLS reconnection: an explicit host-initiated
+Snapshot from Node3 re-enters Group103 as a **new** owned request,
+produces exactly one non-durable completion and returns its SG bytes;
+a concurrent new Node1 Raft heartbeat still finishes on Group101.
+Owner credit rejections remain isolated to Group103 and Node1's certified
+Channel remains ACTIVE throughout.
+
+The new reconnect tests each run as a fresh process **25 times on Linux
+epoll, Windows IOCP and macOS Kqueue**. They prove fail-closed recovery
+and no automatic settlement retry on the current TLS/Owner implementation.
+They do **not** prove lossless backpressure, transport-side frame parking,
+streaming network fairness under sustained large Snapshot load, or a
+three-server Raft quorum.
+
 The **CNet Channel** currently treats a negative payload callback result
 (including full capacity) as a failed connection and closes that Channel.
 This is fail-closed rather than lossless flow control: upstream peers must
