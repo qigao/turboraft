@@ -81,6 +81,14 @@ static int tr_channel_same_connection(
     return lhs.slot == rhs.slot && lhs.generation == rhs.generation;
 }
 
+/* CNet-specific value encoding never escapes this transport adapter.
+ * Neutral Multicore only copies/compares opaque connection_token values. */
+static uint64_t tr_channel_connection_token(cnet_connection connection)
+{
+    return ((uint64_t)connection.slot << 32U) |
+           (uint64_t)connection.generation;
+}
+
 /* A failure fences Raft callbacks synchronously; CNet owns the terminal
  * callback and all outstanding TLS/send completions until it reports close. */
 static void tr_channel_fault(tr_raft_cnet_channel_t *channel, int reason)
@@ -436,8 +444,7 @@ int tr_raft_cnet_channel_capture_reply_origin(
         .authenticated_peer_node_id =
             channel->status.authenticated_peer_node_id,
         .group_id = group_id,
-        .connection_slot = channel->connection.slot,
-        .connection_generation = channel->connection.generation
+        .connection_token = tr_channel_connection_token(channel->connection)
     };
     return SALTS_OK;
 }
@@ -470,8 +477,8 @@ int tr_raft_cnet_channel_send_chunk_completion(
         channel->status.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
         !channel->bound ||
         channel->channel_instance != origin->channel_instance ||
-        channel->connection.slot != origin->connection_slot ||
-        channel->connection.generation != origin->connection_generation ||
+        tr_channel_connection_token(channel->connection) !=
+            origin->connection_token ||
         channel->status.authenticated_peer_node_id !=
             origin->authenticated_peer_node_id)
         return SALTS_ECANCELED;
