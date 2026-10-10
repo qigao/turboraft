@@ -8,7 +8,7 @@
  * Plugin holds a live module lease. Never copy it into a production API. */
 typedef struct tr_ace23_dso_callback_state {
     atomic_bool stop_requested;
-    atomic_bool callback_entered;
+    atomic_uint callback_entered;
     atomic_uint callback_completed;
 } tr_ace23_dso_callback_state;
 
