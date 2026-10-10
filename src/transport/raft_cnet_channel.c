@@ -15,7 +15,9 @@
 /* Channel-local serial never wraps within one loaded code image. A DSO
  * reload can reset this counter, so it is NEVER sufficient as an origin
  * fence without the stable, host-issued module generation. */
-static atomic_uint_fast64_t tr_channel_next_instance = ATOMIC_VAR_INIT(1U);
+/* A C11 atomic scalar accepts a constant static initializer on MSVC and
+ * Clang/GCC. MSVC does not provide a portable constant ATOMIC_VAR_INIT. */
+static atomic_uint_fast64_t tr_channel_next_instance = 1U;
 
 static int tr_channel_alloc_instance(uint64_t *out_instance)
 {
