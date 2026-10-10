@@ -56,9 +56,10 @@ int tr_raft_multicore_ingress_create(
     return SALTS_OK;
 }
 
-int tr_raft_multicore_ingress_submit(
+static int tr_multicore_ingress_submit_impl(
     tr_raft_multicore_ingress_t *ingress,
     const tr_raft_transport_payload_t *payload,
+    const tr_raft_transport_reply_origin_t *reply_origin,
     uint64_t *out_request_id)
 {
     tr_raft_multicore_request_t request = {0};
@@ -72,6 +73,11 @@ int tr_raft_multicore_ingress_submit(
     if (payload->kind != TR_RAFT_WIRE_PAYLOAD_RAFT &&
         payload->kind != TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
         payload->kind != TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK)
+        return SALTS_ENOTSUP;
+    /* Reply-origin tokens are deliberately limited to chunk receivers.
+     * Raft STEP still uses ordinary deterministic completion semantics. */
+    if (reply_origin != NULL &&
+        payload->kind == TR_RAFT_WIRE_PAYLOAD_RAFT)
         return SALTS_ENOTSUP;
     if (payload->kind == TR_RAFT_WIRE_PAYLOAD_RAFT &&
         (payload->group_id == 0U ||
@@ -94,11 +100,34 @@ int tr_raft_multicore_ingress_submit(
         /* Byte + completion credits checked before the borrowed chunk is
          * materialized. The Group Owner receives an owned, bounded view. */
         result = tr_raft_multicore_submit_owned_chunk(
-            ingress->runtime, payload, request_id);
+            ingress->runtime, payload, request_id, reply_origin);
     }
     if (result != SALTS_OK) return result;
     *out_request_id = request_id;
     return SALTS_OK;
+}
+
+int tr_raft_multicore_ingress_submit(
+    tr_raft_multicore_ingress_t *ingress,
+    const tr_raft_transport_payload_t *payload,
+    uint64_t *out_request_id)
+{
+    return tr_multicore_ingress_submit_impl(
+        ingress, payload, NULL, out_request_id);
+}
+
+int tr_raft_multicore_ingress_submit_with_origin(
+    tr_raft_multicore_ingress_t *ingress,
+    const tr_raft_transport_payload_t *payload,
+    const tr_raft_transport_reply_origin_t *origin,
+    uint64_t *out_request_id)
+{
+    if (out_request_id == NULL) return SALTS_EINVAL;
+    *out_request_id = 0U;
+    if (origin == NULL || origin->channel_instance == 0U)
+        return SALTS_EINVAL;
+    return tr_multicore_ingress_submit_impl(
+        ingress, payload, origin, out_request_id);
 }
 
 int tr_raft_multicore_ingress_receive(
