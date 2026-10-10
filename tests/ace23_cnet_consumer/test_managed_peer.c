@@ -2,6 +2,7 @@
 
 #include <cmeta_error.h>
 #include <salts/clock.h>
+#include <salts/thread.h>
 #include <tinytest.h>
 
 #include <stdio.h>
@@ -474,6 +475,25 @@ static tr_raft_multicore_completion_t partial_ack(
     return completion;
 }
 
+typedef struct foreign_ack_attempt {
+    tr_raft_cnet_managed_peer_t *peer;
+    tr_raft_multicore_completion_t completion;
+    tr_raft_transport_reply_origin_t captured;
+    int capture_result;
+    int send_result;
+} foreign_ack_attempt;
+
+static void foreign_owner_attempt(void *context)
+{
+    foreign_ack_attempt *attempt = (foreign_ack_attempt *)context;
+    attempt->capture_result =
+        tr_raft_cnet_managed_peer_capture_reply_origin(
+            attempt->peer, 43U, &attempt->captured);
+    attempt->send_result =
+        tr_raft_cnet_managed_peer_send_chunk_completion(
+            attempt->peer, &attempt->completion);
+}
+
 static int test_bounded_multi_link(void)
 {
     managed_fixture f = {0};
@@ -559,6 +579,21 @@ static int test_bounded_multi_link(void)
         goto done;
     }
     late_ack = partial_ack(&old_origin);
+    {
+        foreign_ack_attempt foreign = {0};
+        cmeta_thread_t other = {0};
+        foreign.peer = f.peers[0];
+        foreign.completion = late_ack;
+        CHECK_TRY(cmeta_thread_create(&other, foreign_owner_attempt, &foreign));
+        CHECK_TRY(cmeta_thread_join(&other));
+        if (foreign.capture_result != SALTS_EPERM ||
+            foreign.send_result != SALTS_EPERM ||
+            foreign.captured.channel_instance != 0U) {
+            result = SALTS_EPROTO;
+            failed = "foreign thread borrowed CNet owner ACK state";
+            goto done;
+        }
+    }
     CHECK_TRY(send_heartbeat(&f, 0U));
     CHECK_TRY(send_heartbeat(&f, 1U));
     for (i = 0U; i < PROGRESS_BUDGET; ++i) {
@@ -732,6 +767,35 @@ static int test_bounded_multi_link(void)
         result = SALTS_EPROTO;
         failed = "stale or cross-peer ACK was admitted";
         goto done;
+    }
+    /* A ticketless or malformed receipt must also fail before CNet send.
+     * In particular a caller cannot infer that an Owner completion means
+     * durable ACK or change the authenticated receiving Node ID. */
+    {
+        tr_raft_multicore_completion_t invalid = late_ack;
+        invalid.reply_origin = (tr_raft_transport_reply_origin_t){0};
+        if (tr_raft_cnet_managed_peer_send_chunk_completion(
+                f.peers[0], &invalid) != SALTS_ECANCELED) {
+            result = SALTS_EPROTO;
+            failed = "ticketless completion escaped generation fence";
+            goto done;
+        }
+        invalid = partial_ack(&fresh_origin);
+        invalid.value.chunk.ack.data.to = 3U;
+        if (tr_raft_cnet_managed_peer_send_chunk_completion(
+                f.peers[0], &invalid) != SALTS_EPROTO) {
+            result = SALTS_EPROTO;
+            failed = "forged ACK destination escaped exact peer gate";
+            goto done;
+        }
+        invalid = partial_ack(&fresh_origin);
+        invalid.value.chunk.durable_or_installed = true;
+        if (tr_raft_cnet_managed_peer_send_chunk_completion(
+                f.peers[0], &invalid) != SALTS_EPROTO) {
+            result = SALTS_EPROTO;
+            failed = "unverified ACK durability escaped CNet fence";
+            goto done;
+        }
     }
     CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
     if (a.channel.payloads_admitted != 0U ||
