@@ -307,7 +307,7 @@ jobs:
       # The owned Raft mailbox and standalone OS-thread fixture are built
       # with TSan. The exact published Salts 2.3 RC binaries are unchanged,
       # so this is a scoped TurboRaft race check, not whole-SDK TSan parity.
-      - name: TSan for independent Raft Owner MPSC and stop races
+      - name: TSan for Raft Owner MPSC, Plugin DSO and real CNet TLS callback
         shell: bash
         env:
           TSAN_OPTIONS: halt_on_error=1
@@ -341,7 +341,7 @@ jobs:
           cmake --build .ci/build-ace23-owner-tsan-consumer --parallel 2
           ctest --test-dir .ci/build-ace23-owner-tsan-consumer \
             --output-on-failure --output-junit tsan-results.xml \
-            -R '^turboraft[.]ace23_(owner_ingress|dso_epoch)$' --no-tests=error
+            -R '^turboraft[.]ace23_(owner_ingress|dso_epoch|peer_channel)$' --no-tests=error
 
       - name: Report ccache statistics
         if: always()
