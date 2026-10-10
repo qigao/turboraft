@@ -25,9 +25,22 @@ extern "C" {
  * including ECANCELED completions after stop. Successful local admission
  * does NOT imply transport delivery, Raft commit, WAL fsync or apply.
  *
- * SNAPSHOT/DATA payload kinds (including borrowed chunk pointers) are
- * explicitly ENOTSUP: they require a distinct bounded ownership/SG lease
- * protocol, never a shallow copy into the Raft request ring.
+ * SNAPSHOT/DATA chunk payloads require an explicit per-Group byte budget
+ * and receive_chunk Owner callback configured at Multicore creation.
+ * Without both they return ENOTSUP (never shallow-copy borrowed pointers).
+ * The existing Multicore ring reserves item AND byte credits before
+ * materializing the borrowed chunk into one canonical Salts Core buffer.
+ * CNet may release/reuse the original view immediately after acceptance.
+ * The exact Group Owner invokes receive_chunk, then returns byte credits
+ * and releases the lease BEFORE publishing one completion. Completion slot
+ * remains outstanding until host take(); stop produces ECANCELED without
+ * invoking the receiver callback, releasing the buffer exactly once.
+ *
+ * The callback may populate a typed SNAPSHOT_ACK or DATA_ACK completion
+ * only when its receiver has actually established those semantics.
+ * In particular a transport copy or local callback return is NOT fsync,
+ * durable data settlement, remote delivery, or a network ACK. The host
+ * explicitly sends any verified ACK on its owning CNet connection.
  *
  * Request IDs are monotonically unique within ONE ingress; the host must
  * allocate non-overlapping ID namespaces if other producers submit to the
@@ -62,8 +75,10 @@ int tr_raft_multicore_ingress_create(
     tr_raft_multicore_t *runtime, uint64_t first_request_id,
     tr_raft_multicore_ingress_t **out_ingress);
 
-/* Thread-safe from CNet producers; *out_request_id=0 on every failure.
- * Completion is retrieved only from the EXISTING Multicore group ring.
+/* Thread-safe from authenticated CNet producers; *out_request_id=0 on
+ * every failure. No fallback to borrowed pointer storage or retry.
+ * Completion (including any explicit receiver-generated ACK) is retrieved
+ * only from the EXISTING Multicore group ring.
  */
 int tr_raft_multicore_ingress_submit(
     tr_raft_multicore_ingress_t *ingress,
