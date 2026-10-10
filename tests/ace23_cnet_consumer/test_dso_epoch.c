@@ -14,7 +14,7 @@
 #error "DSO fixture must be selected by the installed CMake consumer"
 #endif
 
-enum { CALLBACK_DEADLINE_MS = 5000U };
+enum { CALLBACK_DEADLINE_MS = 5000U, DSO_CALLBACK_THREADS = 4U };
 
 typedef struct dso_callback_thread {
     const cmeta_plugin_manifest *manifest; /* borrowed under actual lease */
@@ -28,11 +28,12 @@ static void run_dso_callback(void *context)
         thread->manifest->self);
 }
 
-static int await_callback_entry(const tr_ace23_dso_callback_state *state)
+static int await_callback_entry(
+    const tr_ace23_dso_callback_state *state, unsigned expected)
 {
     const uint64_t deadline = cmeta_monotonic_ms() + CALLBACK_DEADLINE_MS;
-    while (!atomic_load_explicit(
-               &state->callback_entered, memory_order_acquire)) {
+    while (atomic_load_explicit(
+               &state->callback_entered, memory_order_acquire) < expected) {
         if (cmeta_monotonic_ms() >= deadline)
             return -1;
         cmeta_thread_yield();
@@ -84,8 +85,9 @@ spec("ACE 2.3 real Plugin DSO callback quiescence and stable host epoch")
             cmeta_plugin_lease lease = {0};
             const cmeta_plugin_manifest *manifest = NULL;
             const tr_ace23_dso_callback_state *module = NULL;
-            dso_callback_thread worker_state = {0};
-            cmeta_thread_t worker = {0};
+            dso_callback_thread worker_state[DSO_CALLBACK_THREADS] = {{0}};
+            cmeta_thread_t workers[DSO_CALLBACK_THREADS] = {{0}};
+            size_t worker_index;
             bool quiet = false;
             tr_raft_transport_reply_origin_t reply_origin = {0};
 
@@ -135,10 +137,17 @@ spec("ACE 2.3 real Plugin DSO callback quiescence and stable host epoch")
              * load*, proving that it resets across dlclose/dlopen. */
             check_equal(manifest->version.patch, (uint32_t)1U);
             module = manifest->self;
-            worker_state.manifest = manifest;
-            check_equal(cmeta_thread_create(
-                &worker, run_dso_callback, &worker_state), SALTS_OK);
-            check_equal(await_callback_entry(module), 0);
+            /* Four independently scheduled OS threads enter plugin-owned
+             * callback code simultaneously under the ONE shared host
+             * lease. A proper stop/unload barrier must join all four. */
+            for (worker_index = 0U; worker_index < DSO_CALLBACK_THREADS;
+                 ++worker_index) {
+                worker_state[worker_index].manifest = manifest;
+                check_equal(cmeta_thread_create(
+                    &workers[worker_index], run_dso_callback,
+                    &worker_state[worker_index]), SALTS_OK);
+            }
+            check_equal(await_callback_entry(module, DSO_CALLBACK_THREADS), 0);
             check_false(atomic_load_explicit(
                 &module->stop_requested, memory_order_acquire));
             check_equal(atomic_load_explicit(
@@ -155,11 +164,16 @@ spec("ACE 2.3 real Plugin DSO callback quiescence and stable host epoch")
             check_equal(cmeta_plugin_registry_poll_quiescent(
                 &registry, plugin, &quiet), CMETA_PLUGIN_OK);
             check_false(quiet);
-            check_equal(cmeta_thread_join(&worker), SALTS_OK);
-            cmeta_thread_destroy(&worker);
-            check_true(worker_state.result);
+            for (worker_index = 0U; worker_index < DSO_CALLBACK_THREADS;
+                 ++worker_index) {
+                check_equal(cmeta_thread_join(
+                    &workers[worker_index]), SALTS_OK);
+                cmeta_thread_destroy(&workers[worker_index]);
+                check_true(worker_state[worker_index].result);
+            }
             check_equal(atomic_load_explicit(
-                &module->callback_completed, memory_order_acquire), 1U);
+                &module->callback_completed, memory_order_acquire),
+                (unsigned)DSO_CALLBACK_THREADS);
 
             /* Stable host Scope closes before provider teardown. The
              * still-live scope prevents Component generation drain. */
