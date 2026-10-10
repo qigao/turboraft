@@ -1,5 +1,8 @@
 #include <turboraft/raft_multicore.h>
 
+#include "raft_multicore_chunk_internal.h"
+#include "../transport/raft_transport_payload_storage.h"
+
 #include <ring_buffer.h>
 #include <salts/thread.h>
 #include <salts/clock.h>
@@ -78,6 +81,15 @@ int tr_raft_multicore_config_validate(const tr_raft_multicore_config_t *c)
     if (((uint64_t)c->capacity + 1U) * c->group_count *
         (sizeof(tr_raft_multicore_request_t) + sizeof(tr_raft_multicore_completion_t)) >
         TR_RAFT_MULTICORE_MAX_QUEUE_BYTES) return SALTS_ERANGE;
+    /* These are admission-time bytes, not a preallocated second queue.
+     * Enforce a hard process-independent upper bound even for 1024 Groups. */
+    if ((uint64_t)c->owned_chunk_bytes_per_group >
+            TR_RAFT_MULTICORE_MAX_CHUNK_LEASE_BYTES ||
+        (c->owned_chunk_bytes_per_group != 0U &&
+         c->group_count >
+             TR_RAFT_MULTICORE_MAX_CHUNK_LEASE_BYTES /
+                 c->owned_chunk_bytes_per_group))
+        return SALTS_ERANGE;
     return SALTS_OK;
 }
 
@@ -172,10 +184,34 @@ static bool tr_multicore_work(tr_raft_owner_t *o, tr_multicore_group_t *g)
     cmeta_mutex_unlock(&o->mutex);
     c.request_id = q.request_id;
     c.operation = q.operation;
-    c.result = stopping ? SALTS_ECANCELED :
-        background_error != SALTS_OK && q.operation != TR_RAFT_MULTICORE_STATUS ?
-        background_error : tr_multicore_execute(g->service, &q, &c);
-    cmeta_mutex_lock(&o->mutex);
+    if (q.operation == TR_RAFT_MULTICORE_RECEIVE_CHUNK) {
+        tr_raft_owned_transport_payload_t *owned =
+            (tr_raft_owned_transport_payload_t *)q.value.chunk.internal_owned_chunk;
+        size_t bytes;
+        if (owned == NULL) abort(); /* only internal admission can enqueue */
+        bytes = owned->payload.kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK
+            ? owned->payload.data.data_chunk.data_length
+            : owned->payload.data.snapshot_chunk.data_length;
+        c.value.chunk.kind = owned->payload.kind;
+        if (stopping) c.result = SALTS_ECANCELED;
+        else if (background_error != SALTS_OK) c.result = background_error;
+        else c.result = o->runtime->factory.receive_chunk(
+                o->runtime->factory.context, o, g->assignment.group_id,
+                &owned->payload, &c.value.chunk);
+        /* Callback has returned on the one assigned Group Owner, so its
+         * borrowed view is no longer live. The exact retained Salts Core
+         * buffer is released before publishing the completion. */
+        tr_raft_owned_transport_payload_release(owned);
+        free(owned);
+        cmeta_mutex_lock(&o->mutex);
+        if (g->status.owned_chunk_bytes < bytes) abort();
+        g->status.owned_chunk_bytes -= bytes;
+    } else {
+        c.result = stopping ? SALTS_ECANCELED :
+            background_error != SALTS_OK && q.operation != TR_RAFT_MULTICORE_STATUS ?
+            background_error : tr_multicore_execute(g->service, &q, &c);
+        cmeta_mutex_lock(&o->mutex);
+    }
     slot = ring_write_acquire(&g->completions, sizeof(c));
     /* A missing reserved slot is an internal invariant violation. */
     if (slot == NULL) abort();
@@ -343,6 +379,85 @@ int tr_raft_multicore_submit(tr_raft_multicore_t *r, uint64_t id,
     return result;
 }
 
+/* Private path: the existing per-Group request+completion ring is the only
+ * queue. Reserve item AND bytes before copying any borrowed CNet data.
+ * Holding the existing owner mutex across one bounded (<=64KiB) materialize
+ * guarantees stop/submit races cannot leave an untracked in-flight lease. */
+int tr_raft_multicore_submit_owned_chunk(
+    tr_raft_multicore_t *r,
+    const tr_raft_transport_payload_t *payload,
+    uint64_t request_id)
+{
+    tr_multicore_group_t *g;
+    tr_raft_owner_t *o;
+    tr_raft_owned_transport_payload_t *owned = NULL;
+    tr_raft_multicore_request_t q = {0};
+    uint8_t *slot;
+    size_t bytes;
+    int result = SALTS_OK;
+
+    if (r == NULL || payload == NULL || request_id == 0U ||
+        payload->group_id == 0U)
+        return SALTS_EINVAL;
+    if (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK) {
+        const tr_raft_data_chunk_t *chunk = &payload->data.data_chunk;
+        bytes = chunk->data_length;
+        if (chunk->from == 0U || chunk->to == 0U ||
+            chunk->from == chunk->to || chunk->term == 0U ||
+            bytes > TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES ||
+            (bytes != 0U && chunk->data == NULL))
+            return SALTS_EPROTO;
+    } else if (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+        const tr_raft_snapshot_chunk_t *chunk =
+            &payload->data.snapshot_chunk;
+        bytes = chunk->data_length;
+        if (chunk->from == 0U || chunk->to == 0U ||
+            chunk->from == chunk->to || chunk->term == 0U ||
+            bytes > TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES ||
+            (bytes != 0U && chunk->data == NULL))
+            return SALTS_EPROTO;
+    } else return SALTS_ENOTSUP;
+
+    if (r->factory.receive_chunk == NULL ||
+        r->config.owned_chunk_bytes_per_group == 0U)
+        return SALTS_ENOTSUP;
+    g = tr_multicore_find(r, payload->group_id);
+    if (g == NULL) return SALTS_ENOENT;
+    o = &r->owners[g->assignment.owner_index];
+    cmeta_mutex_lock(&o->mutex);
+    if (o->stopping) result = SALTS_ECANCELED;
+    else if (g->status.outstanding >= r->config.capacity ||
+             bytes > r->config.owned_chunk_bytes_per_group -
+                         g->status.owned_chunk_bytes) {
+        result = SALTS_ENOSPC;
+        if (g->status.rejected != UINT64_MAX) ++g->status.rejected;
+    } else {
+        owned = (tr_raft_owned_transport_payload_t *)calloc(1U, sizeof(*owned));
+        if (owned == NULL) result = SALTS_ENOMEM;
+        else result = tr_raft_owned_transport_payload_copy(owned, payload);
+        if (result == SALTS_OK) {
+            q.operation = TR_RAFT_MULTICORE_RECEIVE_CHUNK;
+            q.request_id = request_id;
+            q.value.chunk.internal_owned_chunk = owned;
+            slot = ring_write_acquire(&g->requests, sizeof(q));
+            if (slot == NULL) abort(); /* item credit already reserved */
+            memcpy(slot, &q, sizeof(q));
+            ring_write_release(&g->requests, sizeof(q));
+            ++g->status.outstanding;
+            ++g->status.queued;
+            g->status.owned_chunk_bytes += bytes;
+            cmeta_cond_signal(&o->wake);
+            owned = NULL; /* ring owns exactly one lease now */
+        }
+    }
+    cmeta_mutex_unlock(&o->mutex);
+    if (owned != NULL) {
+        tr_raft_owned_transport_payload_release(owned);
+        free(owned);
+    }
+    return result;
+}
+
 int tr_raft_multicore_take(tr_raft_multicore_t *r, uint64_t id,
                           tr_raft_multicore_completion_t *c)
 {
@@ -486,7 +601,9 @@ int tr_raft_multicore_create(const tr_raft_multicore_config_t *c,
     if (result != SALTS_OK) return result;
     if (f == NULL || f->group_open == NULL || f->group_close == NULL ||
         ((f->owner_open != NULL || f->owner_poll != NULL || f->owner_close != NULL) &&
-         (f->owner_open == NULL || f->owner_poll == NULL || f->owner_close == NULL)))
+         (f->owner_open == NULL || f->owner_poll == NULL || f->owner_close == NULL)) ||
+        ((c->owned_chunk_bytes_per_group != 0U) !=
+         (f->receive_chunk != NULL)))
         return SALTS_EINVAL;
     r = calloc(1U, sizeof(*r));
     if (r == NULL) return SALTS_ENOMEM;
