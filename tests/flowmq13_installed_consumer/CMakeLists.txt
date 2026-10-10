@@ -277,3 +277,24 @@ add_test(NAME turboraft.flowmq13.three_node_core
 set_tests_properties(turboraft.flowmq13.three_node_core
                      PROPERTIES TIMEOUT 65
                                 LABELS "raft-3node-simulation")
+
+
+# Two independently certified real mTLS peers (Node1 and Node3) feed two
+# distinct existing Raft Group Owners. Both groups have 2/2 completion
+# credits held; a third valid Snapshot frame from Node3 must reject with
+# ENOSPC and fence ONLY Node3's Channel, never sibling Node1. Node1 can
+# still send another authenticated Raft request after taking its credits.
+# This is real CNet receive/backpressure isolation, NOT 3-node quorum.
+add_executable(turboraft_flowmq13_cnet_group_pressure
+               ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+target_compile_definitions(turboraft_flowmq13_cnet_group_pressure PRIVATE
+    TURBORAFT_TEST_TLS_GROUP_PRESSURE=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_link_libraries(turboraft_flowmq13_cnet_group_pressure PRIVATE
+    TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+    Salts::Platform Salts::TinyTest)
+add_test(NAME turboraft.flowmq13.cnet_group_pressure
+         COMMAND turboraft_flowmq13_cnet_group_pressure)
+set_tests_properties(turboraft.flowmq13.cnet_group_pressure
+                     PROPERTIES TIMEOUT 65
+                                LABELS "cnet-snapshot-lifecycle;cnet-group-pressure")
