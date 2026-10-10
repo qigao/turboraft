@@ -173,4 +173,5 @@ target_link_libraries(turboraft_flowmq13_cnet_snapshot_reconnect PRIVATE
 add_test(NAME turboraft.flowmq13.cnet_snapshot_reconnect
          COMMAND turboraft_flowmq13_cnet_snapshot_reconnect)
 set_tests_properties(turboraft.flowmq13.cnet_snapshot_reconnect
-                     PROPERTIES TIMEOUT 65)
+                     PROPERTIES TIMEOUT 65
+                                LABELS "cnet-snapshot-lifecycle")
