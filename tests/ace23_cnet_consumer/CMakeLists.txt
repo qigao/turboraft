@@ -90,7 +90,7 @@ set_tests_properties(turboraft.ace23_owner_ingress PROPERTIES TIMEOUT 20)
 add_library(turboraft_ace23_dso_epoch_fixture MODULE
             test_dso_epoch_fixture.c)
 target_link_libraries(turboraft_ace23_dso_epoch_fixture
-                      PRIVATE Salts::Plugin)
+                      PRIVATE Salts::Plugin Salts::ComponentPlugin)
 add_executable(turboraft_ace23_dso_epoch test_dso_epoch.c)
 target_link_libraries(turboraft_ace23_dso_epoch
                       PRIVATE TurboRaft::CNet Salts::ComponentPlugin
