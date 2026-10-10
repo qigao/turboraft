@@ -162,6 +162,7 @@ int tr_raft_cnet_managed_peer_create(
         config->channel.identity == NULL ||
         config->channel.on_payload == NULL ||
         config->channel.first_outbound_message_id == 0U ||
+        config->channel.host_module_generation == 0U ||
         config->expected_peer_node_id == 0U ||
         config->uri == NULL ||
         strncmp(config->uri, "tls://", 6U) != 0 ||
