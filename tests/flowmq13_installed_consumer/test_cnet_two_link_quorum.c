@@ -345,6 +345,42 @@ static int status_is(quorum_fixture_t *f, tr_raft_index_t expected,
                                   n1.last_log_index >= expected));
 }
 
+/* Capture only bounded non-secret counters on platform-specific failures.
+ * Every gate still fails closed: diagnostics do not trigger a retry or
+ * change CNet/Owner admission. */
+static void report_drive_state(quorum_fixture_t *f,
+                               tr_raft_index_t target,
+                               int include_one, unsigned attempts, int rc)
+{
+    tr_raft_status_t leader = {0}, one = {0}, three = {0};
+    tr_raft_cnet_channel_status_t c1 = {0}, c3 = {0};
+    (void)tr_raft_core_status(f->nodes[1].core, &leader);
+    (void)tr_raft_core_status(f->nodes[0].core, &one);
+    (void)tr_raft_core_status(f->nodes[2].core, &three);
+    (void)tr_raft_cnet_channel_get_status(f->outbound[0], &c1);
+    (void)tr_raft_cnet_channel_get_status(f->outbound[1], &c3);
+    fprintf(stderr,
+            "TLS majority progress target=%llu require_node1=%d "
+            "attempts=%u result=%d leader_role=%d leader_term=%llu "
+            "leader_index=%llu leader_commit=%llu "
+            "node3_index=%llu node3_commit=%llu node1_index=%llu "
+            "node1_commit=%llu wire=%zu/%zu pending=%zu votes=%zu "
+            "append3=%zu ack3=%zu mute1=%zu peers=%d/%d "
+            "peer_err=%d/%d\n",
+            (unsigned long long)target,include_one,attempts,rc,
+            (int)leader.role,(unsigned long long)leader.term,
+            (unsigned long long)leader.last_log_index,
+            (unsigned long long)leader.commit_index,
+            (unsigned long long)three.last_log_index,
+            (unsigned long long)three.commit_index,
+            (unsigned long long)one.last_log_index,
+            (unsigned long long)one.commit_index,
+            f->wire_sent,f->wire_recv,f->pending_count,
+            f->real_votes_to_leader,f->real_appends_to_three,
+            f->real_append_acks_from_three,f->lost_node_one,
+            (int)c1.phase,(int)c3.phase,c1.last_error,c3.last_error);
+}
+
 static int drive_until(quorum_fixture_t *f, tr_raft_index_t index,
                        int include_one)
 {
@@ -352,14 +388,21 @@ static int drive_until(quorum_fixture_t *f, tr_raft_index_t index,
     int rc;
     for (attempts = 0U; attempts < MAX_PROGRESS; ++attempts) {
         rc = network_progress(f);
-        if (rc != SALTS_OK) return rc;
+        if (rc != SALTS_OK) {
+            report_drive_state(f,index,include_one,attempts,rc);
+            return rc;
+        }
         if (status_is(f,index,include_one)) return SALTS_OK;
         /* Explicit Raft protocol heartbeat, not an application replay. */
         if (attempts % 120U == 119U) {
             rc = core_tick(f,1U,1U);
-            if (rc != SALTS_OK) return rc;
+            if (rc != SALTS_OK) {
+                report_drive_state(f,index,include_one,attempts,rc);
+                return rc;
+            }
         }
     }
+    report_drive_state(f,index,include_one,attempts,SALTS_ETIMEDOUT);
     return SALTS_ETIMEDOUT;
 }
 
