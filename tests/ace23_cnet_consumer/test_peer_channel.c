@@ -159,11 +159,18 @@ static int peer_dso_finish(peer_dso_harness *dso)
         dso->host_open = 0;
     }
     if (dso->loaded) {
-        if (dso->started && dso->controller_result != SALTS_OK) {
-            cmeta_plugin_status stopped =
-                cmeta_plugin_registry_request_stop(&dso->registry, dso->plugin);
-            if (stopped != CMETA_PLUGIN_OK && stopped != CMETA_PLUGIN_ALREADY)
+        if (dso->started) {
+            cmeta_plugin_lifecycle_info info = {0};
+            if (cmeta_plugin_registry_get_lifecycle(
+                    &dso->registry, dso->plugin, &info) != CMETA_PLUGIN_OK)
                 result = SALTS_EPROTO;
+            else if (info.state == CMETA_PLUGIN_LIFECYCLE_STARTED) {
+                /* Even a failed handshake needs an orderly Plugin stop.
+                 * Never poll for quiescence while still STARTED. */
+                if (cmeta_plugin_registry_request_stop(
+                        &dso->registry, dso->plugin) != CMETA_PLUGIN_OK)
+                    result = SALTS_EPROTO;
+            }
         }
         if (dso->lease_live) {
             DSO_CLEAN(cmeta_plugin_registry_release(
