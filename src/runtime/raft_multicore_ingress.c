@@ -1,5 +1,7 @@
 #include <turboraft/raft_multicore_ingress.h>
 
+#include "raft_multicore_chunk_internal.h"
+
 #include <cmeta_error.h>
 
 #include <stdatomic.h>
@@ -67,23 +69,33 @@ int tr_raft_multicore_ingress_submit(
     *out_request_id = 0U;
     if (ingress == NULL || ingress->runtime == NULL || payload == NULL)
         return SALTS_EINVAL;
-    if (payload->kind != TR_RAFT_WIRE_PAYLOAD_RAFT)
+    if (payload->kind != TR_RAFT_WIRE_PAYLOAD_RAFT &&
+        payload->kind != TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
+        payload->kind != TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK)
         return SALTS_ENOTSUP;
-    if (payload->group_id == 0U ||
-        payload->data.raft.from == 0U ||
-        payload->data.raft.to == 0U ||
-        payload->data.raft.from == payload->data.raft.to ||
-        payload->data.raft.entry_count > TR_RAFT_MAX_APPEND_ENTRIES)
+    if (payload->kind == TR_RAFT_WIRE_PAYLOAD_RAFT &&
+        (payload->group_id == 0U ||
+         payload->data.raft.from == 0U ||
+         payload->data.raft.to == 0U ||
+         payload->data.raft.from == payload->data.raft.to ||
+         payload->data.raft.entry_count > TR_RAFT_MAX_APPEND_ENTRIES))
         return SALTS_EPROTO;
 
     result = tr_multicore_ingress_request_id(ingress, &request_id);
     if (result != SALTS_OK) return result;
 
-    request.operation = TR_RAFT_MULTICORE_STEP;
-    request.request_id = request_id;
-    request.value.message = payload->data.raft; /* fully inline deep copy */
-    result = tr_raft_multicore_submit(
-        ingress->runtime, payload->group_id, &request);
+    if (payload->kind == TR_RAFT_WIRE_PAYLOAD_RAFT) {
+        request.operation = TR_RAFT_MULTICORE_STEP;
+        request.request_id = request_id;
+        request.value.message = payload->data.raft; /* fully inline copy */
+        result = tr_raft_multicore_submit(
+            ingress->runtime, payload->group_id, &request);
+    } else {
+        /* Byte + completion credits checked before the borrowed chunk is
+         * materialized. The Group Owner receives an owned, bounded view. */
+        result = tr_raft_multicore_submit_owned_chunk(
+            ingress->runtime, payload, request_id);
+    }
     if (result != SALTS_OK) return result;
     *out_request_id = request_id;
     return SALTS_OK;
