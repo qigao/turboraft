@@ -1864,8 +1864,16 @@ static int run_two_distinct_peers(int forge_node_three)
                         result = SALTS_EPROTO;
                         break;
                     }
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT
+                    /* The exact WAL-durable Group completion from the OLD
+                     * certified TLS Channel is intentionally not sent yet.
+                     * Keep only its VALUE until N is terminal and N+1 READY. */
+                    f.delayed_snapshot_completion = chunk_completion;
+                    f.delayed_snapshot_ready = 1;
+#else
                     TRY_STAGE(tr_raft_cnet_channel_send_chunk_completion(
                         binding->channel, &chunk_completion));
+#endif
 #endif
                 } else
 #endif
@@ -1910,6 +1918,9 @@ static int run_two_distinct_peers(int forge_node_three)
 #endif
 #else
     if (!forge_node_three && result == SALTS_OK) {
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT
+        TRY_STAGE(durable_snapshot_reconnect(&f, uri, &events));
+#else
         /* The receiver reached disk before CNet admitted this ACK. Poll
          * only the original two CNet Owners, no background retry/queue. */
         for (round = 0U; round < MAX_PROGRESS &&
@@ -1925,6 +1936,7 @@ static int run_two_distinct_peers(int forge_node_three)
             failed_stage = "certified Node3 did not receive exactly one durable Snapshot ACK";
             result = SALTS_EPROTO;
         }
+#endif
     }
 #endif
 #endif
@@ -1980,6 +1992,15 @@ spec("ACE 2.3 authenticated TLS Snapshot write fault is fail-closed")
     }
 }
 #else
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT
+spec("ACE 2.3 real Node3 mTLS N to N+1 WAL-durable Snapshot ACK fencing")
+{
+    it("drains N, rejects old durable ACK, explicitly resends and only N+1 confirms installed WAL")
+    {
+        check_equal(run_two_distinct_peers(0), SALTS_OK);
+    }
+}
+#else
 spec("ACE 2.3 real mTLS Snapshot to WAL Group Owner and durable reply")
 {
     it("installs Node3 Snapshot on exact Group Owner, fences stale ACK, restarts and catches up")
@@ -1987,6 +2008,7 @@ spec("ACE 2.3 real mTLS Snapshot to WAL Group Owner and durable reply")
         check_equal(run_two_distinct_peers(0), SALTS_OK);
     }
 }
+#endif
 #endif
 #else
 spec("ACE 2.3 two real distinct TLS-certified Raft Node IDs")
