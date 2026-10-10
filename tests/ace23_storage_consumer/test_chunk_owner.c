@@ -340,18 +340,43 @@ spec("ACE 2.3 actual receiver on fixed Multicore Group Owner")
         uint8_t data[2][3] = {{'a','b','c'}, {'d','e','f'}};
         uint8_t snapshot[2][3] = {{'a','b','c'}, {'d','e','f'}};
         uint64_t ids[2][2] = {{0}};
+        tr_raft_transport_reply_origin_t origins[2] = {{0}};
         tr_raft_multicore_completion_t done = {0};
         tr_raft_multicore_group_status_t status = {0};
 
         check_equal(fixture_create(&f), SALTS_OK);
+        for (size_t g = 0U; g < 2U; ++g) {
+            origins[g] = (tr_raft_transport_reply_origin_t){
+                .channel_instance = 1000U + (uint64_t)g,
+                .authenticated_peer_node_id = g == 0U ? 1U : 3U,
+                .group_id = g == 0U ? 101U : 103U,
+                .connection_slot = 1U,
+                .connection_generation = 20U + (uint32_t)g
+            };
+        }
+        {
+            const tr_raft_transport_payload_t invalid =
+                chunk(101U, (const uint8_t *)"abc", 0U, false);
+            tr_raft_transport_reply_origin_t wrong = origins[0];
+            uint64_t rejected_id = 77U;
+            wrong.group_id = 103U;
+            check_equal(tr_raft_multicore_ingress_submit_with_origin(
+                f.ingress, &invalid, &wrong, &rejected_id), SALTS_EPROTO);
+            check_equal(rejected_id, UINT64_C(0));
+            wrong = origins[0];
+            wrong.authenticated_peer_node_id = 3U;
+            check_equal(tr_raft_multicore_ingress_submit_with_origin(
+                f.ingress, &invalid, &wrong, &rejected_id), SALTS_EPROTO);
+            check_equal(rejected_id, UINT64_C(0));
+        }
         for (size_t g = 0U; g < 2U; ++g) {
             const uint64_t group = g == 0U ? 101U : 103U;
             uint8_t (*bytes)[3] = g == 0U ? data : snapshot;
             for (size_t i = 0U; i < 2U; ++i) {
                 tr_raft_transport_payload_t msg =
                     chunk(group, bytes[i], i * 3U, i == 1U);
-                check_equal(tr_raft_multicore_ingress_submit(
-                    f.ingress, &msg, &ids[g][i]), SALTS_OK);
+                check_equal(tr_raft_multicore_ingress_submit_with_origin(
+                    f.ingress, &msg, &origins[g], &ids[g][i]), SALTS_OK);
                 check_true(ids[g][i] != 0U);
                 memset(bytes[i], 0xff, sizeof(bytes[i]));
             }
@@ -363,6 +388,16 @@ spec("ACE 2.3 actual receiver on fixed Multicore Group Owner")
                 check_equal(done.request_id, ids[g][i]);
                 check_equal(done.operation, TR_RAFT_MULTICORE_RECEIVE_CHUNK);
                 check_equal(done.result, SALTS_OK);
+                check_equal(done.reply_origin.channel_instance,
+                            origins[g].channel_instance);
+                check_equal(done.reply_origin.authenticated_peer_node_id,
+                            origins[g].authenticated_peer_node_id);
+                check_equal(done.reply_origin.group_id,
+                            origins[g].group_id);
+                check_equal(done.reply_origin.connection_slot,
+                            origins[g].connection_slot);
+                check_equal(done.reply_origin.connection_generation,
+                            origins[g].connection_generation);
                 check_true(done.value.chunk.ack_valid);
                 check_equal(done.value.chunk.durable_or_installed, i == 1U);
                 if (g == 0U) {
