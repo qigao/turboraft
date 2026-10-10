@@ -736,7 +736,8 @@ static int peer_case_run(int mode)
          * logical write. All ordinary small-message tests keep their limit. */
         client_config.max_send_bytes = TR_RAFT_TRANSPORT_MAX_PACKET_SIZE;
     }
-    if (mode == PEER_DSO_CALLBACK) {
+    if (mode == PEER_DSO_CALLBACK || mode == PEER_DSO_AB_PUBLICATION) {
+        dso.ab_publication = mode == PEER_DSO_AB_PUBLICATION;
         PEER_TRY(peer_dso_setup(&dso));
         f.server_sink.dso = &dso;
     }
@@ -800,7 +801,8 @@ static int peer_case_run(int mode)
     server_channel.identity = &f.server_policy;
     server_channel.handshake = peer_handshake(2U, 0);
     server_channel.first_outbound_message_id = 1U;
-    server_channel.host_module_generation = mode == PEER_DSO_CALLBACK
+    server_channel.host_module_generation =
+        (mode == PEER_DSO_CALLBACK || mode == PEER_DSO_AB_PUBLICATION)
         ? salts_component_plugin_scope_generation_id(&dso.scope)
         : UINT64_C(90010001);
     server_channel.on_payload = peer_record;
@@ -822,7 +824,7 @@ static int peer_case_run(int mode)
         &client_channel, &f.client_channel));
     PEER_TRY(tr_raft_cnet_channel_create(
         &server_channel, &f.server_channel));
-    if (mode == PEER_DSO_CALLBACK)
+    if (mode == PEER_DSO_CALLBACK || mode == PEER_DSO_AB_PUBLICATION)
         dso.verified_channel = f.server_channel;
 
     /* Compose the existing Service/Runtime Transport SPI without creating a
@@ -888,7 +890,8 @@ static int peer_case_run(int mode)
         PEER_TRY(tr_raft_cnet_channel_get_status(f.server_channel, &ss));
 
         if (mode != PEER_VALID && mode != PEER_STREAMS &&
-            mode != PEER_ABORT_SG && mode != PEER_DSO_CALLBACK) {
+            mode != PEER_ABORT_SG && mode != PEER_DSO_CALLBACK &&
+            mode != PEER_DSO_AB_PUBLICATION) {
             if (ss.phase == TR_RAFT_CNET_CHANNEL_FAILED)
                 break;
             continue;
@@ -904,8 +907,10 @@ static int peer_case_run(int mode)
         if (!sent &&
             cs.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
             ss.phase == TR_RAFT_CNET_CHANNEL_ACTIVE) {
-            if (mode == PEER_DSO_CALLBACK) {
-                /* The secondary OS thread only requests Plugin stop. It
+            if (mode == PEER_DSO_CALLBACK ||
+                mode == PEER_DSO_AB_PUBLICATION) {
+                /* The secondary OS thread only owns Component publication.
+                 * It never polls/tears down a CNet Channel. It
                  * MUST NOT call CNet poll/stop or own a network callback. */
                 PEER_TRY(cmeta_thread_create(
                     &dso.controller, peer_dso_controller, &dso));
@@ -1107,7 +1112,7 @@ static int peer_case_run(int mode)
             error_stage = "pending SG send must retain both logical credits";
         }
     } else if (mode == PEER_VALID || mode == PEER_STREAMS ||
-               mode == PEER_DSO_CALLBACK) {
+               mode == PEER_DSO_CALLBACK || mode == PEER_DSO_AB_PUBLICATION) {
         const size_t expected_server = mode == PEER_STREAMS ? 3U : 1U;
         /* Prove actual CNet logical write completions, not merely terminal
          * cancellation balancing the ledger after a successful receive. */
@@ -1154,7 +1159,8 @@ static int peer_case_run(int mode)
             result = SALTS_EPROTO;
             error_stage = "bidirectional verified handshakes and Raft";
         }
-        if (result == SALTS_OK && mode == PEER_DSO_CALLBACK) {
+        if (result == SALTS_OK &&
+            (mode == PEER_DSO_CALLBACK || mode == PEER_DSO_AB_PUBLICATION)) {
             if (dso.network_callbacks != 1U ||
                 dso.captured_origin.host_module_generation !=
                     salts_component_plugin_scope_generation_id(&dso.scope) ||
@@ -1168,6 +1174,21 @@ static int peer_case_run(int mode)
                     &dso.module->callback_completed, memory_order_acquire) != 1U) {
                 result = SALTS_EPROTO;
                 error_stage = "verified CNet callback did not enter DSO once";
+            }
+        }
+        if (result == SALTS_OK && mode == PEER_DSO_AB_PUBLICATION) {
+            /* Provider B is active in its own native image while old
+             * CNet Channel A remains ACTIVE/borrowed until terminal. */
+            if (!atomic_load_explicit(
+                    &dso.b_ready, memory_order_acquire) ||
+                dso.generation.state !=
+                    SALTS_COMPONENT_PLUGIN_GENERATION_DRAINING ||
+                atomic_load_explicit(
+                    &dso.module_b->callback_entered, memory_order_acquire) != 1U ||
+                atomic_load_explicit(
+                    &dso.module_b->callback_completed, memory_order_acquire) != 0U) {
+                result = SALTS_EPROTO;
+                error_stage = "distinct provider B did not publish under live CNet A";
             }
         }
         if (result == SALTS_OK &&
@@ -1184,6 +1205,9 @@ static int peer_case_run(int mode)
     }
 
 cleanup:
+    if (dso.ab_publication)
+        atomic_store_explicit(
+            &dso.release_b, true, memory_order_release);
     if (dso.controller_live) {
         const int joined = cmeta_thread_join(&dso.controller);
         cmeta_thread_destroy(&dso.controller);
@@ -1193,7 +1217,15 @@ cleanup:
              dso.controller_result != SALTS_OK ||
              dso.unload_while_callback != CMETA_PLUGIN_BUSY ||
              dso.close_while_callback != SALTS_COMPONENT_PLUGIN_OK ||
-             dso.retired_by_controller != &dso.generation ||
+             dso.retired_by_controller !=
+                 (dso.ab_publication ? &dso.generation_b : &dso.generation) ||
+             (dso.ab_publication &&
+              (dso.drain_a_while_b_published != SALTS_COMPONENT_PLUGIN_BUSY ||
+               dso.unload_b_before_drain != CMETA_PLUGIN_BUSY ||
+               !atomic_load_explicit(
+                   &dso.b_ready, memory_order_acquire) ||
+               !dso.worker_b_result ||
+               dso.worker_b_live)) ||
              dso.drain_while_callback != SALTS_COMPONENT_PLUGIN_BUSY ||
              !dso.controller_closed_publication ||
              dso.stop_result != CMETA_PLUGIN_OK ||
@@ -1278,7 +1310,8 @@ cleanup:
         if (result == SALTS_OK && close_result != SALTS_OK)
             result = close_result;
     }
-    if (mode == PEER_DSO_CALLBACK && !safe_to_unload) {
+    if ((mode == PEER_DSO_CALLBACK ||
+         mode == PEER_DSO_AB_PUBLICATION) && !safe_to_unload) {
         /* A live on_payload might still execute code in the DSO. Fail
          * closed without unloading or dropping the active Plugin lease. */
         fprintf(stderr, "CNet terminal barrier incomplete: DSO remains leased\n");
@@ -1291,8 +1324,9 @@ cleanup:
         (void)cnet_listener_destroy(&f.listener);
     }
     if (f.tls_open) (void)cnet_tls_server_destroy(&f.tls_server);
-    if (mode == PEER_DSO_CALLBACK) {
-        const int cleanup_status = peer_dso_finish(&dso);
+    if (mode == PEER_DSO_CALLBACK || mode == PEER_DSO_AB_PUBLICATION) {
+        const int cleanup_status = dso.ab_publication
+            ? peer_dso_finish_ab(&dso) : peer_dso_finish(&dso);
         if (result == SALTS_OK && cleanup_status != SALTS_OK) {
             result = cleanup_status;
             error_stage = "post-CNet-terminal Plugin lease/scope drain";
@@ -1330,6 +1364,11 @@ spec("ACE 2.3 CNet owner-bound authenticated Raft channel")
     it("drains a real mTLS on_payload DSO callback before Plugin unload")
     {
         check_equal(peer_case_run(PEER_DSO_CALLBACK), SALTS_OK);
+    }
+
+    it("publishes a different DSO B while certified CNet A callback is in flight")
+    {
+        check_equal(peer_case_run(PEER_DSO_AB_PUBLICATION), SALTS_OK);
     }
 
     it("rejects a different cluster before delivering any Raft payload")
