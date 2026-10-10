@@ -2130,7 +2130,39 @@ static int run_two_distinct_peers(int forge_node_three)
 #else
     if (!forge_node_three && result == SALTS_OK) {
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT
+#ifdef TURBORAFT_TEST_PROCESS_CRASH_WRITER
+        /* This is a real, correctly authenticated Node3 TLS partial ACK,
+         * issued after Group103 consumes the first 12 bytes. Terminate the
+         * WHOLE PROCESS at precisely this acceptance boundary: no graceful
+         * CNet/Group Owner teardown, receiver.destroy or WAL close. */
+        for (round = 0U; round < MAX_PROGRESS &&
+             f.clients_received[1].snapshot_progress_acks == 0U; ++round) {
+            TRY_STAGE(cnet_client_poll(&f.server, 1U, &events));
+            TRY_STAGE(cnet_client_poll(&f.clients, 1U, &events));
+        }
+        if (round == MAX_PROGRESS ||
+            f.clients_received[1].snapshot_progress_acks != 1U ||
+            f.clients_received[1].snapshot_acks != 0U ||
+            f.clients_received[1].wrong_payload != 0U ||
+            f.owner_groups[1].installed_snapshots != 0U ||
+            f.owner_groups[1].chunk_calls != 1U ||
+            f.server_received.received_snapshot != 1U ||
+            !f.delayed_snapshot_ready ||
+            f.delayed_snapshot_completion.value.chunk.durable_or_installed ||
+            f.delayed_snapshot_completion.value.chunk.ack.snapshot.next_offset != 12U) {
+            result = SALTS_EPROTO;
+            failed_stage = "SIGKILL gate: real Node3 non-durable TLS partial ACK";
+            goto cleanup;
+        }
+        if (kill(getpid(), SIGKILL) != 0) {
+            result = SALTS_EIO;
+            failed_stage = "SIGKILL failed to terminate real TLS writer";
+            goto cleanup;
+        }
+        _exit(96);
+#else
         TRY_STAGE(durable_snapshot_reconnect(&f, uri, &events));
+#endif
 #else
         /* The receiver reached disk before CNet admitted this ACK. Poll
          * only the original two CNet Owners, no background retry/queue. */
@@ -2193,6 +2225,29 @@ cleanup:
     return result;
 }
 
+#ifdef TURBORAFT_TEST_PROCESS_ROLE
+/* The controller invokes this binary once per OS process. It is deliberately
+ * a different entry point from TinyTest, with no shared process lifetime. */
+int main(int argc, char **argv)
+{
+    int result;
+    if (argc != 2 || argv[1] == NULL || *argv[1] == '\0') {
+        fprintf(stderr, "usage: %s authoritative-wal-prefix\n", argv[0]);
+        return 2;
+    }
+    process_wal_prefix = argv[1];
+    result = run_two_distinct_peers(0);
+#ifdef TURBORAFT_TEST_PROCESS_CRASH_WRITER
+    /* A clean return is NEVER success for a real SIGKILL writer. */
+    fprintf(stderr, "real TLS partial writer must die by SIGKILL (rc=%d)\n",
+            result);
+    return 3;
+#else
+    return result == SALTS_OK ? 0 : 1;
+#endif
+}
+#else
+
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
 spec("ACE 2.3 authenticated TLS Snapshot write fault is fail-closed")
@@ -2239,3 +2294,5 @@ spec("ACE 2.3 two real distinct TLS-certified Raft Node IDs")
     }
 }
 #endif
+
+#endif /* !TURBORAFT_TEST_PROCESS_ROLE */
