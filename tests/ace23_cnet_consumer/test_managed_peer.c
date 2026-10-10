@@ -572,8 +572,7 @@ static int test_bounded_multi_link(void)
     if (old_origin.channel_instance == 0U ||
         old_origin.authenticated_peer_node_id != 2U ||
         old_origin.group_id != 43U ||
-        old_origin.connection_slot == 0U ||
-        old_origin.connection_generation == 0U) {
+        old_origin.connection_token == 0U) {
         result = SALTS_EPROTO;
         failed = "authenticated old Channel origin is not a unique value";
         goto done;
