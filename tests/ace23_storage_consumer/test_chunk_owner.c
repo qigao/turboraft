@@ -350,8 +350,7 @@ spec("ACE 2.3 actual receiver on fixed Multicore Group Owner")
                 .channel_instance = 1000U + (uint64_t)g,
                 .authenticated_peer_node_id = g == 0U ? 1U : 3U,
                 .group_id = g == 0U ? 101U : 103U,
-                .connection_slot = 1U,
-                .connection_generation = 20U + (uint32_t)g
+                .connection_token = UINT64_C(5001) + (uint64_t)g
             };
         }
         {
@@ -394,10 +393,8 @@ spec("ACE 2.3 actual receiver on fixed Multicore Group Owner")
                             origins[g].authenticated_peer_node_id);
                 check_equal(done.reply_origin.group_id,
                             origins[g].group_id);
-                check_equal(done.reply_origin.connection_slot,
-                            origins[g].connection_slot);
-                check_equal(done.reply_origin.connection_generation,
-                            origins[g].connection_generation);
+                check_equal(done.reply_origin.connection_token,
+                            origins[g].connection_token);
                 check_true(done.value.chunk.ack_valid);
                 check_equal(done.value.chunk.durable_or_installed, i == 1U);
                 if (g == 0U) {
