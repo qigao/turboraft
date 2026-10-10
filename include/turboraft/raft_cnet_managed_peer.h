@@ -70,6 +70,22 @@ int tr_raft_cnet_managed_peer_send(
     tr_raft_cnet_managed_peer_t *peer,
     const tr_raft_transport_payload_t *payload);
 
+/* Caller-driven CNet Owner only. Capture the currently authenticated
+ * Channel for a specific inbound Group, then embed this VALUE in the existing
+ * Multicore request/completion. A reconnect replaces the Channel and
+ * invalidates all prior generations without mutating queued completions.
+ */
+int tr_raft_cnet_managed_peer_capture_reply_origin(
+    tr_raft_cnet_managed_peer_t *peer, tr_raft_group_id_t group_id,
+    tr_raft_transport_reply_origin_t *out_origin);
+
+/* No ACK enqueue on an old/stopped/unready generation. Host must already
+ * have taken the corresponding Group completion and must not replay it.
+ */
+int tr_raft_cnet_managed_peer_send_chunk_completion(
+    tr_raft_cnet_managed_peer_t *peer,
+    const tr_raft_multicore_completion_t *completion);
+
 /*
  * Stable Raft Service transport binding: unlike a single Channel binding,
  * its self remains valid across a managed connection generation change.
