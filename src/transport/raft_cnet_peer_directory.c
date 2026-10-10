@@ -217,6 +217,34 @@ int tr_raft_cnet_peer_directory_send(
     return tr_raft_cnet_managed_peer_send(peer, payload);
 }
 
+int tr_raft_cnet_peer_directory_send_chunk_completion(
+    tr_raft_cnet_peer_directory_t *directory,
+    const tr_raft_multicore_completion_t *completion)
+{
+    tr_raft_cnet_managed_peer_t *peer = NULL;
+    const tr_raft_transport_reply_origin_t *origin;
+    size_t i;
+    int result = tr_directory_owner(directory);
+
+    if (result != SALTS_OK) return result;
+    if (completion == NULL) return SALTS_EINVAL;
+    origin = &completion->reply_origin;
+    if (origin->channel_instance == 0U ||
+        origin->authenticated_peer_node_id == 0U ||
+        origin->group_id == 0U)
+        return SALTS_ENOTSUP;
+    /* Lookup by Node+Group is ONLY the first gate; the ManagedPeer must
+     * still compare the captured Channel generation before any CNet send. */
+    for (i = 0U; i < directory->config.group_count; ++i)
+        if (directory->config.groups[i] == origin->group_id) break;
+    if (i == directory->config.group_count) return SALTS_ENOENT;
+    result = tr_raft_cnet_peer_directory_lookup(
+        directory, origin->authenticated_peer_node_id, &peer);
+    if (result != SALTS_OK) return result;
+    if (peer == NULL) return SALTS_ENOENT;
+    return tr_raft_cnet_managed_peer_send_chunk_completion(peer, completion);
+}
+
 int tr_raft_cnet_peer_directory_receive(
     void *ingress_context, const tr_raft_transport_payload_t *payload)
 {
