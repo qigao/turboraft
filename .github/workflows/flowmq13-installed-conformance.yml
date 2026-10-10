@@ -1,0 +1,157 @@
+name: FlowMQ 1.3 exact installed SDK compatibility
+
+on:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "cmake/**"
+      - "include/**"
+      - "src/**"
+      - "schema/**"
+      - "tools/**"
+      - "tests/flowmq13_installed_consumer/**"
+      - "tests/core/test_raft_flowmq_peer_service.c"
+      - "tests/package_flowmq_consumer/**"
+      - ".github/workflows/flowmq13-installed-conformance.yml"
+      - ".github/workflows/native-sdk-pipeline.yml"
+      - "packaging/nuget/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: turboraft-flowmq13-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux x64 exact FlowMQ.Native 1.3.0 / C11+C++17
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - name: Checkout exact TurboRaft PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Configure read-only vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore pinned parser-generator tooling
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install native compiler and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential ninja-build pkg-config nasm ccache
+          command -v re2c
+          command -v ccache
+
+      - name: Restore independent exact published 1.3 SDK closure
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dotnet restore tests/flowmq13_installed_consumer/dependencies.csproj \
+            --configfile cmake/native-sdk.nuget.config \
+            --packages "$RUNNER_TEMP/turboraft-flowmq13-packages" \
+            --no-cache --force-evaluate
+          python3 tools/ci/export_native_sdks.py \
+            --assets tests/flowmq13_installed_consumer/obj/project.assets.json \
+            --rid linux-x64 --packages salts salts-utils flowmq --runtime-paths
+
+      - name: Verify exact FlowMQ 1.3 SDK provenance before building
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SALTS_SDK_VERSION" = '2.3.0-rc.4'
+          test "$SALTS_UTILS_SDK_VERSION" = '4.3.0-rc.2'
+          test "$FLOWMQ_SDK_VERSION" = '1.3.0'
+          grep -Fx 'version=2.3.0-rc.4' "$SALTS_ROOT/salts-sdk-manifest.txt"
+          grep -Fx 'version=4.3.0-rc.2' "$SALTS_UTILS_ROOT/salts-utils-sdk-manifest.txt"
+          grep -Fx 'version=1.3.0' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          grep -Fx 'commit=d532a27b30b7078b3a7575f8e5a2d370573fd145' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          grep -Fx 'salts=2.3.0-rc.4' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          grep -Fx 'salts_utils=4.3.0-rc.2' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          grep -Fx 'rid=linux-x64' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          grep -Fx 'qualification=runtime' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          test -f "$FLOWMQ_ROOT/lib/cmake/FlowMQ/FlowMQConfig.cmake"
+          test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
+          if find "$SALTS_ROOT/lib" -maxdepth 1 -name '*.so.2.2*' | grep -q .; then
+            echo 'Old Salts 2.2 shared runtime is forbidden' >&2
+            exit 1
+          fi
+          # This separate lane is NOT the immutable Salts 2.3.0-ace.sha
+          # candidate gate used for Native SDK release and Durable.
+
+      - name: Restore only cached native link dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root=. \
+            --x-install-root="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            --triplet x64-linux --only-binarycaching
+
+      - name: Configure complete TurboRaft FlowMQ 1.3.0 profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B .ci/build-flowmq13-full -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTURBORAFT_BUILD_PROFILE=full \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/flowmq13-full"
+          cmake --build .ci/build-flowmq13-full --parallel 2
+          cmake --install .ci/build-flowmq13-full
+
+      - name: Exercise installed FlowMQ 1.3.0 and original formal runtime tests
+        shell: bash
+        env:
+          TURBORAFT_ROOT: ${{ github.workspace }}/stage/flowmq13-full
+        run: |
+          set -euo pipefail
+          cmake -S tests/flowmq13_installed_consumer \
+            -B .ci/build-flowmq13-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build-flowmq13-consumer --parallel 2
+          ctest --test-dir .ci/build-flowmq13-consumer --output-on-failure \
+            --output-junit flowmq13-results.xml --no-tests=error
+
+      - name: Report ccache statistics
+        if: always()
+        shell: bash
+        run: ccache --show-stats
+
+      - name: Upload FlowMQ 1.3.0 conformance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turboraft-flowmq13-conformance-linux-x64
+          path: |
+            .ci/build-flowmq13-consumer/Testing/Temporary
+            .ci/build-flowmq13-consumer/flowmq13-results.xml
+            .ci/build-flowmq13-full/CMakeCache.txt
+          if-no-files-found: warn
