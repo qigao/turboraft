@@ -245,3 +245,19 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                        PROPERTIES TIMEOUT 65
                                   LABELS "cnet-snapshot-lifecycle;cnet-process-crash;wal-recovery")
 endif()
+
+# Independent installed-SDK 64 MiB end-to-end SnapshotSender -> Raft wire
+# codec -> SnapshotReceiver/stream sink. No 64 MiB heap allocation or socket
+# simulation: sender uses a deterministic read_at source, fixed 64-KiB chunks,
+# four explicitly reserved in-flight slots, and cumulative ACK wire frames.
+# Linux also gates ru_maxrss <= 48 MiB (not a malloc tracing substitute).
+add_executable(turboraft_flowmq13_large_snapshot_stream
+               test_large_snapshot_bounded.c)
+target_link_libraries(turboraft_flowmq13_large_snapshot_stream PRIVATE
+    TurboRaft::SnapshotSender TurboRaft::SnapshotReceiver
+    TurboRaft::Core Salts::Core)
+add_test(NAME turboraft.flowmq13.large_snapshot_stream
+         COMMAND turboraft_flowmq13_large_snapshot_stream)
+set_tests_properties(turboraft.flowmq13.large_snapshot_stream
+                     PROPERTIES TIMEOUT 90
+                                LABELS "snapshot-stream-bounded")
