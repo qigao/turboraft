@@ -114,6 +114,10 @@ typedef struct tr_raft_multicore_request {
     tr_raft_multicore_operation_t operation;
     /* Caller-defined correlation ID; uniqueness is the caller's responsibility. */
     uint64_t request_id;
+    /* Captured by the CNet Owner after certified TLS and Directory auth.
+     * Zero for ordinary/local work. This is copied through the SAME ring
+     * unchanged and never references Channel or CNet runtime memory. */
+    tr_raft_transport_reply_origin_t reply_origin;
     union {
         struct {
             uint64_t command_id;
@@ -139,6 +143,9 @@ typedef struct tr_raft_multicore_completion {
     uint64_t request_id;
     tr_raft_multicore_operation_t operation;
     int result;
+    /* Owner completion carries the admission-time epoch even after the
+     * originating Channel is closed/destroyed; host must revalidate it. */
+    tr_raft_transport_reply_origin_t reply_origin;
     union {
         tr_raft_service_status_t status;
         tr_raft_operation_status_t receipt;
