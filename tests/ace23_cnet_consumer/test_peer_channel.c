@@ -366,7 +366,6 @@ static int peer_dso_setup(peer_dso_harness *dso)
 static int peer_dso_finish_ab(peer_dso_harness *dso)
 {
     cmeta_plugin_lifecycle_info info = {0};
-    salts_component_plugin_generation *retired = NULL;
     bool quiet = false;
     int result = SALTS_OK;
 
@@ -377,7 +376,9 @@ static int peer_dso_finish_ab(peer_dso_harness *dso)
         dso->retired_by_controller != &dso->generation_b ||
         !dso->scope_live || !dso->scope_b_live ||
         !dso->loaded || !dso->loaded_b ||
-        dso->worker_b_live || !dso->worker_b_result ||
+        dso->network_callbacks_b != 1U ||
+        dso->captured_origin_b.host_module_generation != UINT64_C(90010002) ||
+        dso->captured_origin_b.channel_instance == 0U ||
         atomic_load_explicit(
             &dso->module_b->callback_completed, memory_order_acquire) != 1U)
         return SALTS_EBUSY; /* fail closed; never force a live DSO unload */
@@ -523,6 +524,7 @@ typedef struct peer_sink {
     size_t data_count;
     size_t snapshot_count;
     int violation;
+    int provider_b; /* this certified Channel belongs to provider B */
     peer_dso_harness *dso; /* CNet Owner borrows DSO under ComponentPlugin lease */
 } peer_sink_t;
 
@@ -533,10 +535,16 @@ typedef struct peer_fixture {
     cnet_tls_server tls_server;
     tr_raft_cnet_channel_t *client_channel;
     tr_raft_cnet_channel_t *server_channel;
+    tr_raft_cnet_channel_t *client_channel_b;
+    tr_raft_cnet_channel_t *server_channel_b;
     cnet_connection outbound;
     cnet_connection inbound;
+    cnet_connection outbound_b;
+    cnet_connection inbound_b;
     peer_sink_t client_sink;
     peer_sink_t server_sink;
+    peer_sink_t client_sink_b;
+    peer_sink_t server_sink_b;
     tr_raft_cnet_peer_identity_t client_peer;
     tr_raft_cnet_peer_identity_t server_peer;
     tr_raft_cnet_identity_policy_t client_policy;
