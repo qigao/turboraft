@@ -13,6 +13,9 @@
 #ifndef TURBORAFT_ACE23_EPOCH_DSO_PATH
 #error "DSO fixture must be selected by the installed CMake consumer"
 #endif
+#ifndef TURBORAFT_ACE23_EPOCH_DSO_B_PATH
+#error "A second independent DSO image path is required"
+#endif
 
 enum { CALLBACK_DEADLINE_MS = 5000U, DSO_CALLBACK_THREADS = 4U };
 
@@ -386,6 +389,191 @@ spec("ACE 2.3 real Plugin DSO callback quiescence and stable host epoch")
         check_true(quiescent);
         check_equal(cmeta_plugin_registry_unload(
             &registry, plugin), CMETA_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_destroy(
+            &host), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_destroy(
+            &registry), CMETA_PLUGIN_OK);
+    }
+
+    it("publishes distinct provider DSOs A and B while old callbacks and leases remain live")
+    {
+        const cmeta_plugin_registry_config cfg = {.capacity = 2U};
+        cmeta_plugin_registry registry = {0};
+        cmeta_plugin_ref modules_ref[2] = {{0}};
+        salts_component_plugin_runtime host = SALTS_COMPONENT_PLUGIN_RUNTIME_INIT;
+        salts_component_plugin_generation generations[2] = {
+            SALTS_COMPONENT_PLUGIN_GENERATION_INIT,
+            SALTS_COMPONENT_PLUGIN_GENERATION_INIT
+        };
+        salts_component_plugin_scope scopes[2] = {
+            SALTS_COMPONENT_PLUGIN_SCOPE_INIT,
+            SALTS_COMPONENT_PLUGIN_SCOPE_INIT
+        };
+        salts_component_deployment deployments[2][1] = {{{0}}};
+        salts_component_instance instances[2][1] = {{{0}}};
+        salts_component_dependency dependencies[2][1] = {{{0}}};
+        size_t activation_order[2][1] = {{0}};
+        salts_component_plugin_module owned_modules[2][1] = {{{0}}};
+        salts_component_plugin_generation_storage storage[2] = {{0}};
+        salts_component_service service[2] = {{0}};
+        tr_ace23_dso_callback callback[2] = {
+            tr_ace23_dso_callback_bind(NULL, NULL),
+            tr_ace23_dso_callback_bind(NULL, NULL)
+        };
+        dso_callback_thread work[2] = {{0}};
+        cmeta_thread_t threads[2] = {{0}};
+        const tr_ace23_dso_callback_state *observed[2] = {NULL, NULL};
+        cmeta_plugin_lifecycle_info lifecycle = {0};
+        salts_component_plugin_generation *previous = NULL;
+        bool quiescent = false;
+        unsigned i;
+
+        check_equal(cmeta_plugin_registry_init(&registry, &cfg),
+                    CMETA_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_init(&host),
+                    SALTS_COMPONENT_PLUGIN_OK);
+
+        for (i = 0U; i < 2U; ++i) {
+            cmeta_plugin_lease query = {0};
+            const cmeta_plugin_manifest *manifest = NULL;
+            const salts_component_plugin_source source = {
+                .export_id = "turboraft.ace23.dso-component"
+            };
+            salts_component_plugin_source dynamic_source = source;
+            const char *path = i == 0U
+                ? TURBORAFT_ACE23_EPOCH_DSO_PATH
+                : TURBORAFT_ACE23_EPOCH_DSO_B_PATH;
+
+            storage[i] = (salts_component_plugin_generation_storage){
+                .deployments = deployments[i], .deployment_capacity = 1U,
+                .instances = instances[i], .instance_capacity = 1U,
+                .dependencies = dependencies[i], .dependency_capacity = 1U,
+                .activation_order = activation_order[i], .activation_capacity = 1U,
+                .modules = owned_modules[i], .module_capacity = 1U
+            };
+            check_equal(cmeta_plugin_registry_load(
+                &registry, path, &modules_ref[i]), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_start(
+                &registry, modules_ref[i]), CMETA_PLUGIN_OK);
+            dynamic_source.plugin = modules_ref[i];
+            check_equal(salts_component_plugin_generation_build(
+                &generations[i], UINT64_C(90012001) + (uint64_t)i,
+                &registry, &storage[i], NULL, 0U, &dynamic_source, 1U,
+                NULL, 0U), SALTS_COMPONENT_PLUGIN_OK);
+            check_equal(salts_component_plugin_runtime_publish(
+                &host, &generations[i], &previous), SALTS_COMPONENT_PLUGIN_OK);
+            if (i == 0U) check_null(previous);
+            else {
+                check_true(previous == &generations[0]);
+                check_equal(generations[0].state,
+                            SALTS_COMPONENT_PLUGIN_GENERATION_DRAINING);
+            }
+            check_equal(salts_component_plugin_scope_acquire(
+                &host, &scopes[i]), SALTS_COMPONENT_PLUGIN_OK);
+            check_equal(salts_component_plugin_scope_generation_id(
+                &scopes[i]), UINT64_C(90012001) + (uint64_t)i);
+            check_equal(salts_component_plugin_scope_find_service(
+                &scopes[i], tr_ace23_dso_callback_interface(),
+                &service[i]), SALTS_COMPONENT_PLUGIN_OK);
+            check_equal(tr_ace23_dso_callback_borrow_from_object(
+                service[i].object, service[i].interfaces, &callback[i]), CMETA_OK);
+            check_true(tr_ace23_dso_callback_valid(&callback[i]));
+
+            /* Observe version and independently allocated module atomics
+             * using a temporary Plugin lease, released before callbacks.
+             * Both live Plugin leases now belong to ComponentPlugin. */
+            check_equal(cmeta_plugin_registry_acquire(
+                &registry, modules_ref[i], &query, &manifest), CMETA_PLUGIN_OK);
+            check_not_null(manifest);
+            check_equal(manifest->version.minor, i + 1U);
+            check_equal(manifest->version.patch, 1U);
+            observed[i] = (const tr_ace23_dso_callback_state *)manifest->self;
+            check_not_null(observed[i]);
+            check_equal(cmeta_plugin_registry_release(
+                &registry, &query), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_get_lifecycle(
+                &registry, modules_ref[i], &lifecycle), CMETA_PLUGIN_OK);
+            check_equal(lifecycle.active_leases, (size_t)1U);
+            check_true(cmeta_plugin_lease_valid(owned_modules[i][0].lease));
+
+            /* Old N callback deliberately stays inside provider A while
+             * N+1/B publishes. New B can also execute concurrently. */
+            work[i].callback = callback[i];
+            check_equal(cmeta_thread_create(
+                &threads[i], run_dso_callback, &work[i]), SALTS_OK);
+            check_equal(await_callback_entry(observed[i], 1U), 0);
+            check_equal(atomic_load_explicit(
+                &observed[i]->callback_completed, memory_order_acquire), 0U);
+        }
+
+        check_true(modules_ref[0].slot != modules_ref[1].slot);
+        check_true(observed[0] != observed[1]);
+        check_equal(salts_component_plugin_generation_drain(
+            &host, &generations[0]), SALTS_COMPONENT_PLUGIN_BUSY);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, modules_ref[0]), CMETA_PLUGIN_BUSY);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, modules_ref[1]), CMETA_PLUGIN_BUSY);
+
+        /* Shutdown first revokes new admissions. Both published scopes
+         * retain independent execution and Plugin unload authority. */
+        check_equal(salts_component_plugin_runtime_close(
+            &host, &previous), SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &generations[1]);
+        check_equal(salts_component_plugin_generation_drain(
+            &host, &generations[1]), SALTS_COMPONENT_PLUGIN_BUSY);
+        check_equal(cmeta_plugin_registry_request_stop(
+            &registry, modules_ref[0]), CMETA_PLUGIN_OK);
+        check_equal(cmeta_thread_join(&threads[0]), SALTS_OK);
+        cmeta_thread_destroy(&threads[0]);
+        check_true(work[0].result);
+        check_equal(atomic_load_explicit(
+            &observed[0]->callback_completed, memory_order_acquire), 1U);
+        check_equal(salts_component_plugin_scope_release(
+            &scopes[0]), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &host, &generations[0]), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_get_lifecycle(
+            &registry, modules_ref[0], &lifecycle), CMETA_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)0U);
+        check_equal(cmeta_plugin_registry_poll_quiescent(
+            &registry, modules_ref[0], &quiescent), CMETA_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, modules_ref[0]), CMETA_PLUGIN_OK);
+
+        /* The B callback, Component scope, and lease are still live AFTER
+         * A was actually dlclosed. No stale A dispatch may affect B. */
+        check_equal(atomic_load_explicit(
+            &observed[1]->callback_completed, memory_order_acquire), 0U);
+        check_equal(salts_component_plugin_scope_generation_id(
+            &scopes[1]), UINT64_C(90012002));
+        check_true(tr_ace23_dso_callback_valid(&callback[1]));
+        check_equal(cmeta_plugin_registry_get_lifecycle(
+            &registry, modules_ref[1], &lifecycle), CMETA_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)1U);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, modules_ref[1]), CMETA_PLUGIN_BUSY);
+
+        check_equal(cmeta_plugin_registry_request_stop(
+            &registry, modules_ref[1]), CMETA_PLUGIN_OK);
+        check_equal(cmeta_thread_join(&threads[1]), SALTS_OK);
+        cmeta_thread_destroy(&threads[1]);
+        check_true(work[1].result);
+        check_equal(atomic_load_explicit(
+            &observed[1]->callback_completed, memory_order_acquire), 1U);
+        check_equal(salts_component_plugin_scope_release(
+            &scopes[1]), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &host, &generations[1]), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_get_lifecycle(
+            &registry, modules_ref[1], &lifecycle), CMETA_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)0U);
+        check_equal(cmeta_plugin_registry_poll_quiescent(
+            &registry, modules_ref[1], &quiescent), CMETA_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, modules_ref[1]), CMETA_PLUGIN_OK);
         check_equal(salts_component_plugin_runtime_destroy(
             &host), SALTS_COMPONENT_PLUGIN_OK);
         check_equal(cmeta_plugin_registry_destroy(
