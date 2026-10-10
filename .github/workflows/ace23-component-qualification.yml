@@ -16,6 +16,10 @@ on:
       - "tests/core/test_raft_cnet_peer.c"
       - "tests/ace23_cnet_consumer/**"
       - "tests/ace23_storage_consumer/**"
+      - "tests/ace23_wal_crash_qualification/**"
+      - "include/turboraft/raft_wal_storage.h"
+      - "src/storage/raft_wal_storage.c"
+      - "src/storage/raft_wal_storage_internal.h"
       - "include/turboraft/raft_multicore_chunk_receivers.h"
       - "src/runtime/raft_multicore_chunk_receivers.c"
       - "src/snapshot/raft_snapshot_receiver.c"
@@ -221,6 +225,24 @@ jobs:
             --output-on-failure --output-junit storage-results.xml \
             --no-tests=error
 
+      - name: Qualify real process SIGKILL at Snapshot WAL and manifest publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This separately named private-hook test links the installed
+          # WalStorage binary, but is NOT a public-SDK ABI assertion.
+          cmake -S tests/ace23_wal_crash_qualification \
+            -B .ci/build-ace23-wal-crash -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build-ace23-wal-crash --parallel 2
+          ctest --test-dir .ci/build-ace23-wal-crash \
+            --output-on-failure --output-junit wal-crash-results.xml \
+            --no-tests=error
+
       # The durable ACK adapter and real Snapshot/Data receivers are
       # instrumented here. Exact published Salts SDK libraries remain
       # immutable prerelease binaries (not whole-stack ASan/UBSan).
@@ -358,6 +380,8 @@ jobs:
             .ci/build-ace23-cnet-consumer/Testing/Temporary
             .ci/build-ace23-cnet-consumer/cnet-results.xml
             .ci/build-ace23-storage-consumer/Testing/Temporary
+            .ci/build-ace23-wal-crash/Testing/Temporary
+            .ci/build-ace23-wal-crash/wal-crash-results.xml
             .ci/build-ace23-storage-consumer/storage-results.xml
             .ci/build-ace23-storage-asan-consumer/Testing/Temporary
             .ci/build-ace23-storage-asan-consumer/storage-asan-results.xml
