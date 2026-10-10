@@ -1,6 +1,7 @@
 #include <turboraft/raft_cnet_managed_peer.h>
 
 #include <cmeta_error.h>
+#include <salts/thread.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,7 @@
  * this outer object only installs a fresh authenticated Raft Channel for each
  * new generation. Never copy a live CNetManager/ManagedDial wrapper. */
 struct tr_raft_cnet_managed_peer {
+    const void *owner_thread; /* immutable borrowed CNet Owner identity */
     cnet_manager *manager;
     cnet_client *client;
     cnet_managed_dial dial;
@@ -189,6 +191,7 @@ int tr_raft_cnet_managed_peer_create(
     if (peer == NULL) return SALTS_ENOMEM;
 
     peer->manager = config->manager;
+    peer->owner_thread = cmeta_thread_current_token();
     peer->client = config->channel.client;
     peer->peer_node_id = config->expected_peer_node_id;
     peer->peer_identity = *target;
@@ -320,6 +323,8 @@ int tr_raft_cnet_managed_peer_capture_reply_origin(
     if (out_origin == NULL) return SALTS_EINVAL;
     *out_origin = (tr_raft_transport_reply_origin_t){0};
     if (peer == NULL || group_id == 0U) return SALTS_EINVAL;
+    if (peer->owner_thread != cmeta_thread_current_token())
+        return SALTS_EPERM;
     if (peer->stopped || !peer->current_protocol_ready ||
         peer->channel == NULL)
         return SALTS_EBUSY;
@@ -332,6 +337,8 @@ int tr_raft_cnet_managed_peer_send_chunk_completion(
     const tr_raft_multicore_completion_t *completion)
 {
     if (peer == NULL || completion == NULL) return SALTS_EINVAL;
+    if (peer->owner_thread != cmeta_thread_current_token())
+        return SALTS_EPERM;
     if (peer->stopped || !peer->current_protocol_ready ||
         peer->channel == NULL)
         return SALTS_ECANCELED;
