@@ -2,6 +2,7 @@
 #define TURBORAFT_RAFT_CNET_PEER_H
 
 #include <turboraft/raft_transport.h>
+#include <turboraft/raft_runtime.h>
 
 #include <cnet/cnet.h>
 
@@ -51,6 +52,21 @@ int tr_raft_cnet_peer_enqueue_group(
     tr_raft_cnet_peer_t *peer,
     tr_raft_group_id_t group_id,
     const tr_raft_message_t *message);
+
+/*
+ * Static ACE Adapter from one CNet peer/group to a Raft Transport.
+ * Caller owns this address-stable binding and borrowed peer until the
+ * consuming Raft Runtime/Service has stopped. All enqueue calls belong to
+ * the CNet peer's owner thread. No worker, queue or socket is created here.
+ */
+typedef struct tr_raft_cnet_group_binding {
+    tr_raft_cnet_peer_t *peer;
+    tr_raft_group_id_t group_id;
+} tr_raft_cnet_group_binding_t;
+
+/* Binds once: a pre-existing enqueue returns SALTS_EALREADY without mutation.\n * Sets enqueue/context only; preserves the caller's snapshot adapter. */
+int tr_raft_cnet_group_transport_bind(
+    tr_raft_cnet_group_binding_t *binding, tr_raft_transport_t *transport);
 
 /**
  * Admits at most one retained CNet scatter/gather write. The current wire

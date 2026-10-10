@@ -147,6 +147,12 @@ target_link_libraries(turboraft_runtime_tests PRIVATE TurboRaft::Core
                                                       Salts::TinyTest)
 add_test(NAME turboraft.runtime COMMAND turboraft_runtime_tests)
 
+add_executable(turboraft_component_tests test_raft_component.c)
+target_link_libraries(turboraft_component_tests
+                      PRIVATE TurboRaft::Component Salts::TinyTest)
+add_test(NAME turboraft.component COMMAND turboraft_component_tests)
+
+
 add_executable(turboraft_apply_runtime_tests
                test_raft_apply_runtime.c)
 target_link_libraries(turboraft_apply_runtime_tests

@@ -60,6 +60,10 @@ jobs:
         with:
           rid: linux-x64
           token: ${{ secrets.GITHUB_TOKEN }}
+          salts_native_candidate_version: ${{ vars.TURBORAFT_SALTS_ACE_CANDIDATE_VERSION }}
+          salts_utils_native_version: ${{ vars.TURBORAFT_SALTS_UTILS_NATIVE_VERSION }}
+          flowmq_native_version: ${{ vars.TURBORAFT_FLOWMQ_NATIVE_VERSION }}
+          chttp_native_version: ${{ vars.TURBORAFT_CHTTP_NATIVE_VERSION }}
 
       - name: Checkout FlowMQ main
         uses: actions/checkout@v4

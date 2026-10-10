@@ -72,6 +72,85 @@ checkpoint. If an unmatched suffix remains,
 the older segments stay authoritative until a later complete checkpoint can
 reclaim them.
 
+## Incomplete Snapshot reception and process death
+
+`SnapshotReceiver` is one-owner, bounded **transfer state**, not a second WAL.
+A successful non-final `SNAPSHOT_ACK` is a validated `next_offset`
+**progress indication only**; it is not durable or installed. The final
+full-size ACK is legal only after the receiver verifies the complete SHA-256
+and the configured install/stream-commit sink successfully publishes the
+snapshot through the authoritative `TurboRaft::WalStorage` transaction.
+An accepted duplicate of an *already installed* final chunk retains
+`installed=true` but never invokes installation again. The CNet send
+boundary rejects an accepted final ACK without this installed Owner receipt.
+
+After a process crashes during a **partial** receive, neither the in-memory
+receiver cursor nor any unfinished stream sink is authoritative. A streamed
+sink may leave raw snapshot **bytes** in its own temporary file after a real
+SIGKILL, but that is not serialized receiver runtime state and cannot be
+accepted as a manifest, a recovered offset, or a durable Snapshot. On a new
+owner startup, first reopen the WAL and recover its last authoritative
+committed prefix. A fresh `SnapshotReceiver` must reject a tail-only
+`snapshot_offset > 0` request, even if a similarly named orphan exists.
+The host must explicitly discard/quarantine the orphan according to its
+storage-provider contract and choose a new transmission from offset 0;
+neither the transport nor the receiver automatically retries or salvages a
+partially verified transfer. Errors with **unknown WAL durability** instead
+require the established fail-closed owner fault/recovery procedure, never a
+speculative repeat of a possibly published commit.
+
+Linux installed-SDK CTests
+`turboraft.ace23.partial_snapshot_crash_buffered` and
+`turboraft.ace23.partial_snapshot_crash_streamed` run an independent
+`fork+exec` writer, terminate it with a real `SIGKILL` after exactly
+12/24 bytes, then reopen WAL in the parent. The streaming fixture deliberately
+`fsync`s a private orphan file to prove that its mere existence gives it no
+authority. Both tests assert old commit/manifest recovery, reject tail-only
+resume, explicitly replay the complete digest-valid transfer from offset 0,
+publish only one Snapshot, and commit/reopen the next Raft suffix. The
+streamed test calls the production `WalStorage.install_snapshot_source` path;
+neither test persists the receiver's raw ownership state or adds a public
+fault/retry API. These are **process-death** tests, not proof of hardware
+power-loss durability or end-to-end multi-node reconnect/consensus.
+
+### Certified CNet peer restart across a whole-process crash
+
+The new Linux-only `turboraft.flowmq13.cnet_process_restart` installed-SDK
+test uses an independent **controller** process and two `fork+exec` workers,
+not the same long-lived CNet owner after a socket reset. The first worker
+constructs actual Node3/Node2 mutual TLS and reciprocal Raft HELLO, dispatches
+the first 12 bytes of Snapshot19 through the certified Peer Directory and
+the real bounded Group103 Owner, and returns precisely one accepted but
+non-durable `SNAPSHOT_ACK.next_offset=12`. It then dies from actual
+`SIGKILL` with no orderly receiver, listener or WAL cleanup. The controller
+rejects any exit except `SIGKILL` for this phase.
+
+Before either worker starts, the controller writes and fsyncs a **real**
+term1/vote1/index1 Raft entry through installed `TurboRaft::WalStorage`, then
+closes the original writer. Both the soon-to-die TLS process and the
+**new OS process** are passed only the same WAL path. Their Group103 owners
+must reopen it with `create_if_missing=false`, verify the original
+term/vote/index1 committed prefix has survived intact and verify that no
+partially received Snapshot or speculative offset has become authoritative.
+Neither process may silently create an empty replacement WAL. The new
+process builds fresh CNet/TLS/HELLO/Group owner identities, explicitly
+sends the complete matching Snapshot again from offset 0, and requires one
+installed, WAL-durable final ACK. Reopening that WAL after the network lifecycle ends
+must recover the full Snapshot19 and a subsequently committed index20 log
+suffix. There is **no persisted receiver cursor, native CNet connection
+token, host-module generation, group mailbox, or automatic application
+retry**. This tests the safe **retransmit-from-zero** policy, not durable
+resume from an incomplete stream or remote exactly-once delivery.
+
+The dedicated `tests/flowmq13_installed_consumer/test_cnet_process_restart.c`
+controller cannot access the workers' CNet or WAL instances. It waits for
+the actual SIGKILL, requires success from the independently exec'ed recovery
+worker, and requires the isolated temporary namespace to be fully reclaimed
+before passing. All native transport/storage code under test is linked from
+the independently **installed** exact released SDK. The process-loss test
+does not simulate abrupt machine power loss, multi-node consensus, large
+streaming snapshots, or upstream fully source-instrumented TSan.
+
 ## Deterministic durability fault boundary
 
 Durability fault injection is test-only and remains outside the installed

@@ -13,6 +13,14 @@ static int ignore_payload(void *context,
     return SALTS_OK;
 }
 
+static int keep_snapshot_adapter(void *context,
+                                 const tr_raft_snapshot_request_t *request)
+{
+    (void)context;
+    (void)request;
+    return SALTS_OK;
+}
+
 static tr_raft_cnet_peer_t *make_peer(
     cnet_client *client,
     size_t total_capacity,
@@ -82,6 +90,45 @@ spec("Raft CNet peer adapter")
             check_equal(status.write_pending, 0);
         }
         observer.on_state(observer.user, connection, CNET_CONNECTION_CLOSED, NULL);
+        check_equal(tr_raft_cnet_peer_destroy(peer), SALTS_OK);
+    }
+
+    it("adapts a bounded CNet group without a second transport queue")
+    {
+        cnet_client client = {0};
+        tr_raft_cnet_peer_t *peer = make_peer(&client, 2U, 1U, 1U);
+        tr_raft_cnet_group_binding_t binding = {peer, 42U};
+        tr_raft_cnet_group_binding_t invalid = {peer, 0U};
+        tr_raft_transport_t adapter = {0};
+        tr_raft_message_t msg = {0};
+        tr_raft_transport_group_queue_status_t status;
+
+        msg.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+        msg.from = 1U;
+        msg.to = 2U;
+        msg.term = 1U;
+        check_equal(tr_raft_cnet_group_transport_bind(NULL, &adapter),
+                    SALTS_EINVAL);
+        check_equal(tr_raft_cnet_group_transport_bind(&invalid, &adapter),
+                    SALTS_EINVAL);
+        check_equal(tr_raft_cnet_group_transport_bind(&binding, NULL),
+                    SALTS_EINVAL);
+        adapter.snapshot_context = &client;
+        adapter.enqueue_snapshot = keep_snapshot_adapter;
+        check_equal(tr_raft_cnet_group_transport_bind(&binding, &adapter),
+                    SALTS_OK);
+        check_equal(tr_raft_cnet_group_transport_bind(&binding, &adapter),
+                    SALTS_EALREADY);
+        check(adapter.snapshot_context == &client);
+        check(adapter.enqueue_snapshot == keep_snapshot_adapter);
+        check(adapter.context == &binding);
+        check_not_null(adapter.enqueue);
+        check_equal(adapter.enqueue(adapter.context, &msg), SALTS_OK);
+        check_equal(adapter.enqueue(adapter.context, &msg), SALTS_ENOSPC);
+        check_equal(tr_raft_cnet_peer_get_group_status(peer, 42U, &status),
+                    SALTS_OK);
+        check_equal(status.queued_payload_count, (size_t)1U);
+        check_equal(tr_raft_cnet_peer_stop(peer), SALTS_OK);
         check_equal(tr_raft_cnet_peer_destroy(peer), SALTS_OK);
     }
 

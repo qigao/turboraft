@@ -276,6 +276,11 @@ int tr_raft_snapshot_receiver_handle(
     if (receiver->completed) {
         out_result->ack.next_offset = receiver->next_offset;
         out_result->ack.accepted = true;
+        /* A duplicate does NOT repeat storage.commit(), but its positive
+         * full-size ACK still refers to an already installed snapshot.
+         * Preserve durable truth across retransmission without retrying
+         * the application-level install side effect. */
+        out_result->installed = true;
         return SALTS_OK;
     }
     if (chunk->snapshot_offset < receiver->next_offset) {

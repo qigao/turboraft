@@ -589,6 +589,85 @@ spec("raft deterministic cluster simulation")
         free(cluster);
     }
 
+    it("isolates stale leader, commits on a majority, and converges after former-leader crash")
+    {
+        sim_cluster_t *cluster = sim_cluster_allocate();
+        tr_raft_status_t old_leader = {0}, majority_leader = {0};
+        tr_raft_status_t follower = {0};
+        size_t step;
+        tr_raft_index_t index;
+
+        check_equal(sim_cluster_create(cluster), SALTS_OK);
+        check_equal(sim_tick(cluster, 1U, 4U), SALTS_OK);
+        check_equal(sim_status(cluster, 1U, &old_leader), SALTS_OK);
+        check_equal(old_leader.role, TR_RAFT_LEADER);
+
+        check_equal(sim_propose(cluster, 1U, 91U, "before-majority-split"),
+                    SALTS_OK);
+        check_equal(sim_tick(cluster, 1U, 1U), SALTS_OK);
+        for (step = 1U; step <= SIM_NODE_COUNT; ++step)
+            check_equal(cluster->nodes[step - 1U].durable.commit_index, 1U);
+
+        /* Node1's old leadership cannot commit further records without its
+         * majority; 2+3 must elect a NEW leader and commit an exact ordered
+         * suffix despite the previously authoritative Node1 being isolated. */
+        sim_partition(cluster, 1U, 2U, false);
+        sim_partition(cluster, 1U, 3U, false);
+        check_equal(sim_tick(cluster, 1U, 4U), SALTS_OK);
+        check_equal(sim_tick(cluster, 1U, 4U), SALTS_OK);
+        check_equal(sim_status(cluster, 1U, &old_leader), SALTS_OK);
+        check_equal(old_leader.role, TR_RAFT_FOLLOWER);
+        check_equal(sim_tick(cluster, 2U, 4U), SALTS_OK);
+        check_equal(sim_status(cluster, 2U, &majority_leader), SALTS_OK);
+        check_equal(majority_leader.role, TR_RAFT_LEADER);
+        check(majority_leader.term > old_leader.term);
+
+        for (step = 2U; step <= 6U; ++step) {
+            check_equal(sim_propose(cluster, 2U, 90U + step,
+                                    "majority-only-log"), SALTS_OK);
+            check_equal(sim_tick(cluster, 2U, 1U), SALTS_OK);
+        }
+        check_equal(sim_status(cluster, 2U, &majority_leader), SALTS_OK);
+        check_equal(sim_status(cluster, 3U, &follower), SALTS_OK);
+        check_equal(majority_leader.commit_index, 6U);
+        check_equal(follower.commit_index, 6U);
+        check_equal(cluster->nodes[0].durable.commit_index, 1U);
+
+        /* Actually destroy/recreate the former leader's Raft Core from
+         * durable Ready data while isolated; not a synthetic ACK. More
+         * majority commits occur while it is offline. */
+        check_equal(sim_crash(cluster, 1U), SALTS_OK);
+        for (step = 7U; step <= 8U; ++step) {
+            check_equal(sim_propose(cluster, 2U, 90U + step,
+                                    "post-old-leader-crash"), SALTS_OK);
+            check_equal(sim_tick(cluster, 2U, 1U), SALTS_OK);
+        }
+        check_equal(sim_restart(cluster, 1U), SALTS_OK);
+        check_equal(cluster->nodes[0].durable.commit_index, 1U);
+
+        sim_partition(cluster, 1U, 2U, true);
+        sim_partition(cluster, 1U, 3U, true);
+        for (step = 0U; step < 10U; ++step)
+            check_equal(sim_tick(cluster, 2U, 1U), SALTS_OK);
+        for (step = 1U; step <= SIM_NODE_COUNT; ++step) {
+            tr_raft_status_t recovered = {0};
+            check_equal(sim_status(cluster,
+                        (tr_raft_node_id_t)step, &recovered), SALTS_OK);
+            check_equal(recovered.leader_id, 2U);
+            check_equal(recovered.last_log_index, 8U);
+            check_equal(recovered.commit_index, 8U);
+            check_equal(recovered.applied_index, 8U);
+            check_equal(cluster->nodes[step - 1U].durable.entry_count, 8U);
+            for (index = 1U; index <= 8U; ++index)
+                check(sim_entries_equal(
+                    &cluster->nodes[step - 1U].durable.entries[index - 1U],
+                    &cluster->nodes[1].durable.entries[index - 1U]));
+        }
+        check_equal(sim_check_invariants(cluster), SALTS_OK);
+        sim_cluster_destroy(cluster);
+        free(cluster);
+    }
+
     it("preserves election and committed-log safety under seeded chaos")
     {
         uint64_t seed;

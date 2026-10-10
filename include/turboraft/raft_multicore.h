@@ -2,6 +2,7 @@
 #define TURBORAFT_RAFT_MULTICORE_H
 
 #include <turboraft/raft_service.h>
+#include <turboraft/raft_transport.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,6 +14,9 @@ extern "C" {
 #define TR_RAFT_MULTICORE_MAX_CAPACITY 65536U
 /* Aggregate request/completion storage limit, independent of host resources. */
 #define TR_RAFT_MULTICORE_MAX_QUEUE_BYTES (UINT64_C(1024) * 1024U * 1024U)
+/* Aggregate upper bound on accepted external chunk leases across all Groups.
+ * A zero per-Group budget disables ingress for borrowed DATA/SNAPSHOT. */
+#define TR_RAFT_MULTICORE_MAX_CHUNK_LEASE_BYTES (UINT64_C(256) * 1024U * 1024U)
 
 typedef struct tr_raft_multicore tr_raft_multicore_t;
 typedef struct tr_raft_owner tr_raft_owner_t;
@@ -37,6 +41,11 @@ typedef struct tr_raft_multicore_config {
     uint32_t idle_ms;
     const tr_raft_group_assignment_t *groups;
     size_t group_count;
+    /* Required explicit byte credit for owned DATA/SNAPSHOT Group transfers.
+     * Zero disables chunks; otherwise bound * group_count <= global limit.
+     * Byte credit is restored when the Group Owner finishes the callback;
+     * item/completion credit is reserved until take() acknowledges it. */
+    size_t owned_chunk_bytes_per_group;
 } tr_raft_multicore_config_t;
 
 /**
@@ -53,6 +62,19 @@ typedef struct tr_raft_multicore_config {
  * Owner resources outlive all groups on that owner. No callback may destroy or
  * synchronously stop the runtime; request_stop is allowed after startup.
  */
+/* A stream ACK is produced only by the Group Owner's installed receiver.
+ * The host retrieves it via the normal completion ring and decides if/when
+ * to send it from its own CNet Owner. No automatic network ACK or retry. */
+typedef struct tr_raft_multicore_chunk_result {
+    tr_raft_wire_payload_kind_t kind;
+    bool ack_valid;
+    bool durable_or_installed;
+    union {
+        tr_raft_snapshot_ack_t snapshot;
+        tr_raft_data_ack_t data;
+    } ack;
+} tr_raft_multicore_chunk_result_t;
+
 typedef struct tr_raft_multicore_factory {
     void *context;
     int (*owner_open)(void *context, tr_raft_owner_t *owner);
@@ -61,6 +83,15 @@ typedef struct tr_raft_multicore_factory {
     int (*group_open)(void *context, tr_raft_owner_t *owner,
                       uint64_t group_id, tr_raft_service_t **out_service);
     void (*group_close)(void *context, tr_raft_owner_t *owner, uint64_t group_id);
+    /* Optional exact Group Owner hook for owned DATA/SNAPSHOT. This runs
+     * after Group open, never on the CNet progress Owner. Implement using
+     * the existing SnapshotReceiver/DataStreamReceiver as appropriate.
+     * A returned ACK must reflect actual receiver/storage semantics; it
+     * must NOT certify fsync just because the callback was invoked. */
+    int (*receive_chunk)(void *context, tr_raft_owner_t *owner,
+                         uint64_t group_id,
+                         const tr_raft_transport_payload_t *chunk,
+                         tr_raft_multicore_chunk_result_t *out_result);
 } tr_raft_multicore_factory_t;
 
 typedef enum tr_raft_multicore_operation {
@@ -72,7 +103,10 @@ typedef enum tr_raft_multicore_operation {
     TR_RAFT_MULTICORE_TRANSFER,
     TR_RAFT_MULTICORE_MEMBERSHIP,
     TR_RAFT_MULTICORE_SNAPSHOT,
-    TR_RAFT_MULTICORE_OPERATION_STATUS
+    TR_RAFT_MULTICORE_OPERATION_STATUS,
+    /* Reserved for the internally owned, capacity-gated ingress path only.
+     * Direct tr_raft_multicore_submit() rejects this operation. */
+    TR_RAFT_MULTICORE_RECEIVE_CHUNK
 } tr_raft_multicore_operation_t;
 
 /* All data is inline: submit copies the entire request before returning. */
@@ -80,6 +114,10 @@ typedef struct tr_raft_multicore_request {
     tr_raft_multicore_operation_t operation;
     /* Caller-defined correlation ID; uniqueness is the caller's responsibility. */
     uint64_t request_id;
+    /* Captured by the CNet Owner after certified TLS and Directory auth.
+     * Zero for ordinary/local work. This is copied through the SAME ring
+     * unchanged and never references Channel or CNet runtime memory. */
+    tr_raft_transport_reply_origin_t reply_origin;
     union {
         struct {
             uint64_t command_id;
@@ -97,6 +135,7 @@ typedef struct tr_raft_multicore_request {
             tr_raft_node_id_t learners[TR_RAFT_MAX_MEMBERS];
         } membership;
         struct { tr_raft_term_t term; tr_raft_index_t index; } operation_status;
+        struct { void *internal_owned_chunk; } chunk; /* runtime-private lease */
     } value;
 } tr_raft_multicore_request_t;
 
@@ -104,10 +143,14 @@ typedef struct tr_raft_multicore_completion {
     uint64_t request_id;
     tr_raft_multicore_operation_t operation;
     int result;
+    /* Owner completion carries the admission-time epoch even after the
+     * originating Channel is closed/destroyed; host must revalidate it. */
+    tr_raft_transport_reply_origin_t reply_origin;
     union {
         tr_raft_service_status_t status;
         tr_raft_operation_status_t receipt;
         tr_raft_read_state_t read;
+        tr_raft_multicore_chunk_result_t chunk;
     } value;
 } tr_raft_multicore_completion_t;
 
@@ -115,6 +158,7 @@ typedef struct tr_raft_multicore_group_status {
     size_t outstanding;
     size_t queued;
     size_t completed;
+    size_t owned_chunk_bytes; /* admitted chunks awaiting Owner execution */
     uint64_t rejected;
     int background_error;
     bool stopped;

@@ -1,5 +1,5 @@
-name: Restore published native SDKs
-description: Restore current stable SDK inputs and export the selected package roots.
+name: Restore exact ACE native SDKs
+description: Require one exact Salts 2.3 ACE candidate and explicit coherent first-party SDK versions.
 inputs:
   rid:
     description: Native SDK runtime identifier
@@ -10,6 +10,18 @@ inputs:
   orm:
     description: Restore TurboDB 2.3.1 and export the complete ORM integration SDK set
     default: "false"
+  salts_native_candidate_version:
+    description: Immutable Salts.Native 2.3.0-ace.sha plus full 40-hex SHA
+    required: true
+  salts_utils_native_version:
+    description: Exact SaltsUtils.Native version
+    required: true
+  flowmq_native_version:
+    description: Exact transitional FlowMQ.Native version
+    required: true
+  chttp_native_version:
+    description: Exact CHttp.Native version
+    required: true
 runs:
   using: composite
   steps:
@@ -22,10 +34,32 @@ runs:
         GITHUB_TOKEN: ${{ inputs.token }}
         SDK_RID: ${{ inputs.rid }}
         SDK_ORM: ${{ inputs.orm }}
+        SaltsNativeCandidateVersion: ${{ inputs.salts_native_candidate_version }}
+        SaltsUtilsNativeVersion: ${{ inputs.salts_utils_native_version }}
+        FlowMQNativeVersion: ${{ inputs.flowmq_native_version }}
+        CHttpNativeVersion: ${{ inputs.chttp_native_version }}
       run: |
         $ErrorActionPreference = "Stop"
         $packages = Join-Path $env:RUNNER_TEMP "turboraft-native-dependencies"
-        dotnet restore packaging/nuget/TurboRaft.Native.csproj --configfile cmake/native-sdk.nuget.config --packages $packages --no-cache --force-evaluate "-p:TurboRaftRestoreOrm=$env:SDK_ORM"
+        if ($env:SaltsNativeCandidateVersion -cnotmatch '^2[.]3[.]0-ace[.]sha[0-9a-f]{40}$') {
+          throw "Exact SHA-qualified Salts.Native 2.3 ACE candidate required; no 2.2 fallback"
+        }
+        foreach ($key in @('SaltsUtilsNativeVersion', 'FlowMQNativeVersion', 'CHttpNativeVersion')) {
+          $version = [Environment]::GetEnvironmentVariable($key)
+          if ([string]::IsNullOrWhiteSpace($version) -or $version.Contains('*') -or $version.Contains('[')) {
+            throw "Exact first-party native SDK version required: $key"
+          }
+        }
+        if ($env:FlowMQNativeVersion -cne '1.3.0') {
+          throw "FlowMQ.Native must be exactly 1.3.0; no fallback or moving main"
+        }
+        $pins = @(
+          "-p:SaltsNativeCandidateVersion=$env:SaltsNativeCandidateVersion"
+          "-p:SaltsUtilsNativeVersion=$env:SaltsUtilsNativeVersion"
+          "-p:FlowMQNativeVersion=$env:FlowMQNativeVersion"
+          "-p:CHttpNativeVersion=$env:CHttpNativeVersion"
+        )
+        dotnet restore packaging/nuget/TurboRaft.Native.csproj --configfile cmake/native-sdk.nuget.config --packages $packages --no-cache --force-evaluate "-p:TurboRaftRestoreOrm=$env:SDK_ORM" @pins
         if ($LASTEXITCODE -ne 0) { throw "native SDK restore failed" }
         $selected = @("salts", "salts-utils")
         if ($env:SDK_ORM -eq "true") { $selected += @("flowmq", "chttp", "turbodb") }

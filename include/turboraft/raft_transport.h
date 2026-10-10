@@ -48,6 +48,31 @@ typedef struct tr_raft_transport_payload {
     } data;
 } tr_raft_transport_payload_t;
 
+/* Ephemeral, provider-neutral authenticated Channel-origin receipt.
+ * The {host_module_generation,channel_instance} pair is unique while the
+ * stable host's generation issuer honors its never-reuse contract: a DSO
+ * unload/reload may reset Channel's local serial but MUST rotate the
+ * host-issued module generation. No socket descriptor, pointer, TLS secret
+ * or persistent runtime state crosses the Raft Group Owner boundary.
+ *
+ * All zero means an unbound ingress request: it can be consumed locally,
+ * but must NEVER be used to send a network ACK. */
+typedef struct tr_raft_transport_reply_origin {
+    /* Issued by the stable host/component domain, NOT by a reloadable DSO.
+     * Nonzero and never reused for any past or live module generation in
+     * this host's lifetime. Together with channel_instance this closes the
+     * local static-counter reset ABA after unload/reload. */
+    uint64_t host_module_generation;
+    uint64_t channel_instance;
+    tr_raft_node_id_t authenticated_peer_node_id;
+    tr_raft_group_id_t group_id;
+    /* Opaque transport-provider connection identity, valid only for this
+     * live source generation. CNet currently packs its slot+generation
+     * locally; neutral Raft/Multicore code must never decode or depend on
+     * provider-specific connection structures. Zero means unbound. */
+    uint64_t connection_token;
+} tr_raft_transport_reply_origin_t;
+
 typedef int (*tr_raft_transport_payload_handler_fn)(
     void *context, const tr_raft_transport_payload_t *payload);
 

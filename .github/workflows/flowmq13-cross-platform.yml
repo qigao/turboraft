@@ -1,0 +1,293 @@
+name: FlowMQ 1.3 exact Windows and macOS installed SDK
+
+on:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "cmake/**"
+      - "include/**"
+      - "src/**"
+      - "schema/**"
+      - "tools/**"
+      - "tests/flowmq13_installed_consumer/**"
+      - "tests/core/test_raft_flowmq_peer_service.c"
+      - "tests/package_flowmq_consumer/**"
+      - ".github/workflows/flowmq13-cross-platform.yml"
+      - "packaging/nuget/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: turboraft-flowmq13-cross-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# This lane qualifies official released FlowMQ.Native 1.3.0 on non-Linux
+# hosts. It is NOT the immutable Salts 2.3 ACE full-SHA candidate/release gate.
+jobs:
+  macos-arm64:
+    name: macOS ARM64 AppleClang / installed C11 C++17 formal mTLS
+    runs-on: macos-15
+    timeout-minutes: 85
+    steps:
+      - name: Checkout exact TurboRaft PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Configure read-only vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare AppleClang native tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          brew install ninja re2c nasm ccache
+          command -v re2c
+          command -v ninja
+          ccache --zero-stats
+
+      - name: Restore exact published FlowMQ 1.3 closure
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dotnet restore tests/flowmq13_installed_consumer/dependencies.csproj \
+            --configfile cmake/native-sdk.nuget.config \
+            --packages "$RUNNER_TEMP/turboraft-flowmq13-packages" \
+            --no-cache --force-evaluate
+          python3 tools/ci/export_native_sdks.py \
+            --assets tests/flowmq13_installed_consumer/obj/project.assets.json \
+            --rid macos-arm64 --packages salts salts-utils flowmq --runtime-paths
+
+      - name: Verify exact macOS SDK provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SALTS_SDK_VERSION" = '2.3.0-rc.4'
+          test "$SALTS_UTILS_SDK_VERSION" = '4.3.0-rc.2'
+          test "$FLOWMQ_SDK_VERSION" = '1.3.0'
+          grep -Fx 'version=2.3.0-rc.4' "$SALTS_ROOT/salts-sdk-manifest.txt"
+          grep -Fx 'version=4.3.0-rc.2' "$SALTS_UTILS_ROOT/salts-utils-sdk-manifest.txt"
+          grep -Fx 'version=1.3.0' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          grep -Fx 'commit=d532a27b30b7078b3a7575f8e5a2d370573fd145' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          grep -Fx 'salts=Salts.Native/2.3.0-rc.4' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          grep -Fx 'salts_utils=SaltsUtils.Native/4.3.0-rc.2' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          grep -Fx 'rid=macos-arm64' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          grep -Fx 'qualification=runtime' "$FLOWMQ_ROOT/flowmq-sdk-manifest.txt"
+          test -f "$FLOWMQ_ROOT/lib/cmake/FlowMQ/FlowMQConfig.cmake"
+          test -x "$SALTS_UTILS_ROOT/bin/salts-idlc"
+
+      - name: Restore native arm64-osx link dependencies from cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root=. \
+            --x-install-root="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            --triplet arm64-osx --host-triplet arm64-osx --only-binarycaching
+
+      - name: Build and install complete TurboRaft FlowMQ profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B .ci/build-flowmq13-macos -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DTURBORAFT_BUILD_PROFILE=full \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=arm64-osx -DVCPKG_HOST_TRIPLET=arm64-osx \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/flowmq13-macos"
+          cmake --build .ci/build-flowmq13-macos --parallel 2
+          cmake --install .ci/build-flowmq13-macos
+
+      - name: Exercise installed AppleClang C11 C++17 and formal TLS
+        shell: bash
+        env:
+          TURBORAFT_ROOT: ${{ github.workspace }}/stage/flowmq13-macos
+        run: |
+          set -euo pipefail
+          cmake -S tests/flowmq13_installed_consumer \
+            -B .ci/build-flowmq13-macos-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=arm64-osx -DVCPKG_HOST_TRIPLET=arm64-osx \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build-flowmq13-macos-consumer --parallel 2
+          ctest --test-dir .ci/build-flowmq13-macos-consumer \
+            --output-on-failure --no-tests=error \
+            --output-junit flowmq13-results.xml
+          # New process + bounded authentic Kqueue/TLS/Owner/WAL per run,
+          # never an automatic replay of a previously admitted operation.
+          ctest --test-dir .ci/build-flowmq13-macos-consumer \
+            -L cnet-snapshot-lifecycle --repeat until-fail:25 \
+            --output-on-failure --no-tests=error \
+            --output-junit flowmq13-snapshot-repeat.xml
+          # Print wire streaming counts, NOT actual Kqueue throughput.
+          ctest --test-dir .ci/build-flowmq13-macos-consumer \
+            -R '^turboraft[.]flowmq13[.]large_snapshot_stream$' \
+            --verbose --no-tests=error
+
+      - name: Compiler cache report
+        if: always()
+        shell: bash
+        run: ccache --show-stats
+
+      - name: Upload macOS conformance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turboraft-flowmq13-cross-macos-arm64
+          path: |
+            .ci/build-flowmq13-macos-consumer/Testing/Temporary
+            .ci/build-flowmq13-macos-consumer/flowmq13-results.xml
+            .ci/build-flowmq13-macos-consumer/flowmq13-snapshot-repeat.xml
+            .ci/build-flowmq13-macos/CMakeCache.txt
+          if-no-files-found: warn
+
+  windows-x64:
+    name: Windows x64 MSVC / installed C11 C++17 formal mTLS
+    runs-on: windows-2025
+    timeout-minutes: 95
+    steps:
+      - name: Checkout exact TurboRaft PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Configure read-only vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore shared re2c binary
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare MSVC and canonical cached triplet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install nasm ninja -y --no-progress
+          $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw 'MSVC x64 toolchain missing' }
+          if ([string]::IsNullOrWhiteSpace($env:QIGAO_VCPKG_WINDOWS_TRIPLET)) { throw 'Canonical vcpkg Windows triplet missing' }
+          if ([string]::IsNullOrWhiteSpace($env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET)) { throw 'Canonical vcpkg Windows host triplet missing' }
+          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+          "VCPKG_INSTALLED_DIR=$env:GITHUB_WORKSPACE\.ci\vcpkg_installed_windows" >> $env:GITHUB_ENV
+          "TURBORAFT_ROOT=$env:GITHUB_WORKSPACE\stage\flowmq13-windows" >> $env:GITHUB_ENV
+
+      - name: Restore exact published FlowMQ 1.3 closure
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet restore tests/flowmq13_installed_consumer/dependencies.csproj --configfile cmake/native-sdk.nuget.config --packages (Join-Path $env:RUNNER_TEMP 'turboraft-flowmq13-packages') --no-cache --force-evaluate
+          if ($LASTEXITCODE -ne 0) { throw 'Exact NuGet closure restore failed' }
+          python tools/ci/export_native_sdks.py --assets tests/flowmq13_installed_consumer/obj/project.assets.json --rid windows-x64 --packages salts salts-utils flowmq --runtime-paths
+          if ($LASTEXITCODE -ne 0) { throw 'Exact native SDK root export failed' }
+
+      - name: Verify exact Windows SDK provenance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SALTS_SDK_VERSION -cne '2.3.0-rc.4' -or
+              $env:SALTS_UTILS_SDK_VERSION -cne '4.3.0-rc.2' -or
+              $env:FLOWMQ_SDK_VERSION -cne '1.3.0') {
+            throw 'Exact resolved package version mismatch'
+          }
+          $checks = @(
+            @{path=(Join-Path $env:SALTS_ROOT 'salts-sdk-manifest.txt'); line='version=2.3.0-rc.4'},
+            @{path=(Join-Path $env:SALTS_UTILS_ROOT 'salts-utils-sdk-manifest.txt'); line='version=4.3.0-rc.2'},
+            @{path=(Join-Path $env:FLOWMQ_ROOT 'flowmq-sdk-manifest.txt'); line='version=1.3.0'},
+            @{path=(Join-Path $env:FLOWMQ_ROOT 'flowmq-sdk-manifest.txt'); line='commit=d532a27b30b7078b3a7575f8e5a2d370573fd145'},
+            @{path=(Join-Path $env:FLOWMQ_ROOT 'flowmq-sdk-manifest.txt'); line='salts=Salts.Native/2.3.0-rc.4'},
+            @{path=(Join-Path $env:FLOWMQ_ROOT 'flowmq-sdk-manifest.txt'); line='salts_utils=SaltsUtils.Native/4.3.0-rc.2'},
+            @{path=(Join-Path $env:FLOWMQ_ROOT 'flowmq-sdk-manifest.txt'); line='rid=windows-x64'},
+            @{path=(Join-Path $env:FLOWMQ_ROOT 'flowmq-sdk-manifest.txt'); line='qualification=runtime'}
+          )
+          foreach ($check in $checks) {
+            if (-not ((Get-Content -LiteralPath $check.path) -ccontains $check.line)) {
+              throw "Exact manifest entry missing: $($check.line)"
+            }
+          }
+          foreach ($item in @(
+              (Join-Path $env:FLOWMQ_ROOT 'lib\cmake\FlowMQ\FlowMQConfig.cmake'),
+              (Join-Path $env:SALTS_UTILS_ROOT 'bin\salts-idlc.exe'))) {
+            if (-not (Test-Path -LiteralPath $item -PathType Leaf)) { throw "SDK file absent: $item" }
+          }
+
+      - name: Restore native MSVC link dependencies from cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_INSTALLED_DIR | Out-Null
+          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root="$env:GITHUB_WORKSPACE" --x-install-root="$env:VCPKG_INSTALLED_DIR" --triplet="$env:QIGAO_VCPKG_WINDOWS_TRIPLET" --host-triplet="$env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET" --only-binarycaching
+          if ($LASTEXITCODE -ne 0) { throw 'Read-only Windows native dependency cache incomplete' }
+
+      - name: Build and install complete TurboRaft FlowMQ profile
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "PATH=%FLOWMQ_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%QIGAO_VCPKG_WINDOWS_TRIPLET%\bin;%PATH%"
+          cmake -S . -B .ci\build-flowmq13-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DTURBORAFT_BUILD_PROFILE=full -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_TARGET_TRIPLET=%QIGAO_VCPKG_WINDOWS_TRIPLET% -DVCPKG_HOST_TRIPLET=%QIGAO_VCPKG_WINDOWS_HOST_TRIPLET% -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_APPLOCAL_DEPS=OFF -DCMAKE_INSTALL_PREFIX="%TURBORAFT_ROOT%"
+          if errorlevel 1 exit /b 1
+          cmake --build .ci\build-flowmq13-windows --target install --parallel 2
+          if errorlevel 1 exit /b 1
+
+      - name: Exercise installed MSVC C11 C++17 and formal TLS
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "PATH=%TURBORAFT_ROOT%\bin;%FLOWMQ_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%QIGAO_VCPKG_WINDOWS_TRIPLET%\bin;%PATH%"
+          cmake -S tests\flowmq13_installed_consumer -B .ci\build-flowmq13-windows-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_TARGET_TRIPLET=%QIGAO_VCPKG_WINDOWS_TRIPLET% -DVCPKG_HOST_TRIPLET=%QIGAO_VCPKG_WINDOWS_HOST_TRIPLET% -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_APPLOCAL_DEPS=OFF
+          if errorlevel 1 exit /b 1
+          cmake --build .ci\build-flowmq13-windows-consumer --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --test-dir .ci\build-flowmq13-windows-consumer --output-on-failure --no-tests=error --output-junit flowmq13-results.xml
+          if errorlevel 1 exit /b 1
+          rem 25 completely independent IOCP/TLS/Owner/WAL test processes.
+          rem CTest repetition is not an automatic Raft settlement retry.
+          ctest --test-dir .ci\build-flowmq13-windows-consumer -L cnet-snapshot-lifecycle --repeat until-fail:25 --output-on-failure --no-tests=error --output-junit flowmq13-snapshot-repeat.xml
+          if errorlevel 1 exit /b 1
+          rem Print wire stream counters, not actual IOCP throughput.
+          ctest --test-dir .ci\build-flowmq13-windows-consumer -R "turboraft[.]flowmq13[.]large_snapshot_stream" --verbose --no-tests=error
+          if errorlevel 1 exit /b 1
+
+      - name: Upload Windows conformance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turboraft-flowmq13-cross-windows-x64
+          path: |
+            .ci/build-flowmq13-windows-consumer/Testing/Temporary
+            .ci/build-flowmq13-windows-consumer/flowmq13-results.xml
+            .ci/build-flowmq13-windows-consumer/flowmq13-snapshot-repeat.xml
+            .ci/build-flowmq13-windows/CMakeCache.txt
+          if-no-files-found: warn

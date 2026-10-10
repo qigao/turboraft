@@ -42,11 +42,15 @@ include(cmake/CmakeUtils.cmake)
 
 set(TURBORAFT_PROFILE_FULL OFF)
 set(TURBORAFT_PROFILE_STORAGE OFF)
+set(TURBORAFT_PROFILE_CNET OFF)
 if(TURBORAFT_BUILD_PROFILE STREQUAL "full")
   set(TURBORAFT_PROFILE_FULL ON)
   set(TURBORAFT_PROFILE_STORAGE ON)
+  set(TURBORAFT_PROFILE_CNET ON)
 elseif(TURBORAFT_BUILD_PROFILE STREQUAL "storage-dev")
   set(TURBORAFT_PROFILE_STORAGE ON)
+elseif(TURBORAFT_BUILD_PROFILE STREQUAL "cnet-dev")
+  set(TURBORAFT_PROFILE_CNET ON)
 endif()
 
 if(TURBORAFT_PROFILE_FULL)
@@ -106,16 +110,26 @@ unset(Salts_DIR CACHE)
 unset(Salts_DIR)
 unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
-find_package(Salts 2.1 CONFIG REQUIRED
+find_package(Salts 2.3.0 EXACT CONFIG REQUIRED
              PATHS "${TURBORAFT_SALTS_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_package(SaltsUtils 4.2 CONFIG REQUIRED
+find_package(SaltsUtils 4.3.0 EXACT CONFIG REQUIRED
              PATHS "${TURBORAFT_SALTS_UTILS_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+
+# Fail closed: ACE 2.3 and Component/Plugin are required even in focused profiles.
+foreach(_turboraft_ace_target IN ITEMS
+        Salts::CMeta Salts::Component Salts::ComponentPlugin Salts::Plugin)
+  if(NOT TARGET ${_turboraft_ace_target})
+    message(FATAL_ERROR
+            "TurboRaft Next requires exact Salts 2.3 ACE target: ${_turboraft_ace_target}")
+  endif()
+endforeach()
+unset(_turboraft_ace_target)
 
 if(TURBORAFT_PROFILE_FULL)
   file(TO_CMAKE_PATH "$ENV{FLOWMQ_ROOT}" TURBORAFT_FLOWMQ_ROOT_PATH)
   unset(FlowMQ_DIR CACHE)
   unset(FlowMQ_DIR)
-  find_package(FlowMQ 1.2.1 CONFIG REQUIRED
+  find_package(FlowMQ 1.3.0 EXACT CONFIG REQUIRED
                PATHS "${TURBORAFT_FLOWMQ_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
   if(NOT TARGET Salts::CNet)
     message(FATAL_ERROR "TurboRaft full profile requires Salts::CNet")
@@ -257,6 +271,17 @@ target_link_libraries(turboraft_cflow_state_machine
 
 endif()
 
+# ACE/Component composes borrowed Raft adapters; Core remains deterministic.
+add_library(turboraft_component STATIC src/runtime/raft_component.c)
+add_library(TurboRaft::Component ALIAS turboraft_component)
+set_target_properties(turboraft_component PROPERTIES EXPORT_NAME Component
+                      FOLDER "libraries/runtime")
+target_include_directories(turboraft_component
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(turboraft_component
+  PUBLIC TurboRaft::Core Salts::Component Salts::CMeta)
+
 add_library(turboraft_service STATIC src/service/raft_service.c)
 add_library(TurboRaft::Service ALIAS turboraft_service)
 set_target_properties(turboraft_service PROPERTIES EXPORT_NAME Service)
@@ -266,7 +291,9 @@ target_include_directories(
          $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(turboraft_service PUBLIC TurboRaft::Core)
 
-add_library(turboraft_multicore STATIC src/runtime/raft_multicore.c)
+add_library(turboraft_multicore STATIC
+            src/runtime/raft_multicore.c
+            src/runtime/raft_multicore_ingress.c)
 add_library(TurboRaft::Multicore ALIAS turboraft_multicore)
 set_target_properties(turboraft_multicore PROPERTIES EXPORT_NAME Multicore
                       FOLDER "libraries/runtime")
@@ -322,6 +349,20 @@ target_link_libraries(
   PUBLIC TurboRaft::Core
   PRIVATE Salts::Core)
 
+# Storage-only thin Group Owner ACK composition over the existing validated
+# SnapshotReceiver and DataStreamReceiver; no second queue or worker.
+add_library(turboraft_chunk_receivers STATIC
+            src/runtime/raft_multicore_chunk_receivers.c)
+add_library(TurboRaft::ChunkReceivers ALIAS turboraft_chunk_receivers)
+set_target_properties(turboraft_chunk_receivers PROPERTIES
+                      EXPORT_NAME ChunkReceivers
+                      FOLDER "libraries/runtime")
+target_include_directories(turboraft_chunk_receivers
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(turboraft_chunk_receivers
+  PUBLIC TurboRaft::Multicore TurboRaft::SnapshotReceiver TurboRaft::DataStream)
+
 add_library(turboraft_wal_storage STATIC
             src/storage/raft_wal_storage.c)
 cmake_config_target(turboraft_wal_storage
@@ -336,12 +377,6 @@ target_include_directories(
 target_link_libraries(turboraft_wal_storage
                       PUBLIC TurboRaft::Core
                       PRIVATE Salts::Core xxHash::xxhash)
-
-add_executable(turboraft_compat_check tools/turboraft_compat_check.c)
-target_link_libraries(turboraft_compat_check
-                      PRIVATE Salts::Core xxHash::xxhash)
-set_target_properties(turboraft_compat_check
-                      PROPERTIES FOLDER "TurboRaft/tools")
 
 endif()
 
@@ -369,11 +404,15 @@ target_link_libraries(turboraft_service_wal_reload
 
 endif()
 
-if(TURBORAFT_PROFILE_FULL)
+if(TURBORAFT_PROFILE_CNET)
 find_package(Threads REQUIRED)
 
 if(TARGET Salts::CNet)
   add_library(turboraft_cnet STATIC
+              src/transport/raft_cnet_identity.c
+              src/transport/raft_cnet_channel.c
+              src/transport/raft_cnet_managed_peer.c
+              src/transport/raft_cnet_peer_directory.c
               src/transport/raft_cnet_peer.c
               src/transport/raft_group_queue.c
               src/transport/raft_transport.c
@@ -388,7 +427,13 @@ if(TARGET Salts::CNet)
     turboraft_cnet
     PUBLIC TurboRaft::Core Salts::CNet
     PRIVATE Salts::CSTL Salts::CMeta)
+else()
+  message(FATAL_ERROR "Required target is unavailable: Salts::CNet")
+endif()
+endif()
 
+# Snapshots, FlowMQ and HTTP integrations remain the full-stack only.
+if(TURBORAFT_PROFILE_FULL)
   add_library(turboraft_snapshot_peer STATIC
               src/service/raft_snapshot_peer.c)
   target_include_directories(turboraft_snapshot_peer
@@ -411,10 +456,6 @@ if(TARGET Salts::CNet)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/service)
   target_link_libraries(turboraft_snapshot_manager
                         PUBLIC TurboRaft::CNet TurboRaft::SnapshotSender)
-
-else()
-  message(FATAL_ERROR "Required target is unavailable: Salts::CNet")
-endif()
 
 if(TARGET Salts::CNet AND TARGET FlowMQ::FlowMQ)
   add_library(turboraft_flowmq STATIC
@@ -612,9 +653,10 @@ if(TURBORAFT_PROFILE_FULL AND BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-set(TURBORAFT_INSTALL_TARGETS turboraft_core turboraft_service turboraft_multicore)
+set(TURBORAFT_INSTALL_TARGETS turboraft_core turboraft_component turboraft_service turboraft_multicore)
 foreach(_turboraft_install_candidate IN ITEMS
         turboraft_snapshot_receiver
+        turboraft_chunk_receivers
         turboraft_node_config
         turboraft_snapshot_sender
         turboraft_data_stream
@@ -679,10 +721,6 @@ install(
   PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/tools/turboraft_incident_bundle.py"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/tools")
 
-if(TARGET turboraft_compat_check)
-  install(TARGETS turboraft_compat_check
-          RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-endif()
 install(
   FILES "${CMAKE_CURRENT_SOURCE_DIR}/docs/PUBLIC_CALLBACK_CONTRACTS.json"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/turboraft/abi")

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Exact, published prerelease SDKs; no wildcard, 2.2 or 4.2 fallback. -->
+    <PackageReference Include="Salts.Native" Version="[2.3.0-rc.1]" />
+    <PackageReference Include="SaltsUtils.Native" Version="[4.3.0-rc.1]" />
+  </ItemGroup>
+</Project>

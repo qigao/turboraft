@@ -1,7 +1,16 @@
 # TurboRaft
 
-TurboRaft is a C11 Raft library built on the Salts package family. It separates
-the deterministic consensus core from transport, durable WAL storage, snapshot
+TurboRaft is a C11 Raft library built on the Salts package family.
+
+**ACE 2.3 development branch:** [CMeta/CNet/ACE design](docs/ACE23_ARCHITECTURE.md)
+and [new-only runtime policy](docs/NEW_ONLY_RUNTIME_POLICY.md).
+This branch intentionally removes v0.2.0 cross-version compatibility; it is
+**not release-ready** until an exact Salts 2.3.0 ACE SDK candidate and all
+installed consumer/sanitizer gates pass. The upstream Salts ACE Draft PR
+remains **DO NOT MERGE / DO NOT PUBLISH**.
+
+TurboRaft separates the deterministic consensus core from transport, durable
+WAL storage, snapshot
 transfer, application state machines, and a standalone CHttp JSON-RPC/HTTP
 control plane.
 
@@ -29,6 +38,33 @@ Database drivers and dialects belong to TurboDB. Raft Core owns consensus.
   one owner; storage and state-machine callbacks run on that thread.
 - `TurboRaft::CNet` exposes transport framing plus a bounded adapter around a
   caller-owned CNet client. It never starts an I/O thread.
+- `tr_raft_cnet_channel` is a single CNet-owner authenticated peer channel.
+  Exact verified mTLS certificate identity and both HELLO/ACK messages must
+  complete before any Raft/Snapshot/Data payload reaches its callback.
+  This is an implemented **new-only** ingress/egress slice, not yet a
+  multi-peer service or a FlowMQ replacement.
+- `tr_raft_cnet_managed_peer` uses the canonical CNetManager/ManagedDial
+  lifetime and finite explicit reconnect policy. A Node-specific reconnect
+  cannot replay Raft requests or downgrade an untrusted TLS identity.
+- `tr_raft_cnet_peer_directory` binds immutable, unique Node IDs and allowed
+  Groups to one fixed CNet Owner using upstream strict-key placement; a known
+  foreign-owner peer is not silently stolen when local capacity is exhausted.
+  It dispatches through the existing owner-bound Raft Transport callback,
+  without introducing a global registry or second queue. Incoming data may
+  use `tr_raft_cnet_peer_directory_receive`: only the *live TLS Channel's*
+  authenticated Node ID and reciprocal READY state authorize its Group before
+  the bounded Owner callback runs. Real distinct-cert Node1/Node3 mTLS and
+  wrong-node rejection are qualified in the isolated ACE 2.3 RC test lane;
+  actual cross-Owner mailboxes and full snapshot recovery remain separate.
+- `tr_raft_multicore_ingress_receive` is the transport-neutral, C11/C++17
+  cross-Owner bridge from an already verified CNet directory callback to
+  **the existing Multicore Group ring**. Accepted inline Raft messages get one
+  completion credit; the host drains `tr_raft_multicore_take()`. Unsupported
+  borrowed Snapshot/Data chunks fail closed until explicit SG ownership is
+  implemented. An executed real mTLS test forwards independently certified
+  Node1/Node3 frames into two distinct Raft Group owner threads and verifies
+  the corresponding step completions. No second Actor loop or automatic
+  settlement retry.
 - `TurboRaft::FlowMQ` owns one FlowMQ context, one ROUTER, and one DEALER per
   peer. `tr_raft_flowmq_peer_service_step()` drives all progress on the caller's
   owner thread.
@@ -54,13 +90,26 @@ Configure requires active-profile installations provided through:
 - `TURBODB_ROOT` for the opt-in ORM recovery tests
 
 The supplied user presets resolve Debug and Release profiles independently and
-use `NO_DEFAULT_PATH` for first-party package discovery. Salts 2.1+ and
-SaltsUtils 4.2+ are required. CI consumes published Salts/SaltsUtils SDKs;
-FlowMQ and CHttp source gates additionally follow their current branches.
-Native package builds resolve current published SDKs and record the
-resolved versions in each SDK manifest. FlowMQ must be built against the same
-Salts/SaltsUtils generation; an older SDK that imports `Salts::TbeSchema` is
-incompatible with SaltsUtils 4.2.
+use `NO_DEFAULT_PATH` for first-party package discovery. **This development
+branch requires Salts 2.3.0 EXACT with Component/ComponentPlugin/Plugin and
+SaltsUtils 4.3.0 EXACT.** No Salts 2.2 fallback is accepted. For the isolated Component/CNet qualification, the published prerelease
+Salts.Native 2.3.0-rc.1 (source 58ff08fc95b4aa1dc493c0b7080426b2c11d4959)
+and SaltsUtils.Native 4.3.0-rc.1 are an explicit, exact **testing**
+baseline. This does not certify the long-lived Draft ACE pattern branch
+or make a final stable SDK available. Native package restores require explicit exact
+first-party version properties; CI must verify all package ABI/SONAME
+provenance rather than assuming exact version numbers alone prove linkage. **The full profile and the installed `TurboRaft::FlowMQ` consumer now
+require FlowMQ 1.3.0 EXACT**; the transitional private NuGet build reference
+is pinned to `FlowMQ.Native [1.3.0]`, and the full-stack source checkout
+uses the release-qualified commit
+`d532a27b30b7078b3a7575f8e5a2d370573fd145` (not floating `main`).
+[FlowMQ v1.3.0](https://github.com/qigao/flowmq/releases/tag/v1.3.0)
+was qualified with Salts.Native 2.3.0-rc.4 and SaltsUtils.Native 4.3.0-rc.2.
+Those resolved producer versions are release provenance, **not** permission
+to replace TurboRaft's separately required full-SHA Salts 2.3 ACE candidate
+or skip whole-stack ABI/SONAME qualification. No FlowMQ fallback or removal
+is permitted until the replacement passes the existing parity gates. An
+older SDK that imports `Salts::TbeSchema` is incompatible with SaltsUtils 4.2.
 
 Third-party dependencies use the manifest and the shared
 `qigao/vcpkg-cache` toolchain. The registry reference and baseline are pinned
