@@ -347,6 +347,7 @@ spec("ACE 2.3 actual receiver on fixed Multicore Group Owner")
         check_equal(fixture_create(&f), SALTS_OK);
         for (size_t g = 0U; g < 2U; ++g) {
             origins[g] = (tr_raft_transport_reply_origin_t){
+                .host_module_generation = UINT64_C(90010001),
                 .channel_instance = 1000U + (uint64_t)g,
                 .authenticated_peer_node_id = g == 0U ? 1U : 3U,
                 .group_id = g == 0U ? 101U : 103U,
@@ -359,6 +360,11 @@ spec("ACE 2.3 actual receiver on fixed Multicore Group Owner")
             tr_raft_transport_reply_origin_t wrong = origins[0];
             uint64_t rejected_id = 77U;
             wrong.group_id = 103U;
+            check_equal(tr_raft_multicore_ingress_submit_with_origin(
+                f.ingress, &invalid, &wrong, &rejected_id), SALTS_EPROTO);
+            check_equal(rejected_id, UINT64_C(0));
+            wrong = origins[0];
+            wrong.host_module_generation = 0U;
             check_equal(tr_raft_multicore_ingress_submit_with_origin(
                 f.ingress, &invalid, &wrong, &rejected_id), SALTS_EPROTO);
             check_equal(rejected_id, UINT64_C(0));
@@ -387,6 +393,8 @@ spec("ACE 2.3 actual receiver on fixed Multicore Group Owner")
                 check_equal(done.request_id, ids[g][i]);
                 check_equal(done.operation, TR_RAFT_MULTICORE_RECEIVE_CHUNK);
                 check_equal(done.result, SALTS_OK);
+                check_equal(done.reply_origin.host_module_generation,
+                            origins[g].host_module_generation);
                 check_equal(done.reply_origin.channel_instance,
                             origins[g].channel_instance);
                 check_equal(done.reply_origin.authenticated_peer_node_id,
