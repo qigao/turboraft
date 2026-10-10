@@ -74,3 +74,23 @@ add_test(NAME turboraft.flowmq13.cnet_durable_snapshot
          COMMAND turboraft_flowmq13_cnet_durable)
 set_tests_properties(turboraft.flowmq13.cnet_durable_snapshot
                      PROPERTIES TIMEOUT 55)
+
+# Test-only fault seam from src/storage: inject one real snapshot staging
+# write EIO on the existing Multicore Group Owner after certified mTLS ingress.
+# The failed completion cannot turn into a positive network ACK, and a fresh
+# process-local WAL reopen must not recover a half-installed snapshot.
+add_executable(turboraft_flowmq13_cnet_snapshot_fault
+               ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+target_compile_definitions(turboraft_flowmq13_cnet_snapshot_fault PRIVATE
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT=1
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_include_directories(turboraft_flowmq13_cnet_snapshot_fault PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/storage")
+target_link_libraries(turboraft_flowmq13_cnet_snapshot_fault PRIVATE
+    TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+    TurboRaft::WalStorage Salts::Platform Salts::TinyTest)
+add_test(NAME turboraft.flowmq13.cnet_snapshot_fault
+         COMMAND turboraft_flowmq13_cnet_snapshot_fault)
+set_tests_properties(turboraft.flowmq13.cnet_snapshot_fault
+                     PROPERTIES TIMEOUT 55)
