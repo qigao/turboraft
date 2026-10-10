@@ -931,6 +931,7 @@ static int durable_snapshot_reconnect(
     uint8_t bytes[24];
     unsigned round;
     int accepted = 0, result;
+    int old_boundary_valid, final_boundary_valid;
 #define RTRY(expr) do { result = (expr); \
     if (result != SALTS_OK) { \
         fprintf(stderr, "snapshot reconnect %s: %d\n", #expr, result); \
@@ -942,19 +943,23 @@ static int durable_snapshot_reconnect(
     return SALTS_EPROTO; \
 } } while (0)
 
-    RREQUIRE(f != NULL && uri != NULL && events != NULL &&
-             f->delayed_snapshot_ready &&
+    /* Keep preprocessor branches OUTSIDE function-like macro arguments.
+     * MSVC C11's C5101/C4002 otherwise rejects the otherwise valid gate. */
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
-             f->owner_groups[1].installed_snapshots == 0U &&
-             f->server_received.received_snapshot == 1U &&
-             f->owner_groups[1].chunk_calls == 1U &&
-             f->delayed_snapshot_completion.value.chunk.ack.snapshot.next_offset == 12U &&
-             !f->delayed_snapshot_completion.value.chunk.durable_or_installed &&
+    old_boundary_valid =
+        f->owner_groups[1].installed_snapshots == 0U &&
+        f->server_received.received_snapshot == 1U &&
+        f->owner_groups[1].chunk_calls == 1U &&
+        f->delayed_snapshot_completion.value.chunk.ack.snapshot.next_offset == 12U &&
+        !f->delayed_snapshot_completion.value.chunk.durable_or_installed;
 #else
-             f->owner_groups[1].installed_snapshots == 1U &&
-             f->delayed_snapshot_completion.value.chunk.ack.snapshot.next_offset == 24U &&
-             f->delayed_snapshot_completion.value.chunk.durable_or_installed &&
+    old_boundary_valid =
+        f->owner_groups[1].installed_snapshots == 1U &&
+        f->delayed_snapshot_completion.value.chunk.ack.snapshot.next_offset == 24U &&
+        f->delayed_snapshot_completion.value.chunk.durable_or_installed;
 #endif
+    RREQUIRE(f != NULL && uri != NULL && events != NULL &&
+             f->delayed_snapshot_ready && old_boundary_valid &&
              f->clients_received[1].snapshot_acks == 0U,
              "N receipt is exact, not forged or already delivered");
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
@@ -1181,6 +1186,14 @@ static int durable_snapshot_reconnect(
              "Node3 explicitly finished second N+1 TLS Snapshot fragment");
 #endif
     RTRY(take_owner_completion(f, 1U, &completed));
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+    final_boundary_valid =
+        f->owner_groups[1].chunk_calls == 3U &&
+        f->owner_groups[1].chunk_bytes == 36U &&
+        f->clients_received[1].snapshot_progress_acks == 2U;
+#else
+    final_boundary_valid = f->owner_groups[1].chunk_calls == 2U;
+#endif
     RREQUIRE(completed.operation == TR_RAFT_MULTICORE_RECEIVE_CHUNK &&
              completed.result == SALTS_OK &&
              completed.request_id == f->verified_payloads[socket].chunk_request_id &&
@@ -1196,13 +1209,7 @@ static int durable_snapshot_reconnect(
              completed.reply_origin.connection_token ==
                  fresh_origin.connection_token &&
              f->owner_groups[1].installed_snapshots == 1U &&
-#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
-             f->owner_groups[1].chunk_calls == 3U &&
-             f->owner_groups[1].chunk_bytes == 36U &&
-             f->clients_received[1].snapshot_progress_acks == 2U,
-#else
-             f->owner_groups[1].chunk_calls == 2U,
-#endif
+             final_boundary_valid,
              "certified N+1 receipt preserves exact once Snapshot install");
     RTRY(tr_raft_cnet_channel_send_chunk_completion(
         f->inbound[socket], &completed));
