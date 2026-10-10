@@ -17,15 +17,14 @@
 enum { CALLBACK_DEADLINE_MS = 5000U, DSO_CALLBACK_THREADS = 4U };
 
 typedef struct dso_callback_thread {
-    const cmeta_plugin_manifest *manifest; /* borrowed under actual lease */
+    tr_ace23_dso_callback callback; /* borrowed under the published Scope */
     bool result; /* only read after joining thread */
 } dso_callback_thread;
 
 static void run_dso_callback(void *context)
 {
     dso_callback_thread *thread = context;
-    thread->result = thread->manifest->is_quiescent(
-        thread->manifest->self);
+    thread->result = tr_ace23_dso_callback_invoke(&thread->callback) == 1;
 }
 
 static int await_callback_entry(
@@ -43,15 +42,22 @@ static int await_callback_entry(
 
 static salts_component_plugin_status publish_host_generation(
     salts_component_plugin_runtime *runtime,
-    salts_component_plugin_generation *generation, uint64_t requested)
+    salts_component_plugin_generation *generation,
+    uint64_t requested,
+    cmeta_plugin_registry *registry,
+    cmeta_plugin_ref plugin,
+    const salts_component_plugin_generation_storage *storage)
 {
-    const salts_component_plugin_generation_storage empty_storage = {0};
+    const salts_component_plugin_source source = {
+        .plugin = plugin,
+        .export_id = "turboraft.ace23.dso-component"
+    };
     salts_component_plugin_generation *previous = NULL;
     salts_component_plugin_status result;
 
     result = salts_component_plugin_generation_build(
-        generation, requested, NULL, &empty_storage,
-        NULL, 0U, NULL, 0U, NULL, 0U);
+        generation, requested, registry, storage,
+        NULL, 0U, &source, 1U, NULL, 0U);
     if (result != SALTS_COMPONENT_PLUGIN_OK) return result;
     return salts_component_plugin_runtime_publish(
         runtime, generation, &previous);
@@ -82,9 +88,25 @@ spec("ACE 2.3 real Plugin DSO callback quiescence and stable host epoch")
             salts_component_plugin_scope scope = SALTS_COMPONENT_PLUGIN_SCOPE_INIT;
             salts_component_plugin_generation *retired = NULL;
             cmeta_plugin_ref plugin = {0};
-            cmeta_plugin_lease lease = {0};
+            cmeta_plugin_lease temporary = {0};
             const cmeta_plugin_manifest *manifest = NULL;
             const tr_ace23_dso_callback_state *module = NULL;
+            salts_component_service service = {0};
+            tr_ace23_dso_callback callback =
+                tr_ace23_dso_callback_bind(NULL, NULL);
+            cmeta_plugin_lifecycle_info info = {0};
+            salts_component_deployment deployments[1] = {{0}};
+            salts_component_instance instances[1] = {{0}};
+            salts_component_dependency dependencies[1] = {{0}};
+            size_t activation_order[1] = {0};
+            salts_component_plugin_module modules[1] = {{0}};
+            const salts_component_plugin_generation_storage storage = {
+                .deployments = deployments, .deployment_capacity = 1U,
+                .instances = instances, .instance_capacity = 1U,
+                .dependencies = dependencies, .dependency_capacity = 1U,
+                .activation_order = activation_order, .activation_capacity = 1U,
+                .modules = modules, .module_capacity = 1U
+            };
             dso_callback_thread worker_state[DSO_CALLBACK_THREADS] = {{0}};
             cmeta_thread_t workers[DSO_CALLBACK_THREADS] = {{0}};
             size_t worker_index;
@@ -109,16 +131,9 @@ spec("ACE 2.3 real Plugin DSO callback quiescence and stable host epoch")
                     &duplicate), SALTS_COMPONENT_PLUGIN_OK);
             }
 
-            check_equal(publish_host_generation(
-                &runtime, &published[round], host_generation),
-                SALTS_COMPONENT_PLUGIN_OK);
-            check_equal(salts_component_plugin_scope_acquire(
-                &runtime, &scope), SALTS_COMPONENT_PLUGIN_OK);
-            check_equal(salts_component_plugin_scope_generation_id(&scope),
-                        host_generation);
-
-            /* Real POSIX dlopen happens inside the *existing* Plugin
-             * loader. No second dlopen authority or native handle exists. */
+            /* Real POSIX dlopen happens inside Salts::Plugin, the single
+             * load/unload authority. A new ComponentProvider is resolved
+             * from the reloaded DSO on every generation N -> N+1. */
             check_equal(cmeta_plugin_registry_load(
                 &registry, TURBORAFT_ACE23_EPOCH_DSO_PATH, &plugin),
                 CMETA_PLUGIN_OK);
@@ -127,22 +142,44 @@ spec("ACE 2.3 real Plugin DSO callback quiescence and stable host epoch")
             prior_plugin_generation = plugin.generation;
             check_equal(cmeta_plugin_registry_start(
                 &registry, plugin), CMETA_PLUGIN_OK);
-            check_equal(cmeta_plugin_registry_acquire(
-                &registry, plugin, &lease, &manifest), CMETA_PLUGIN_OK);
-            check_not_null(manifest);
-            check_not_null(manifest->is_quiescent);
-            check_not_null(manifest->self);
+            check_equal(publish_host_generation(
+                &runtime, &published[round], host_generation,
+                &registry, plugin, &storage), SALTS_COMPONENT_PLUGIN_OK);
+            check_equal(published[round].module_count, (size_t)1U);
+            check_equal(published[round].deployment_count, (size_t)1U);
+            check_equal(salts_component_plugin_scope_acquire(
+                &runtime, &scope), SALTS_COMPONENT_PLUGIN_OK);
+            check_equal(salts_component_plugin_scope_generation_id(&scope),
+                        host_generation);
+            check_equal(salts_component_plugin_scope_find_service(
+                &scope, tr_ace23_dso_callback_interface(),
+                &service), SALTS_COMPONENT_PLUGIN_OK);
+            check_equal(tr_ace23_dso_callback_borrow_from_object(
+                service.object, service.interfaces, &callback), CMETA_OK);
+            check_true(tr_ace23_dso_callback_valid(&callback));
 
-            /* The loader-owned DSO static serial is 1 after *each real
-             * load*, proving that it resets across dlclose/dlopen. */
+            /* The sole long-lived module lease belongs to ComponentPlugin
+             * generation.module[0]. Any temporary Plugin query borrow is
+             * released BEFORE DSO callbacks run. */
+            check_equal(cmeta_plugin_registry_acquire(
+                &registry, plugin, &temporary, &manifest), CMETA_PLUGIN_OK);
+            check_not_null(manifest);
+            check_not_null(manifest->self);
             check_equal(manifest->version.patch, (uint32_t)1U);
             module = manifest->self;
-            /* Four independently scheduled OS threads enter plugin-owned
-             * callback code simultaneously under the ONE shared host
-             * lease. A proper stop/unload barrier must join all four. */
+            check_equal(cmeta_plugin_registry_release(
+                &registry, &temporary), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_get_lifecycle(
+                &registry, plugin, &info), CMETA_PLUGIN_OK);
+            check_equal(info.active_leases, (size_t)1U);
+            check_true(cmeta_plugin_lease_valid(modules[0].lease));
+            /* Four independently scheduled OS threads call the Component
+             * Interface vtable into this Plugin DSO. All four borrows are
+             * pinned by ONE ComponentPlugin generation-owned module lease.
+             * The vtable values are borrowed, not independent scopes. */
             for (worker_index = 0U; worker_index < DSO_CALLBACK_THREADS;
                  ++worker_index) {
-                worker_state[worker_index].manifest = manifest;
+                worker_state[worker_index].callback = callback;
                 check_equal(cmeta_thread_create(
                     &workers[worker_index], run_dso_callback,
                     &worker_state[worker_index]), SALTS_OK);
@@ -196,8 +233,9 @@ spec("ACE 2.3 real Plugin DSO callback quiescence and stable host epoch")
                         SALTS_COMPONENT_PLUGIN_OK);
             check_equal(salts_component_plugin_generation_drain(
                 &runtime, retired), SALTS_COMPONENT_PLUGIN_OK);
-            check_equal(cmeta_plugin_registry_release(
-                &registry, &lease), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_get_lifecycle(
+                &registry, plugin, &info), CMETA_PLUGIN_OK);
+            check_equal(info.active_leases, (size_t)0U);
             check_equal(cmeta_plugin_registry_poll_quiescent(
                 &registry, plugin, &quiet), CMETA_PLUGIN_OK);
             check_true(quiet);
