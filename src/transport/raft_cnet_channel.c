@@ -5,6 +5,7 @@
 
 #include <cmeta_error.h>
 #include <cmeta_buffer.h>
+#include <salts/thread.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +46,7 @@ struct tr_raft_cnet_channel {
     tr_raft_cnet_channel_status_t status;
     uint64_t first_outbound_message_id;
     uint64_t channel_instance; /* monotonic, not reused after terminal */
+    const void *owner_thread; /* immutable one CNet progress Owner token */
     unsigned callback_depth;
     size_t handshake_writes_pending; /* on_send accounts HELLO/ACK first */
     int bound;
@@ -360,6 +362,7 @@ int tr_raft_cnet_channel_create(
         return rc; /* terminal exhaustion; never reuse a generation */
     }
     channel->client = config->client;
+    channel->owner_thread = cmeta_thread_current_token();
     channel->identity = config->identity;
     channel->local = config->handshake;
     channel->on_payload = config->on_payload;
@@ -419,6 +422,8 @@ int tr_raft_cnet_channel_capture_reply_origin(
     if (out == NULL) return SALTS_EINVAL;
     *out = (tr_raft_transport_reply_origin_t){0};
     if (channel == NULL || group_id == 0U) return SALTS_EINVAL;
+    if (channel->owner_thread != cmeta_thread_current_token())
+        return SALTS_EPERM;
     if (channel->stopping || !channel->bound ||
         channel->status.terminal ||
         channel->status.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
@@ -450,6 +455,8 @@ int tr_raft_cnet_channel_send_chunk_completion(
 
     if (channel == NULL || completion == NULL)
         return SALTS_EINVAL;
+    if (channel->owner_thread != cmeta_thread_current_token())
+        return SALTS_EPERM;
     if (completion->operation != TR_RAFT_MULTICORE_RECEIVE_CHUNK ||
         completion->request_id == 0U ||
         completion->result != SALTS_OK ||
