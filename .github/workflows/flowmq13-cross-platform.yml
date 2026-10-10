@@ -141,6 +141,10 @@ jobs:
             -L cnet-snapshot-lifecycle --repeat until-fail:25 \
             --output-on-failure --no-tests=error \
             --output-junit flowmq13-snapshot-repeat.xml
+          # Print wire streaming counts, NOT actual Kqueue throughput.
+          ctest --test-dir .ci/build-flowmq13-macos-consumer \
+            -R '^turboraft[.]flowmq13[.]large_snapshot_stream$' \
+            --verbose --no-tests=error
 
       - name: Compiler cache report
         if: always()
@@ -271,6 +275,9 @@ jobs:
           rem 25 completely independent IOCP/TLS/Owner/WAL test processes.
           rem CTest repetition is not an automatic Raft settlement retry.
           ctest --test-dir .ci\build-flowmq13-windows-consumer -L cnet-snapshot-lifecycle --repeat until-fail:25 --output-on-failure --no-tests=error --output-junit flowmq13-snapshot-repeat.xml
+          if errorlevel 1 exit /b 1
+          rem Print wire stream counters, not actual IOCP throughput.
+          ctest --test-dir .ci\build-flowmq13-windows-consumer -R "turboraft[.]flowmq13[.]large_snapshot_stream" --verbose --no-tests=error
           if errorlevel 1 exit /b 1
 
       - name: Upload Windows conformance diagnostics
