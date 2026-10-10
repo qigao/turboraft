@@ -412,6 +412,18 @@ static int peer_case_run(int mode)
 
     if (mode == PEER_VALID || mode == PEER_STREAMS) {
         const size_t expected_server = mode == PEER_STREAMS ? 3U : 1U;
+        PEER_TRY(tr_raft_cnet_channel_get_status(f.client_channel, &cs));
+        PEER_TRY(tr_raft_cnet_channel_get_status(f.server_channel, &ss));
+        if (cs.payloads_admitted != expected_server ||
+            ss.payloads_admitted != 1U ||
+            cs.payloads_admitted != cs.payloads_completed +
+                cs.payloads_canceled + cs.payload_writes_pending ||
+            ss.payloads_admitted != ss.payloads_completed +
+                ss.payloads_canceled + ss.payload_writes_pending) {
+            result = SALTS_EPROTO;
+            error_stage = "live TLS logical-send credit conservation";
+            goto cleanup;
+        }
         if (cs.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
             ss.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
             f.client_sink.count != 1U || f.server_sink.count != expected_server ||
@@ -456,6 +468,29 @@ cleanup:
         if (result == SALTS_OK && close_result != SALTS_OK) {
             result = close_result;
             error_stage = "server stop";
+        }
+    }
+    /* Terminal callbacks, not socket-close requests, settle every locally
+     * admitted write. This includes DATA and SNAPSHOT in the TLS streams case,
+     * without interpreting local completion as remote fsync/delivery. */
+    if (f.client_channel != NULL && f.server_channel != NULL &&
+        f.client_open && f.server_open && result == SALTS_OK) {
+        tr_raft_cnet_channel_status_t end_client = {0};
+        tr_raft_cnet_channel_status_t end_server = {0};
+        int left = tr_raft_cnet_channel_get_status(
+            f.client_channel, &end_client);
+        int right = tr_raft_cnet_channel_get_status(
+            f.server_channel, &end_server);
+        if (left != SALTS_OK || right != SALTS_OK ||
+            !end_client.terminal || !end_server.terminal ||
+            end_client.payload_writes_pending != 0U ||
+            end_server.payload_writes_pending != 0U ||
+            end_client.payloads_admitted !=
+                end_client.payloads_completed + end_client.payloads_canceled ||
+            end_server.payloads_admitted !=
+                end_server.payloads_completed + end_server.payloads_canceled) {
+            result = SALTS_EPROTO;
+            error_stage = "CNet terminal write ledger must drain exactly once";
         }
     }
     if (f.client_channel != NULL) {
