@@ -40,6 +40,9 @@ typedef struct remote_probe {
     int wrong_payload;
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
     size_t snapshot_acks;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+    size_t snapshot_progress_acks;
+#endif
 #endif
 } remote_probe;
 
@@ -606,11 +609,23 @@ static int on_client_payload(void *user, const tr_raft_transport_payload_t *msg)
             ack->from != 2U || ack->to != 3U || ack->term != 3U ||
             ack->snapshot_index != 19U ||
             ack->snapshot_size != sizeof(bytes) ||
-            ack->next_offset != sizeof(bytes) || !ack->accepted ||
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+            (ack->next_offset != 12U &&
+             ack->next_offset != sizeof(bytes)) ||
+#else
+            ack->next_offset != sizeof(bytes) ||
+#endif
+            !ack->accepted ||
             memcmp(ack->snapshot_digest, digest, sizeof(digest)) != 0) {
             ++sink->wrong_payload;
             return SALTS_EPROTO;
         }
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+        if (ack->next_offset == 12U) {
+            ++sink->snapshot_progress_acks;
+            return SALTS_OK;
+        }
+#endif
         ++sink->snapshot_acks;
         return SALTS_OK;
     }
@@ -1462,9 +1477,12 @@ static int run_two_distinct_peers(int forge_node_three)
                         result = SALTS_EPROTO;
                         break;
                     }
-                    /* Send no progress ACK: this test specifically proves
-                     * the final positive receipt can only follow WAL fsync.
-                     * The final completion is the next FIFO Owner result. */
+                    /* Deliver a real progress ACK over the certified CNet
+                     * Channel. Its bounded offset advances to 12 only, and
+                     * the Owner proved durable_or_installed=false.
+                     * Neither completion nor wire ACK is a WAL fsync proof. */
+                    TRY_STAGE(tr_raft_cnet_channel_send_chunk_completion(
+                        binding->channel, &chunk_completion));
                     observed = take_owner_completion(&f, i, &chunk_completion);
                 }
 #endif
@@ -1594,11 +1612,30 @@ static int run_two_distinct_peers(int forge_node_three)
 
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+    if (!forge_node_three && result == SALTS_OK) {
+        /* A failed final WAL write does not negate the accepted first
+         * 12-byte progress: Node3 must receive precisely that partial ACK,
+         * while no full-size ACK can be generated or delivered. */
+        for (round = 0U; round < MAX_PROGRESS &&
+             f.clients_received[1].snapshot_progress_acks == 0U; ++round) {
+            TRY_STAGE(cnet_client_poll(&f.server, 1U, &events));
+            TRY_STAGE(cnet_client_poll(&f.clients, 1U, &events));
+        }
+        if (f.clients_received[1].snapshot_progress_acks != 1U ||
+            f.clients_received[1].snapshot_acks != 0U ||
+            f.clients_received[1].wrong_payload != 0U) {
+            failed_stage = "failed final WAL publish must keep only progress ACK";
+            result = SALTS_EPROTO;
+        }
+    }
+#else
     if (!forge_node_three && result == SALTS_OK &&
         f.clients_received[1].snapshot_acks != 0U) {
         failed_stage = "failed snapshot unexpectedly ACKed before close";
         result = SALTS_EPROTO;
     }
+#endif
 #else
     if (!forge_node_three && result == SALTS_OK) {
         /* The receiver reached disk before CNet admitted this ACK. Poll
@@ -1609,6 +1646,9 @@ static int run_two_distinct_peers(int forge_node_three)
             TRY_STAGE(cnet_client_poll(&f.clients, 1U, &events));
         }
         if (f.clients_received[1].snapshot_acks != 1U ||
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+            f.clients_received[1].snapshot_progress_acks != 1U ||
+#endif
             f.clients_received[1].wrong_payload != 0) {
             failed_stage = "certified Node3 did not receive exactly one durable Snapshot ACK";
             result = SALTS_EPROTO;
