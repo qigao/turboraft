@@ -1997,6 +1997,15 @@ static int run_two_distinct_peers(int forge_node_three)
         failed_stage = "forgery must have no delivered payload";
     }
 
+#ifdef TURBORAFT_TEST_TLS_GROUP_PRESSURE
+    if (!forge_node_three && result == SALTS_OK) {
+        result = qualify_two_certified_peer_group_pressure(&f, &events);
+        if (result != SALTS_OK)
+            failed_stage = "real Node3 Group103 capacity must not poison Node1";
+        goto cleanup;
+    }
+#endif
+
     /* The first actual verified-TLS on_payload attempted to stop its own
      * CNet progress Owner. It must have been rejected *inside* the callback,
      * while normal delivery and independent Raft Owner completion continue. */
@@ -2486,6 +2495,15 @@ spec("ACE 2.3 real mTLS Snapshot to WAL Group Owner and durable reply")
 #endif
 #endif
 #else
+#ifdef TURBORAFT_TEST_TLS_GROUP_PRESSURE
+spec("ACE 2.3 real mTLS Group103 exhaustion never poisons sibling Group101")
+{
+    it("closes only overloaded certified Node3, preserves Node1, and returns all group credits")
+    {
+        check_equal(run_two_distinct_peers(0), SALTS_OK);
+    }
+}
+#else
 spec("ACE 2.3 two real distinct TLS-certified Raft Node IDs")
 {
     it("simultaneously admits Node1 and Node3 certificates and isolates bidirectional Raft groups")
@@ -2498,6 +2516,7 @@ spec("ACE 2.3 two real distinct TLS-certified Raft Node IDs")
         check_equal(run_two_distinct_peers(1), SALTS_OK);
     }
 }
+#endif
 #endif
 
 #endif /* !TURBORAFT_TEST_PROCESS_ROLE */
