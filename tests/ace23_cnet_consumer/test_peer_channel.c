@@ -1373,9 +1373,6 @@ static int peer_case_run(int mode)
     }
 
 cleanup:
-    if (dso.ab_publication)
-        atomic_store_explicit(
-            &dso.release_b, true, memory_order_release);
     if (dso.controller_live) {
         const int joined = cmeta_thread_join(&dso.controller);
         cmeta_thread_destroy(&dso.controller);
@@ -1392,8 +1389,7 @@ cleanup:
                dso.unload_b_before_drain != CMETA_PLUGIN_BUSY ||
                !atomic_load_explicit(
                    &dso.b_ready, memory_order_acquire) ||
-               !dso.worker_b_result ||
-               dso.worker_b_live)) ||
+               dso.network_callbacks_b != 1U)) ||
              dso.drain_while_callback != SALTS_COMPONENT_PLUGIN_BUSY ||
              !dso.controller_closed_publication ||
              dso.stop_result != CMETA_PLUGIN_OK ||
@@ -1406,6 +1402,10 @@ cleanup:
         (void)tr_raft_cnet_channel_stop(f.client_channel);
     if (f.server_channel != NULL)
         (void)tr_raft_cnet_channel_stop(f.server_channel);
+    if (f.client_channel_b != NULL)
+        (void)tr_raft_cnet_channel_stop(f.client_channel_b);
+    if (f.server_channel_b != NULL)
+        (void)tr_raft_cnet_channel_stop(f.server_channel_b);
     if (f.client_open) {
         int close_result = cnet_client_stop(&f.client, 2000U);
         if (close_result != SALTS_OK) safe_to_unload = 0;
@@ -1466,6 +1466,27 @@ cleanup:
             error_stage = "SG shutdown lost or double-settled logical writes";
         }
     }
+    if (mode == PEER_DSO_AB_PUBLICATION &&
+        f.client_channel_b != NULL && f.server_channel_b != NULL &&
+        result == SALTS_OK) {
+        tr_raft_cnet_channel_status_t end_b_client = {0};
+        tr_raft_cnet_channel_status_t end_b_server = {0};
+        if (tr_raft_cnet_channel_get_status(
+                f.client_channel_b, &end_b_client) != SALTS_OK ||
+            tr_raft_cnet_channel_get_status(
+                f.server_channel_b, &end_b_server) != SALTS_OK ||
+            !end_b_client.terminal || !end_b_server.terminal ||
+            end_b_client.payload_writes_pending != 0U ||
+            end_b_server.payload_writes_pending != 0U ||
+            end_b_client.payloads_admitted !=
+                end_b_client.payloads_completed + end_b_client.payloads_canceled ||
+            end_b_server.payloads_admitted !=
+                end_b_server.payloads_completed + end_b_server.payloads_canceled) {
+            safe_to_unload = 0;
+            result = SALTS_EPROTO;
+            error_stage = "Provider B did not fully drain both TLS terminals";
+        }
+    }
     if (f.client_channel != NULL) {
         int close_result = tr_raft_cnet_channel_destroy(f.client_channel);
         if (close_result != SALTS_OK) safe_to_unload = 0;
@@ -1474,6 +1495,18 @@ cleanup:
     }
     if (f.server_channel != NULL) {
         int close_result = tr_raft_cnet_channel_destroy(f.server_channel);
+        if (close_result != SALTS_OK) safe_to_unload = 0;
+        if (result == SALTS_OK && close_result != SALTS_OK)
+            result = close_result;
+    }
+    if (f.client_channel_b != NULL) {
+        int close_result = tr_raft_cnet_channel_destroy(f.client_channel_b);
+        if (close_result != SALTS_OK) safe_to_unload = 0;
+        if (result == SALTS_OK && close_result != SALTS_OK)
+            result = close_result;
+    }
+    if (f.server_channel_b != NULL) {
+        int close_result = tr_raft_cnet_channel_destroy(f.server_channel_b);
         if (close_result != SALTS_OK) safe_to_unload = 0;
         if (result == SALTS_OK && close_result != SALTS_OK)
             result = close_result;
@@ -1534,7 +1567,7 @@ spec("ACE 2.3 CNet owner-bound authenticated Raft channel")
         check_equal(peer_case_run(PEER_DSO_CALLBACK), SALTS_OK);
     }
 
-    it("publishes a different DSO B while certified CNet A callback is in flight")
+    it("hot-publishes separate A and B DSOs onto two certified TLS Channels")
     {
         check_equal(peer_case_run(PEER_DSO_AB_PUBLICATION), SALTS_OK);
     }
