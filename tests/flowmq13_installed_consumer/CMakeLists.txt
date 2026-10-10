@@ -94,3 +94,21 @@ add_test(NAME turboraft.flowmq13.cnet_snapshot_fault
          COMMAND turboraft_flowmq13_cnet_snapshot_fault)
 set_tests_properties(turboraft.flowmq13.cnet_snapshot_fault
                      PROPERTIES TIMEOUT 55)
+
+# Two genuine TLS SNAPSHOT_CHUNK frames (12+12 bytes) share one SHA-256:
+# the first Group103 completion may acknowledge forward progress but must
+# NEVER claim installed/durable; the second must finish the real WAL publish
+# before the single positive network ACK. Separate from the EIO fault case.
+add_executable(turboraft_flowmq13_cnet_segmented_snapshot
+               ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+target_compile_definitions(turboraft_flowmq13_cnet_segmented_snapshot PRIVATE
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT=1
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_link_libraries(turboraft_flowmq13_cnet_segmented_snapshot PRIVATE
+    TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+    TurboRaft::WalStorage Salts::Platform Salts::TinyTest)
+add_test(NAME turboraft.flowmq13.cnet_segmented_snapshot
+         COMMAND turboraft_flowmq13_cnet_segmented_snapshot)
+set_tests_properties(turboraft.flowmq13.cnet_segmented_snapshot
+                     PROPERTIES TIMEOUT 55)
