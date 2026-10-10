@@ -22,6 +22,7 @@ typedef struct managed_probe {
     tr_raft_node_id_t from;
     tr_raft_node_id_t to;
     size_t data_received;
+    size_t ack_received;
 } managed_probe;
 
 typedef struct managed_fixture {
@@ -124,6 +125,17 @@ static int capture_payload(void *context,
             ++probe->data_received;
             return SALTS_OK;
         }
+    }
+    if (payload != NULL &&
+        payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_ACK &&
+        payload->group_id == 43U &&
+        payload->data.data_ack.from == probe->from &&
+        payload->data.data_ack.to == probe->to &&
+        payload->data.data_ack.stream_id == 99U &&
+        payload->data.data_ack.accepted &&
+        !payload->data.data_ack.durable) {
+        ++probe->ack_received;
+        return SALTS_OK;
     }
     if (payload == NULL ||
         payload->kind != TR_RAFT_WIRE_PAYLOAD_RAFT ||
@@ -438,11 +450,37 @@ static void ignore_third_state(void *user, cnet_connection connection,
     (void)error;
 }
 
+/* A value-only synthetic *partial* ACK tests transport fencing; real
+ * receiver fsync/durability is qualified separately in storage CTests.
+ * This fixture never fabricates a durable=true receipt. */
+static tr_raft_multicore_completion_t partial_ack(
+    const tr_raft_transport_reply_origin_t *origin)
+{
+    tr_raft_multicore_completion_t completion = {0};
+    completion.request_id = UINT64_C(88);
+    completion.operation = TR_RAFT_MULTICORE_RECEIVE_CHUNK;
+    completion.result = SALTS_OK;
+    completion.reply_origin = *origin;
+    completion.value.chunk.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+    completion.value.chunk.ack_valid = true;
+    completion.value.chunk.durable_or_installed = false;
+    completion.value.chunk.ack.data.from = 1U;
+    completion.value.chunk.ack.data.to = 2U;
+    completion.value.chunk.ack.data.term = 3U;
+    completion.value.chunk.ack.data.stream_id = 99U;
+    completion.value.chunk.ack.data.stream_size = 256U;
+    completion.value.chunk.ack.data.next_offset = 128U;
+    completion.value.chunk.ack.data.accepted = true;
+    return completion;
+}
+
 static int test_bounded_multi_link(void)
 {
     managed_fixture f = {0};
     tr_raft_cnet_managed_peer_status_t a = {0}, b = {0};
     cnet_manager_snapshot slots = {0};
+    tr_raft_transport_reply_origin_t old_origin = {0}, fresh_origin = {0};
+    tr_raft_multicore_completion_t late_ack = {0};
     const uint64_t began = cmeta_monotonic_ms();
     unsigned i;
     int result;
@@ -509,6 +547,18 @@ static int test_bounded_multi_link(void)
         goto done;
     }
 
+    CHECK_TRY(tr_raft_cnet_managed_peer_capture_reply_origin(
+        f.peers[0], 43U, &old_origin));
+    if (old_origin.channel_instance == 0U ||
+        old_origin.authenticated_peer_node_id != 2U ||
+        old_origin.group_id != 43U ||
+        old_origin.connection_slot == 0U ||
+        old_origin.connection_generation == 0U) {
+        result = SALTS_EPROTO;
+        failed = "authenticated old Channel origin is not a unique value";
+        goto done;
+    }
+    late_ack = partial_ack(&old_origin);
     CHECK_TRY(send_heartbeat(&f, 0U));
     CHECK_TRY(send_heartbeat(&f, 1U));
     for (i = 0U; i < PROGRESS_BUDGET; ++i) {
@@ -662,6 +712,53 @@ static int test_bounded_multi_link(void)
         }
     }
 
+    CHECK_TRY(tr_raft_cnet_managed_peer_capture_reply_origin(
+        f.peers[0], 43U, &fresh_origin));
+    if (fresh_origin.channel_instance == 0U ||
+        fresh_origin.channel_instance == old_origin.channel_instance ||
+        fresh_origin.authenticated_peer_node_id !=
+            old_origin.authenticated_peer_node_id) {
+        result = SALTS_EPROTO;
+        failed = "reconnected Channel did not fence prior generation";
+        goto done;
+    }
+    /* A finished Group operation from N must NOT be routed via ManagedDial
+     * or another physical peer after N+1 becomes READY. Denial must consume
+     * no new outbound send credit and must not contact the remote peer. */
+    if (tr_raft_cnet_managed_peer_send_chunk_completion(
+            f.peers[0], &late_ack) != SALTS_ECANCELED ||
+        tr_raft_cnet_managed_peer_send_chunk_completion(
+            f.peers[1], &late_ack) != SALTS_ECANCELED) {
+        result = SALTS_EPROTO;
+        failed = "stale or cross-peer ACK was admitted";
+        goto done;
+    }
+    CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
+    if (a.channel.payloads_admitted != 0U ||
+        a.channel.payload_writes_pending != 0U ||
+        f.server_probes[0].ack_received != 0U) {
+        result = SALTS_EPROTO;
+        failed = "stale ACK changed fresh-generation send accounting";
+        goto done;
+    }
+    {
+        const tr_raft_multicore_completion_t current =
+            partial_ack(&fresh_origin);
+        CHECK_TRY(tr_raft_cnet_managed_peer_send_chunk_completion(
+            f.peers[0], &current));
+    }
+    for (i = 0U; i < PROGRESS_BUDGET; ++i) {
+        CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
+        if (f.server_probes[0].ack_received == 1U) break;
+    }
+    if (i == PROGRESS_BUDGET ||
+        f.server_probes[0].ack_received != 1U ||
+        f.server_probes[1].ack_received != 0U) {
+        result = SALTS_EPROTO;
+        failed = "only current verified Channel may deliver partial ACK";
+        goto done;
+    }
+
     CHECK_TRY(send_heartbeat(&f, 0U));
     for (i = 0U; i < PROGRESS_BUDGET; ++i) {
         CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
@@ -677,7 +774,7 @@ static int test_bounded_multi_link(void)
         for (i = 0U; i < PROGRESS_BUDGET; ++i) {
             CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
             CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
-            if (a.channel.payloads_completed == 1U) break;
+            if (a.channel.payloads_completed == 2U) break;
         }
         if (i == PROGRESS_BUDGET) {
             result = SALTS_ETIMEDOUT;
@@ -685,7 +782,7 @@ static int test_bounded_multi_link(void)
             goto done;
         }
         CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
-        if (a.channel.payloads_admitted != 1U ||
+        if (a.channel.payloads_admitted != 2U ||
             a.channel.payloads_admitted !=
                 a.channel.payloads_completed + a.channel.payloads_canceled +
                 a.channel.payload_writes_pending) {
