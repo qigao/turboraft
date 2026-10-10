@@ -200,3 +200,46 @@ add_test(NAME turboraft.flowmq13.cnet_midstream_reconnect
 set_tests_properties(turboraft.flowmq13.cnet_midstream_reconnect
                      PROPERTIES TIMEOUT 65
                                 LABELS "cnet-snapshot-lifecycle")
+
+
+# Linux-only whole-process crash and fresh verified mTLS peer/WAL recovery.
+# The crash writer and recovery writer share only an OS file path passed by
+# a separate fork+exec controller. No CNet/Owner/Component runtime handle
+# is persisted; exact published SDK targets are linked by BOTH workers.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(turboraft_flowmq13_cnet_crash_writer
+                 ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+  target_compile_definitions(turboraft_flowmq13_cnet_crash_writer PRIVATE
+      TURBORAFT_TEST_PROCESS_ROLE=1
+      TURBORAFT_TEST_PROCESS_CRASH_WRITER=1
+      TURBORAFT_TEST_DURABLE_NET_SNAPSHOT=1
+      TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED=1
+      TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT=1
+      TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT=1
+      TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+  target_link_libraries(turboraft_flowmq13_cnet_crash_writer PRIVATE
+      TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+      TurboRaft::WalStorage Salts::Platform)
+
+  add_executable(turboraft_flowmq13_cnet_recover_writer
+                 ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+  target_compile_definitions(turboraft_flowmq13_cnet_recover_writer PRIVATE
+      TURBORAFT_TEST_PROCESS_ROLE=1
+      TURBORAFT_TEST_PROCESS_REOPEN=1
+      TURBORAFT_TEST_DURABLE_NET_SNAPSHOT=1
+      TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED=1
+      TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+  target_link_libraries(turboraft_flowmq13_cnet_recover_writer PRIVATE
+      TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+      TurboRaft::WalStorage Salts::Platform)
+
+  add_executable(turboraft_flowmq13_cnet_process_restart
+                 test_cnet_process_restart.c)
+  add_test(NAME turboraft.flowmq13.cnet_process_restart
+           COMMAND turboraft_flowmq13_cnet_process_restart
+                   "$<TARGET_FILE:turboraft_flowmq13_cnet_crash_writer>"
+                   "$<TARGET_FILE:turboraft_flowmq13_cnet_recover_writer>")
+  set_tests_properties(turboraft.flowmq13.cnet_process_restart
+                       PROPERTIES TIMEOUT 65
+                                  LABELS "cnet-process-crash;wal-recovery")
+endif()
