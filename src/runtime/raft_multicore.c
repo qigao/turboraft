@@ -424,8 +424,7 @@ int tr_raft_multicore_submit_owned_chunk(
         (reply_origin->channel_instance == 0U ||
          reply_origin->authenticated_peer_node_id == 0U ||
          reply_origin->group_id != payload->group_id ||
-         reply_origin->connection_slot == 0U ||
-         reply_origin->connection_generation == 0U ||
+         reply_origin->connection_token == 0U ||
          reply_origin->authenticated_peer_node_id !=
              (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK
                   ? payload->data.data_chunk.from
