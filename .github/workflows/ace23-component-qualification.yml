@@ -185,7 +185,7 @@ jobs:
       # Only TurboRaft CNet/Multicore and the standalone test consumers are
       # sanitizer-instrumented here. Published Salts SDK RC libraries remain
       # immutable release binaries; this is NOT whole-stack sanitizer parity.
-      - name: ASan and UBSan for installed Raft Owner and real TLS callbacks
+      - name: ASan and UBSan for Raft Owner, TLS Channel and ManagedPeer
         shell: bash
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
@@ -221,7 +221,68 @@ jobs:
           cmake --build .ci/build-ace23-cnet-asan-consumer --parallel 2
           ctest --test-dir .ci/build-ace23-cnet-asan-consumer \
             --output-on-failure --output-junit asan-ubsan-results.xml \
-            -R '^turboraft[.]ace23_(owner_ingress|distinct_peer_tls)' --no-tests=error
+            -R '^turboraft[.]ace23_(owner_ingress|distinct_peer_tls|peer_channel|managed_peer)
+
+
+      # The owned Raft mailbox and standalone OS-thread fixture are built
+      # with TSan. The exact published Salts 2.3 RC binaries are unchanged,
+      # so this is a scoped TurboRaft race check, not whole-SDK TSan parity.
+      - name: TSan for independent Raft Owner MPSC and stop races
+        shell: bash
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          tsan_flags='-fsanitize=thread -fno-omit-frame-pointer'
+          cmake -S . -B .ci/build-ace23-owner-tsan -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DENABLE_SANITIZER_THREAD=ON \
+            -DTURBORAFT_BUILD_PROFILE=cnet-dev \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/ace23-owner-tsan"
+          cmake --build .ci/build-ace23-owner-tsan --parallel 2
+          cmake --install .ci/build-ace23-owner-tsan
+          export TURBORAFT_ROOT="$GITHUB_WORKSPACE/stage/ace23-owner-tsan"
+          cmake -S tests/ace23_cnet_consumer \
+            -B .ci/build-ace23-owner-tsan-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS="$tsan_flags" \
+            -DCMAKE_CXX_FLAGS="$tsan_flags" \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=thread' \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build-ace23-owner-tsan-consumer --parallel 2
+          ctest --test-dir .ci/build-ace23-owner-tsan-consumer \
+            --output-on-failure --output-junit tsan-results.xml \
+            -R '^turboraft[.]ace23_owner_ingress' --no-tests=error
+
+      - name: Report ccache statistics
+        if: always()
+        run: ccache --show-stats
+
+      - name: Upload independent consumer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turboraft-ace23-component-consumers
+          path: |
+            .ci/build-ace23-consumer/Testing/Temporary
+            .ci/build-ace23-consumer/component-results.xml
+            .ci/build-ace23-cnet-consumer/Testing/Temporary
+            .ci/build-ace23-cnet-consumer/cnet-results.xml
+            .ci/build-ace23-cnet-asan-consumer/Testing/Temporary
+            .ci/build-ace23-cnet-asan-consumer/asan-ubsan-results.xml
+            .ci/build-ace23-owner-tsan-consumer/Testing/Temporary
+            .ci/build-ace23-owner-tsan-consumer/tsan-results.xml
+          if-no-files-found: ignore
+ --no-tests=error
 
 
       # The owned Raft mailbox and standalone OS-thread fixture are built
