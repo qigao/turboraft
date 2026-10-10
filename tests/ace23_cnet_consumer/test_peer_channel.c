@@ -87,6 +87,99 @@ typedef struct peer_dso_harness {
     atomic_bool release_b;
 } peer_dso_harness;
 
+static void peer_dso_b_callback_thread(void *context)
+{
+    peer_dso_harness *dso = (peer_dso_harness *)context;
+    dso->worker_b_result =
+        tr_ace23_dso_callback_invoke(&dso->callback_b) == 1;
+}
+
+static int peer_dso_publish_b(peer_dso_harness *dso)
+{
+    const salts_component_plugin_generation_storage storage = {
+        .deployments = dso->deployments_b, .deployment_capacity = 1U,
+        .instances = dso->instances_b, .instance_capacity = 1U,
+        .dependencies = dso->dependencies_b, .dependency_capacity = 1U,
+        .activation_order = dso->activation_order_b, .activation_capacity = 1U,
+        .modules = dso->modules_b, .module_capacity = 1U
+    };
+    const salts_component_plugin_source source = {
+        .plugin = {0},
+        .export_id = "turboraft.ace23.dso-component"
+    };
+    salts_component_plugin_source selected = source;
+    salts_component_plugin_generation *previous = NULL;
+    salts_component_service service = {0};
+    cmeta_plugin_lease query = {0};
+    const cmeta_plugin_manifest *manifest = NULL;
+    cmeta_plugin_lifecycle_info info = {0};
+    const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+
+    if (cmeta_plugin_registry_load(
+            &dso->registry, TURBORAFT_ACE23_EPOCH_DSO_B_PATH,
+            &dso->plugin_b) != CMETA_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->loaded_b = 1;
+    if (cmeta_plugin_registry_start(
+            &dso->registry, dso->plugin_b) != CMETA_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->started_b = 1;
+    selected.plugin = dso->plugin_b;
+    if (salts_component_plugin_generation_build(
+            &dso->generation_b, UINT64_C(90010002), &dso->registry,
+            &storage, NULL, 0U, &selected, 1U, NULL, 0U) !=
+        SALTS_COMPONENT_PLUGIN_OK)
+        return SALTS_EPROTO;
+    if (salts_component_plugin_runtime_publish(
+            &dso->host, &dso->generation_b, &previous) !=
+            SALTS_COMPONENT_PLUGIN_OK ||
+        previous != &dso->generation ||
+        dso->generation.state != SALTS_COMPONENT_PLUGIN_GENERATION_DRAINING)
+        return SALTS_EPROTO;
+    dso->published_b = 1;
+    if (salts_component_plugin_scope_acquire(
+            &dso->host, &dso->scope_b) != SALTS_COMPONENT_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->scope_b_live = 1;
+    if (salts_component_plugin_scope_generation_id(&dso->scope_b) !=
+            UINT64_C(90010002) ||
+        salts_component_plugin_scope_find_service(
+            &dso->scope_b, tr_ace23_dso_callback_interface(), &service) !=
+            SALTS_COMPONENT_PLUGIN_OK)
+        return SALTS_EPROTO;
+    if (tr_ace23_dso_callback_borrow_from_object(
+            service.object, service.interfaces, &dso->callback_b) != CMETA_OK ||
+        !tr_ace23_dso_callback_valid(&dso->callback_b))
+        return SALTS_EPROTO;
+    if (cmeta_plugin_registry_acquire(
+            &dso->registry, dso->plugin_b, &query, &manifest) != CMETA_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->module_b = (const tr_ace23_dso_callback_state *)manifest->self;
+    if (cmeta_plugin_registry_release(
+            &dso->registry, &query) != CMETA_PLUGIN_OK)
+        return SALTS_EPROTO;
+    if (dso->module_b == NULL ||
+        cmeta_plugin_registry_get_lifecycle(
+            &dso->registry, dso->plugin_b, &info) != CMETA_PLUGIN_OK ||
+        info.active_leases != 1U ||
+        !cmeta_plugin_lease_valid(dso->modules_b[0].lease))
+        return SALTS_EPROTO;
+    /* B executes from its OWN provider image while the original A
+     * callback still borrows its own distinct module/scope. */
+    if (cmeta_thread_create(
+            &dso->worker_b, peer_dso_b_callback_thread,
+            dso) != SALTS_OK)
+        return SALTS_EPROTO;
+    dso->worker_b_live = 1;
+    while (atomic_load_explicit(
+               &dso->module_b->callback_entered, memory_order_acquire) == 0U) {
+        if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+        cmeta_thread_yield();
+    }
+    atomic_store_explicit(&dso->b_ready, true, memory_order_release);
+    return SALTS_OK;
+}
+
 static void peer_dso_controller(void *context)
 {
     peer_dso_harness *dso = (peer_dso_harness *)context;
