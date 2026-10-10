@@ -15,6 +15,11 @@ on:
       - "src/transport/raft_cnet_peer.c"
       - "tests/core/test_raft_cnet_peer.c"
       - "tests/ace23_cnet_consumer/**"
+      - "tests/ace23_storage_consumer/**"
+      - "include/turboraft/raft_multicore_chunk_receivers.h"
+      - "src/runtime/raft_multicore_chunk_receivers.c"
+      - "src/snapshot/raft_snapshot_receiver.c"
+      - "src/stream/raft_data_stream.c"
       - "src/runtime/raft_runtime.c"
       - "src/runtime/raft_multicore_ingress.c"
       - "include/turboraft/raft_multicore_ingress.h"
@@ -216,6 +221,47 @@ jobs:
             --output-on-failure --output-junit storage-results.xml \
             --no-tests=error
 
+      # The durable ACK adapter and real Snapshot/Data receivers are
+      # instrumented here. Exact published Salts SDK libraries remain
+      # immutable prerelease binaries (not whole-stack ASan/UBSan).
+      - name: ASan UBSan for real Snapshot Data receiver ACK and fsync
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          sanitize_flags='-fsanitize=address,undefined -fno-omit-frame-pointer'
+          cmake -S . -B .ci/build-ace23-storage-asan -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=ON \
+            -DTURBORAFT_BUILD_PROFILE=storage-dev \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/ace23-storage-asan"
+          cmake --build .ci/build-ace23-storage-asan --parallel 2
+          cmake --install .ci/build-ace23-storage-asan
+          export TURBORAFT_ROOT="$GITHUB_WORKSPACE/stage/ace23-storage-asan"
+          cmake -S tests/ace23_storage_consumer \
+            -B .ci/build-ace23-storage-asan-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS="$sanitize_flags" \
+            -DCMAKE_CXX_FLAGS="$sanitize_flags" \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build-ace23-storage-asan-consumer --parallel 2
+          ctest --test-dir .ci/build-ace23-storage-asan-consumer \
+            --output-on-failure --output-junit storage-asan-results.xml \
+            --no-tests=error
+
       # Only TurboRaft CNet/Multicore and the standalone test consumers are
       # sanitizer-instrumented here. Published Salts SDK RC libraries remain
       # immutable release binaries; this is NOT whole-stack sanitizer parity.
@@ -313,6 +359,8 @@ jobs:
             .ci/build-ace23-cnet-consumer/cnet-results.xml
             .ci/build-ace23-storage-consumer/Testing/Temporary
             .ci/build-ace23-storage-consumer/storage-results.xml
+            .ci/build-ace23-storage-asan-consumer/Testing/Temporary
+            .ci/build-ace23-storage-asan-consumer/storage-asan-results.xml
             .ci/build-ace23-cnet-asan-consumer/Testing/Temporary
             .ci/build-ace23-cnet-asan-consumer/asan-ubsan-results.xml
             .ci/build-ace23-owner-tsan-consumer/Testing/Temporary
