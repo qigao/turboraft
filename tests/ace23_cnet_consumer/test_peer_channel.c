@@ -1393,10 +1393,17 @@ static int peer_case_run(int mode)
                 }
             }
         }
-        if (result == SALTS_OK &&
-            tr_raft_cnet_channel_destroy(f.client_channel) != SALTS_EBUSY) {
-            result = SALTS_EPROTO;
-            error_stage = "destroy before terminal";
+        if (result == SALTS_OK) {
+            const int premature =
+                tr_raft_cnet_channel_destroy(f.client_channel);
+            if (premature != SALTS_EBUSY) {
+                /* Unexpected OK already released that Channel; never
+                 * touch the stale pointer in failure cleanup. */
+                if (premature == SALTS_OK) f.client_channel = NULL;
+                result = SALTS_EPROTO;
+                error_stage = "destroy before terminal";
+                goto cleanup;
+            }
         }
         if (result == SALTS_OK && mode == PEER_DSO_AB_PUBLICATION) {
             cmeta_plugin_lifecycle_info b_lifecycle = {0};
