@@ -10,6 +10,7 @@
 int tr_raft_multicore_submit_owned_chunk(
     tr_raft_multicore_t *runtime,
     const tr_raft_transport_payload_t *borrowed,
-    uint64_t request_id);
+    uint64_t request_id,
+    const tr_raft_transport_reply_origin_t *reply_origin);
 
 #endif
