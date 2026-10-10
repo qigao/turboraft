@@ -1398,6 +1398,175 @@ static int peer_case_run(int mode)
             result = SALTS_EPROTO;
             error_stage = "destroy before terminal";
         }
+        if (result == SALTS_OK && mode == PEER_DSO_AB_PUBLICATION) {
+            cmeta_plugin_lifecycle_info b_lifecycle = {0};
+            tr_raft_transport_payload_t request = {0}, response = {0};
+
+            /* Controller has already closed B publication while its first
+             * on_payload was executing. Releasing that callback MUST NOT
+             * stop B: the Plugin and both B TLS Channels remain ACTIVE. */
+            if (dso.controller_live) {
+                const int joined = cmeta_thread_join(&dso.controller);
+                cmeta_thread_destroy(&dso.controller);
+                dso.controller_live = 0;
+                if (joined != SALTS_OK ||
+                    dso.controller_result != SALTS_OK ||
+                    dso.unload_while_callback != CMETA_PLUGIN_BUSY ||
+                    dso.stop_result != CMETA_PLUGIN_OK ||
+                    dso.unload_after_stop != CMETA_PLUGIN_BUSY ||
+                    dso.close_while_callback != SALTS_COMPONENT_PLUGIN_OK ||
+                    dso.retired_by_controller != &dso.generation_b ||
+                    dso.drain_while_callback != SALTS_COMPONENT_PLUGIN_BUSY ||
+                    dso.drain_a_while_b_published !=
+                        SALTS_COMPONENT_PLUGIN_BUSY ||
+                    dso.unload_b_before_drain != CMETA_PLUGIN_BUSY ||
+                    !dso.controller_closed_publication) {
+                    result = SALTS_EPROTO;
+                    error_stage = "A/B publication controller lifetime gate";
+                    goto cleanup;
+                }
+            }
+
+            /* CNet Client is shared with B: close only the OLD A
+             * connection pair, NOT cnet_client_stop(). Poll the same
+             * original Owner until both A terminal callbacks have
+             * actually drained and all logical send credits settled. */
+            PEER_TRY(tr_raft_cnet_channel_stop(f.client_channel));
+            PEER_TRY(tr_raft_cnet_channel_stop(f.server_channel));
+            for (iteration = 0U; iteration < 2000U; ++iteration) {
+                PEER_TRY(cnet_client_poll(&f.client, 1U, &events));
+                PEER_TRY(cnet_client_poll(&f.server, 1U, &events));
+                PEER_TRY(tr_raft_cnet_channel_get_status(
+                    f.client_channel, &cs));
+                PEER_TRY(tr_raft_cnet_channel_get_status(
+                    f.server_channel, &ss));
+                if (cs.terminal && ss.terminal) break;
+            }
+            if (iteration == 2000U || !cs.terminal || !ss.terminal ||
+                cs.payload_writes_pending != 0U ||
+                ss.payload_writes_pending != 0U ||
+                cs.payloads_admitted !=
+                    cs.payloads_completed + cs.payloads_canceled ||
+                ss.payloads_admitted !=
+                    ss.payloads_completed + ss.payloads_canceled) {
+                result = SALTS_EPROTO;
+                error_stage = "A callback/SG terminal barrier with B still live";
+                goto cleanup;
+            }
+            PEER_TRY(tr_raft_cnet_channel_get_status(
+                f.client_channel_b, &cs_b));
+            PEER_TRY(tr_raft_cnet_channel_get_status(
+                f.server_channel_b, &ss_b));
+            if (cs_b.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+                ss_b.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+                cs_b.terminal || ss_b.terminal) {
+                result = SALTS_EPROTO;
+                error_stage = "A close unexpectedly terminated provider B TLS";
+                goto cleanup;
+            }
+            PEER_TRY(tr_raft_cnet_channel_destroy(f.client_channel));
+            f.client_channel = NULL;
+            PEER_TRY(tr_raft_cnet_channel_destroy(f.server_channel));
+            f.server_channel = NULL;
+            PEER_TRY(peer_dso_unload_a(&dso)); /* actual A dlclose */
+
+            /* Both B Channels MUST remain ACTIVE AFTER the old provider
+             * image is actually unmapped. A's old ACK ticket must still
+             * be rejected on B without taking a CNet send credit. */
+            PEER_TRY(tr_raft_cnet_channel_get_status(
+                f.client_channel_b, &cs_b));
+            PEER_TRY(tr_raft_cnet_channel_get_status(
+                f.server_channel_b, &ss_b));
+            if (cs_b.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+                ss_b.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+                cs_b.terminal || ss_b.terminal ||
+                dso.loaded ||
+                cmeta_plugin_registry_get_lifecycle(
+                    &dso.registry, dso.plugin_b, &b_lifecycle) !=
+                    CMETA_PLUGIN_OK ||
+                b_lifecycle.state != CMETA_PLUGIN_LIFECYCLE_STARTED ||
+                b_lifecycle.active_leases != 1U) {
+                result = SALTS_EPROTO;
+                error_stage = "B TLS/provider not ACTIVE after actual A dlclose";
+                goto cleanup;
+            }
+            {
+                tr_raft_multicore_completion_t old_ack = {0};
+                const uint64_t previous_admits = ss_b.payloads_admitted;
+                old_ack.request_id = UINT64_C(101);
+                old_ack.operation = TR_RAFT_MULTICORE_RECEIVE_CHUNK;
+                old_ack.result = SALTS_OK;
+                old_ack.reply_origin = dso.captured_origin;
+                old_ack.value.chunk.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+                old_ack.value.chunk.ack_valid = true;
+                old_ack.value.chunk.ack.data.accepted = true;
+                if (tr_raft_cnet_channel_send_chunk_completion(
+                        f.server_channel_b, &old_ack) != SALTS_ECANCELED ||
+                    tr_raft_cnet_channel_get_status(
+                        f.server_channel_b, &ss_b) != SALTS_OK ||
+                    ss_b.payloads_admitted != previous_admits) {
+                    result = SALTS_EPROTO;
+                    error_stage = "old A ACK escaped after its real dlclose";
+                    goto cleanup;
+                }
+            }
+
+            /* A has been unloaded, not merely stopped. Prove new B-only
+             * TLS traffic still crosses the exact typed B provider and
+             * both logical CNet sends complete (not canceled/replayed). */
+            request.group_id = response.group_id = 42U;
+            request.kind = response.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+            request.data.raft.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+            request.data.raft.from = 1U;
+            request.data.raft.to = 2U;
+            request.data.raft.term = 4U;
+            response.data.raft.type = TR_RAFT_MSG_HEARTBEAT_RESPONSE;
+            response.data.raft.from = 2U;
+            response.data.raft.to = 1U;
+            response.data.raft.term = 4U;
+            PEER_TRY(tr_raft_cnet_channel_send(f.client_channel_b, &request));
+            PEER_TRY(tr_raft_cnet_channel_send(f.server_channel_b, &response));
+            for (iteration = 0U; iteration < 2000U; ++iteration) {
+                PEER_TRY(cnet_client_poll(&f.client, 1U, &events));
+                PEER_TRY(cnet_client_poll(&f.server, 1U, &events));
+                PEER_TRY(tr_raft_cnet_channel_get_status(
+                    f.client_channel_b, &cs_b));
+                PEER_TRY(tr_raft_cnet_channel_get_status(
+                    f.server_channel_b, &ss_b));
+                if (cs_b.payloads_completed == 2U &&
+                    ss_b.payloads_completed == 2U &&
+                    f.client_sink_b.count == 2U &&
+                    f.server_sink_b.count == 2U &&
+                    dso.network_callbacks_b == 2U)
+                    break;
+            }
+            if (iteration == 2000U ||
+                cs_b.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+                ss_b.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+                cs_b.payloads_admitted != 2U ||
+                ss_b.payloads_admitted != 2U ||
+                cs_b.payloads_completed != 2U ||
+                ss_b.payloads_completed != 2U ||
+                cs_b.payload_writes_pending != 0U ||
+                ss_b.payload_writes_pending != 0U ||
+                cs_b.payloads_canceled != 0U ||
+                ss_b.payloads_canceled != 0U ||
+                cs_b.payloads_received != 2U ||
+                ss_b.payloads_received != 2U ||
+                f.client_sink_b.count != 2U ||
+                f.server_sink_b.count != 2U ||
+                dso.network_callbacks_b != 2U ||
+                atomic_load_explicit(
+                    &dso.module_b->callback_entered, memory_order_acquire) != 2U ||
+                atomic_load_explicit(
+                    &dso.module_b->callback_completed, memory_order_acquire) != 2U ||
+                atomic_load_explicit(
+                    &dso.module_b->stop_requested, memory_order_acquire)) {
+                result = SALTS_EPROTO;
+                error_stage = "B failed second authenticated TLS Raft after A unload";
+                goto cleanup;
+            }
+        }
     } else if (ss.phase != TR_RAFT_CNET_CHANNEL_FAILED ||
                ss.last_error != SALTS_EPROTO ||
                ss.payloads_received != 0U ||
