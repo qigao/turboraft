@@ -634,6 +634,7 @@ static int run_two_distinct_peers(int forge_node_three)
             cfg.channel.identity = &f.server_policy;
             cfg.channel.handshake = hello_config(2U);
             cfg.channel.first_outbound_message_id = 1U;
+            cfg.channel.host_module_generation = UINT64_C(90010001);
             cfg.channel.on_payload = on_server_payload;
             cfg.channel.payload_context = &f.server_received;
             cfg.expected_peer_node_id = NODE_IDS[i];
@@ -667,6 +668,7 @@ static int run_two_distinct_peers(int forge_node_three)
     f.server_channel_config.identity = &f.server_policy;
     f.server_channel_config.handshake = hello_config(2U);
     f.server_channel_config.first_outbound_message_id = 1U;
+    f.server_channel_config.host_module_generation = UINT64_C(90010001);
     f.server_channel_config.on_payload = on_server_payload;
     f.server_channel_config.payload_context = &f.server_received;
 
@@ -699,6 +701,7 @@ static int run_two_distinct_peers(int forge_node_three)
             f.client_policy[i].local_node_id = 1U;
         }
         channel.first_outbound_message_id = 1U;
+        channel.host_module_generation = UINT64_C(90010001);
         channel.on_payload = on_client_payload;
         channel.payload_context = &f.clients_received[i];
         TRY_STAGE(tr_raft_cnet_channel_create(&channel, &f.outbound[i]));
@@ -1055,6 +1058,10 @@ static int run_two_distinct_peers(int forge_node_three)
                 if (observed != SALTS_OK || binding == NULL ||
                     binding->chunk_request_id == 0U ||
                     chunk_completion.request_id != binding->chunk_request_id ||
+                    chunk_completion.reply_origin.host_module_generation !=
+                        binding->chunk_origin.host_module_generation ||
+                    chunk_completion.reply_origin.host_module_generation !=
+                        UINT64_C(90010001) ||
                     chunk_completion.reply_origin.channel_instance !=
                         binding->chunk_origin.channel_instance ||
                     chunk_completion.reply_origin.connection_token !=
