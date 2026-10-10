@@ -194,9 +194,28 @@ static void peer_dso_controller(void *context)
         }
         cmeta_thread_yield();
     }
-    /* The other thread is currently *inside* the DSO via a real verified
-     * CNet on_payload. Only the existing Salts::Plugin loader may unload.
-     * Its live module lease must prohibit dlclose both before/after stop. */
+    /* Verified CNet on_payload is currently in provider A. Publish a
+     * physically distinct Plugin image B from the stable host while A's
+     * callback and original scope remain live. The Controller must never
+     * touch a CNet Channel/Owner from this foreign thread. */
+    if (dso->ab_publication) {
+        const int published = peer_dso_publish_b(dso);
+        if (published != SALTS_OK) {
+            dso->controller_result = published;
+            (void)cmeta_plugin_registry_request_stop(
+                &dso->registry, dso->plugin);
+            if (dso->started_b) (void)cmeta_plugin_registry_request_stop(
+                &dso->registry, dso->plugin_b);
+            return;
+        }
+        dso->drain_a_while_b_published =
+            salts_component_plugin_generation_drain(
+                &dso->host, &dso->generation);
+        dso->unload_b_before_drain =
+            cmeta_plugin_registry_unload(&dso->registry, dso->plugin_b);
+    }
+    /* Both distinct DSO code images still have exactly one generation-
+     * owned lease and the original CNet callback cannot be unloaded. */
     dso->unload_while_callback =
         cmeta_plugin_registry_unload(&dso->registry, dso->plugin);
     /* Closing publication is allowed while a Scope has already admitted
@@ -206,19 +225,49 @@ static void peer_dso_controller(void *context)
         salts_component_plugin_runtime_close(
             &dso->host, &dso->retired_by_controller);
     if (dso->close_while_callback == SALTS_COMPONENT_PLUGIN_OK &&
-        dso->retired_by_controller == &dso->generation) {
+        dso->retired_by_controller ==
+            (dso->ab_publication ? &dso->generation_b : &dso->generation)) {
         dso->controller_closed_publication = 1;
         dso->drain_while_callback =
             salts_component_plugin_generation_drain(
-                &dso->host, &dso->generation);
+                &dso->host,
+                dso->ab_publication ? &dso->generation_b : &dso->generation);
     } else {
         dso->drain_while_callback = SALTS_COMPONENT_PLUGIN_INVALID_STATE;
     }
+    /* Module A receives stop while B stays active, to test that the
+     * publication switch does not couple the two callback lifetimes. */
     dso->stop_result =
         cmeta_plugin_registry_request_stop(&dso->registry, dso->plugin);
     dso->unload_after_stop =
         cmeta_plugin_registry_unload(&dso->registry, dso->plugin);
-    dso->controller_result = SALTS_OK;
+
+    if (dso->ab_publication) {
+        const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+        while (!atomic_load_explicit(
+                   &dso->release_b, memory_order_acquire)) {
+            if (cmeta_monotonic_ms() >= deadline) {
+                dso->controller_result = SALTS_ETIMEDOUT;
+                break;
+            }
+            cmeta_thread_yield();
+        }
+        if (cmeta_plugin_registry_request_stop(
+                &dso->registry, dso->plugin_b) != CMETA_PLUGIN_OK ||
+            cmeta_plugin_registry_unload(
+                &dso->registry, dso->plugin_b) != CMETA_PLUGIN_BUSY)
+            dso->controller_result = SALTS_EPROTO;
+        if (dso->worker_b_live) {
+            if (cmeta_thread_join(&dso->worker_b) != SALTS_OK)
+                dso->controller_result = SALTS_EPROTO;
+            cmeta_thread_destroy(&dso->worker_b);
+            dso->worker_b_live = 0;
+            if (!dso->worker_b_result)
+                dso->controller_result = SALTS_EPROTO;
+        }
+    }
+    if (dso->controller_result == SALTS_OK || !dso->ab_publication)
+        dso->controller_result = SALTS_OK;
 }
 
 static int peer_dso_setup(peer_dso_harness *dso)
