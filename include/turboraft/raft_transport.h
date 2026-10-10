@@ -59,8 +59,11 @@ typedef struct tr_raft_transport_reply_origin {
     uint64_t channel_instance;
     tr_raft_node_id_t authenticated_peer_node_id;
     tr_raft_group_id_t group_id;
-    uint32_t connection_slot;
-    uint32_t connection_generation;
+    /* Opaque transport-provider connection identity, valid only for this
+     * live source generation. CNet currently packs its slot+generation
+     * locally; neutral Raft/Multicore code must never decode or depend on
+     * provider-specific connection structures. Zero means unbound. */
+    uint64_t connection_token;
 } tr_raft_transport_reply_origin_t;
 
 typedef int (*tr_raft_transport_payload_handler_fn)(
