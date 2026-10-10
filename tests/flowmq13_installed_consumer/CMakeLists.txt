@@ -366,4 +366,4 @@ add_test(NAME turboraft.flowmq13.cnet_core_quorum
          COMMAND turboraft_flowmq13_cnet_core_quorum)
 set_tests_properties(turboraft.flowmq13.cnet_core_quorum
                      PROPERTIES TIMEOUT 65
-                                LABELS "cnet-raft-quorum-real-wire")
+                                LABELS "cnet-snapshot-lifecycle;cnet-raft-quorum-real-wire")
