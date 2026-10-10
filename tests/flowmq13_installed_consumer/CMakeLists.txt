@@ -133,3 +133,13 @@ add_test(NAME turboraft.flowmq13.cnet_segmented_fault
          COMMAND turboraft_flowmq13_cnet_segmented_fault)
 set_tests_properties(turboraft.flowmq13.cnet_segmented_fault
                      PROPERTIES TIMEOUT 55)
+
+# Native CTest owns lifecycle-stress selection across Linux epoll, Windows
+# IOCP and macOS Kqueue. A repeat is a NEW stand-alone test process with a
+# fresh TLS/Owner/WAL fixture, never a retry of an admitted Raft operation.
+set_tests_properties(
+    turboraft.flowmq13.cnet_durable_snapshot
+    turboraft.flowmq13.cnet_snapshot_fault
+    turboraft.flowmq13.cnet_segmented_snapshot
+    turboraft.flowmq13.cnet_segmented_fault
+    PROPERTIES LABELS "cnet-snapshot-lifecycle")
