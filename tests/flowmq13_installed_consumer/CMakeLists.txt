@@ -175,3 +175,28 @@ add_test(NAME turboraft.flowmq13.cnet_snapshot_reconnect
 set_tests_properties(turboraft.flowmq13.cnet_snapshot_reconnect
                      PROPERTIES TIMEOUT 65
                                 LABELS "cnet-snapshot-lifecycle")
+
+# A real mTLS Node3 connection N sends only offset0..12 and receives one
+# accepted *non-durable* SNAPSHOT_ACK. Tear down both physical N endpoints,
+# re-authenticate N+1 with the same exact Group103 owner and retained in-RAM
+# SnapshotReceiver, reject N's delayed partial receipt before send admission,
+# and require explicit host restart-from-zero followed by offset12..24.
+# Only the final new-generation receipt may publish WalStorage and ACK.
+# No automated replay, raw runtime-state persistence, alternate socket owner
+# or additional Group mailbox is created.
+add_executable(turboraft_flowmq13_cnet_midstream_reconnect
+               ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+target_compile_definitions(turboraft_flowmq13_cnet_midstream_reconnect PRIVATE
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT=1
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED=1
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT=1
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_link_libraries(turboraft_flowmq13_cnet_midstream_reconnect PRIVATE
+    TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+    TurboRaft::WalStorage Salts::Platform Salts::TinyTest)
+add_test(NAME turboraft.flowmq13.cnet_midstream_reconnect
+         COMMAND turboraft_flowmq13_cnet_midstream_reconnect)
+set_tests_properties(turboraft.flowmq13.cnet_midstream_reconnect
+                     PROPERTIES TIMEOUT 65
+                                LABELS "cnet-snapshot-lifecycle")
