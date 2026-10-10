@@ -8,6 +8,30 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
+#include <stdint.h>
+
+/* A Channel instance ID never wraps or repeats within this linked CNet
+ * library. This transient token is independent of CNet socket slot reuse.
+ * Store only its value in the Group completion, never native state. */
+static atomic_uint_fast64_t tr_channel_next_instance = ATOMIC_VAR_INIT(1U);
+
+static int tr_channel_alloc_instance(uint64_t *out_instance)
+{
+    uint_fast64_t previous = atomic_load_explicit(
+        &tr_channel_next_instance, memory_order_relaxed);
+    for (;;) {
+        if (previous == 0U || previous == UINT64_MAX)
+            return SALTS_ERANGE;
+        if (atomic_compare_exchange_weak_explicit(
+                &tr_channel_next_instance, &previous, previous + 1U,
+                memory_order_relaxed, memory_order_relaxed)) {
+            *out_instance = (uint64_t)previous;
+            return SALTS_OK;
+        }
+    }
+}
+
 
 struct tr_raft_cnet_channel {
     cnet_client *client;
@@ -20,6 +44,7 @@ struct tr_raft_cnet_channel {
     cnet_connection connection;
     tr_raft_cnet_channel_status_t status;
     uint64_t first_outbound_message_id;
+    uint64_t channel_instance; /* monotonic, not reused after terminal */
     unsigned callback_depth;
     size_t handshake_writes_pending; /* on_send accounts HELLO/ACK first */
     int bound;
@@ -315,6 +340,7 @@ int tr_raft_cnet_channel_create(
 {
     tr_raft_cnet_channel_t *channel;
     tr_raft_handshake_message_t hello;
+    int rc;
 
     if (out_channel == NULL) return SALTS_EINVAL;
     *out_channel = NULL;
@@ -328,6 +354,11 @@ int tr_raft_cnet_channel_create(
 
     channel = (tr_raft_cnet_channel_t *)calloc(1U, sizeof(*channel));
     if (channel == NULL) return SALTS_ENOMEM;
+    rc = tr_channel_alloc_instance(&channel->channel_instance);
+    if (rc != SALTS_OK) {
+        free(channel);
+        return rc; /* terminal exhaustion; never reuse a generation */
+    }
     channel->client = config->client;
     channel->identity = config->identity;
     channel->local = config->handshake;
@@ -376,6 +407,94 @@ int tr_raft_cnet_channel_get_status(
     if (channel == NULL || out_status == NULL) return SALTS_EINVAL;
     *out_status = channel->status;
     return SALTS_OK;
+}
+
+/* Capture the peer identity and physical CNet slot+generation ONLY
+ * after certified mTLS plus reciprocal Raft HELLO. All fields are copied
+ * values and have no ownership in the Group mailbox. */
+int tr_raft_cnet_channel_capture_reply_origin(
+    tr_raft_cnet_channel_t *channel, tr_raft_group_id_t group_id,
+    tr_raft_transport_reply_origin_t *out)
+{
+    if (out == NULL) return SALTS_EINVAL;
+    *out = (tr_raft_transport_reply_origin_t){0};
+    if (channel == NULL || group_id == 0U) return SALTS_EINVAL;
+    if (channel->stopping || !channel->bound ||
+        channel->status.terminal ||
+        channel->status.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+        channel->status.authenticated_peer_node_id == 0U ||
+        channel->connection.slot == 0U ||
+        channel->connection.generation == 0U)
+        return SALTS_EBUSY;
+    *out = (tr_raft_transport_reply_origin_t){
+        .channel_instance = channel->channel_instance,
+        .authenticated_peer_node_id =
+            channel->status.authenticated_peer_node_id,
+        .group_id = group_id,
+        .connection_slot = channel->connection.slot,
+        .connection_generation = channel->connection.generation
+    };
+    return SALTS_OK;
+}
+
+/* The Group Owner's delayed reply may outlive both the original Channel
+ * and a ManagedDial reconnect. Equality is checked against the CURRENT
+ * authenticated Channel before any CNet send/credit reservation. */
+int tr_raft_cnet_channel_send_chunk_completion(
+    tr_raft_cnet_channel_t *channel,
+    const tr_raft_multicore_completion_t *completion)
+{
+    tr_raft_transport_payload_t reply = {0};
+    const tr_raft_transport_reply_origin_t *origin;
+    const tr_raft_multicore_chunk_result_t *chunk;
+
+    if (channel == NULL || completion == NULL)
+        return SALTS_EINVAL;
+    if (completion->operation != TR_RAFT_MULTICORE_RECEIVE_CHUNK ||
+        completion->request_id == 0U ||
+        completion->result != SALTS_OK ||
+        !completion->value.chunk.ack_valid)
+        return SALTS_ENOTSUP;
+
+    origin = &completion->reply_origin;
+    chunk = &completion->value.chunk;
+    if (origin->channel_instance == 0U ||
+        channel->status.terminal || channel->stopping ||
+        channel->status.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+        !channel->bound ||
+        channel->channel_instance != origin->channel_instance ||
+        channel->connection.slot != origin->connection_slot ||
+        channel->connection.generation != origin->connection_generation ||
+        channel->status.authenticated_peer_node_id !=
+            origin->authenticated_peer_node_id)
+        return SALTS_ECANCELED;
+    if (origin->group_id == 0U)
+        return SALTS_EPROTO;
+    reply.group_id = origin->group_id;
+
+    if (chunk->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK) {
+        const tr_raft_data_ack_t *ack = &chunk->ack.data;
+        if (!ack->accepted ||
+            ack->durable != chunk->durable_or_installed ||
+            ack->from != channel->local.local_node_id ||
+            ack->to != origin->authenticated_peer_node_id)
+            return SALTS_EPROTO;
+        reply.kind = TR_RAFT_WIRE_PAYLOAD_DATA_ACK;
+        reply.data.data_ack = *ack;
+    } else if (chunk->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+        const tr_raft_snapshot_ack_t *ack = &chunk->ack.snapshot;
+        if (!ack->accepted ||
+            ack->from != channel->local.local_node_id ||
+            ack->to != origin->authenticated_peer_node_id)
+            return SALTS_EPROTO;
+        reply.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK;
+        reply.data.snapshot_ack = *ack;
+    } else {
+        return SALTS_ENOTSUP;
+    }
+    /* No automatic retry or CNet producer work is created here.
+     * A capacity rejection stays visible to the same progress Owner. */
+    return tr_raft_cnet_channel_send(channel, &reply);
 }
 
 /* The maximum fixed Snapshot wire prefix (including ConfState) is bounded
