@@ -9,6 +9,8 @@
  * Plugin holds a live module lease. Never copy it into a production API. */
 typedef struct tr_ace23_dso_callback_state {
     atomic_bool stop_requested;
+    /* Test-only: finish an in-flight callback without STOPPING the DSO. */
+    atomic_bool release_callback;
     atomic_uint callback_entered;
     atomic_uint callback_completed;
 } tr_ace23_dso_callback_state;
