@@ -368,6 +368,8 @@ static int peer_case_run(int mode)
                 tr_raft_transport_payload_t data = {0};
                 tr_raft_transport_payload_t snapshot = {0};
                 tr_raft_cnet_channel_status_t before_close = {0};
+                tr_raft_transport_reply_origin_t origin = {0};
+                tr_raft_multicore_completion_t delayed = {0};
                 uint8_t data_bytes[TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES];
                 uint8_t snapshot_bytes[TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES];
 
@@ -423,7 +425,53 @@ static int peer_case_run(int mode)
                  * accepted send has already materialized canonical buffers. */
                 memset(data_bytes, 0x3c, sizeof(data_bytes));
                 memset(snapshot_bytes, 0xc3, sizeof(snapshot_bytes));
+
+                /* The same client Owner has verified this mTLS Channel.
+                 * Capture a receipt BEFORE host stop, then revoke it
+                 * synchronously even though the terminal callback and
+                 * outstanding CNet SG writes have not yet finished. */
+                PEER_TRY(tr_raft_cnet_channel_capture_reply_origin(
+                    f.client_channel, 43U, &origin));
+                if (origin.host_module_generation != UINT64_C(90010001) ||
+                    origin.channel_instance == 0U ||
+                    origin.authenticated_peer_node_id != 2U ||
+                    origin.connection_token == 0U) {
+                    result = SALTS_EPROTO;
+                    error_stage = "authenticated Channel ticket missing host epoch";
+                    goto cleanup;
+                }
+                delayed.request_id = 77U;
+                delayed.operation = TR_RAFT_MULTICORE_RECEIVE_CHUNK;
+                delayed.result = SALTS_OK;
+                delayed.reply_origin = origin;
+                delayed.value.chunk.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+                delayed.value.chunk.ack_valid = true;
+                delayed.value.chunk.ack.data.from = 1U;
+                delayed.value.chunk.ack.data.to = 2U;
+                delayed.value.chunk.ack.data.term = 3U;
+                delayed.value.chunk.ack.data.stream_id = 19U;
+                delayed.value.chunk.ack.data.stream_size = sizeof(data_bytes);
+                delayed.value.chunk.ack.data.next_offset = 32U;
+                delayed.value.chunk.ack.data.accepted = true;
+
                 PEER_TRY(tr_raft_cnet_channel_stop(f.client_channel));
+                if (tr_raft_cnet_channel_send_chunk_completion(
+                        f.client_channel, &delayed) != SALTS_ECANCELED ||
+                    tr_raft_cnet_channel_capture_reply_origin(
+                        f.client_channel, 43U, &origin) != SALTS_EBUSY ||
+                    origin.host_module_generation != 0U ||
+                    origin.channel_instance != 0U) {
+                    result = SALTS_EPROTO;
+                    error_stage = "host stop did not revoke pending ACK generation";
+                    goto cleanup;
+                }
+                PEER_TRY(tr_raft_cnet_channel_get_status(
+                    f.client_channel, &before_close));
+                if (before_close.payloads_admitted != 2U) {
+                    result = SALTS_EPROTO;
+                    error_stage = "revoked ACK consumed another CNet send credit";
+                    goto cleanup;
+                }
                 if (tr_raft_cnet_channel_send(f.client_channel, &data) !=
                         SALTS_EBUSY) {
                     result = SALTS_EPROTO;
