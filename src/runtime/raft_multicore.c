@@ -184,6 +184,7 @@ static bool tr_multicore_work(tr_raft_owner_t *o, tr_multicore_group_t *g)
     cmeta_mutex_unlock(&o->mutex);
     c.request_id = q.request_id;
     c.operation = q.operation;
+    c.reply_origin = q.reply_origin;
     if (q.operation == TR_RAFT_MULTICORE_RECEIVE_CHUNK) {
         tr_raft_owned_transport_payload_t *owned =
             (tr_raft_owned_transport_payload_t *)q.value.chunk.internal_owned_chunk;
@@ -386,7 +387,8 @@ int tr_raft_multicore_submit(tr_raft_multicore_t *r, uint64_t id,
 int tr_raft_multicore_submit_owned_chunk(
     tr_raft_multicore_t *r,
     const tr_raft_transport_payload_t *payload,
-    uint64_t request_id)
+    uint64_t request_id,
+    const tr_raft_transport_reply_origin_t *reply_origin)
 {
     tr_multicore_group_t *g;
     tr_raft_owner_t *o;
@@ -418,6 +420,17 @@ int tr_raft_multicore_submit_owned_chunk(
             return SALTS_EPROTO;
     } else return SALTS_ENOTSUP;
 
+    if (reply_origin != NULL &&
+        (reply_origin->channel_instance == 0U ||
+         reply_origin->authenticated_peer_node_id == 0U ||
+         reply_origin->group_id != payload->group_id ||
+         reply_origin->connection_slot == 0U ||
+         reply_origin->connection_generation == 0U ||
+         reply_origin->authenticated_peer_node_id !=
+             (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK
+                  ? payload->data.data_chunk.from
+                  : payload->data.snapshot_chunk.from)))
+        return SALTS_EPROTO;
     if (r->factory.receive_chunk == NULL ||
         r->config.owned_chunk_bytes_per_group == 0U)
         return SALTS_ENOTSUP;
@@ -438,6 +451,7 @@ int tr_raft_multicore_submit_owned_chunk(
         if (result == SALTS_OK) {
             q.operation = TR_RAFT_MULTICORE_RECEIVE_CHUNK;
             q.request_id = request_id;
+            if (reply_origin != NULL) q.reply_origin = *reply_origin;
             q.value.chunk.internal_owned_chunk = owned;
             slot = ring_write_acquire(&g->requests, sizeof(q));
             if (slot == NULL) abort(); /* item credit already reserved */
