@@ -394,12 +394,20 @@ static int fixture_cleanup(identity_fixture *f)
             CLEAN_STEP(tr_raft_cnet_channel_get_status(
                 f->outbound[i], &status));
             if (!status.terminal) return SALTS_EBUSY;
+            if (status.payload_writes_pending != 0U ||
+                status.payloads_admitted !=
+                    status.payloads_completed + status.payloads_canceled)
+                return SALTS_EPROTO;
         }
         if (f->inbound[i] != NULL) {
             status = (tr_raft_cnet_channel_status_t){0};
             CLEAN_STEP(tr_raft_cnet_channel_get_status(
                 f->inbound[i], &status));
             if (!status.terminal) return SALTS_EBUSY;
+            if (status.payload_writes_pending != 0U ||
+                status.payloads_admitted !=
+                    status.payloads_completed + status.payloads_canceled)
+                return SALTS_EPROTO;
         }
     }
     for (i = 0U; i < LINK_COUNT; ++i) {
