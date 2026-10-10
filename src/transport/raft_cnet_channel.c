@@ -12,9 +12,9 @@
 #include <stdatomic.h>
 #include <stdint.h>
 
-/* A Channel instance ID never wraps or repeats within this linked CNet
- * library. This transient token is independent of CNet socket slot reuse.
- * Store only its value in the Group completion, never native state. */
+/* Channel-local serial never wraps within one loaded code image. A DSO
+ * reload can reset this counter, so it is NEVER sufficient as an origin
+ * fence without the stable, host-issued module generation. */
 static atomic_uint_fast64_t tr_channel_next_instance = ATOMIC_VAR_INIT(1U);
 
 static int tr_channel_alloc_instance(uint64_t *out_instance)
@@ -45,7 +45,8 @@ struct tr_raft_cnet_channel {
     cnet_connection connection;
     tr_raft_cnet_channel_status_t status;
     uint64_t first_outbound_message_id;
-    uint64_t channel_instance; /* monotonic, not reused after terminal */
+    uint64_t channel_instance; /* unique only inside one loaded DSO image */
+    uint64_t host_module_generation; /* minted by stable host outside DSO */
     const void *owner_thread; /* immutable one CNet progress Owner token */
     unsigned callback_depth;
     size_t handshake_writes_pending; /* on_send accounts HELLO/ACK first */
@@ -357,6 +358,7 @@ int tr_raft_cnet_channel_create(
     if (config == NULL || config->client == NULL ||
         config->identity == NULL || config->on_payload == NULL ||
         config->first_outbound_message_id == 0U ||
+        config->host_module_generation == 0U ||
         config->handshake.local_node_id != config->identity->local_node_id ||
         tr_raft_cnet_identity_policy_validate(config->identity) != SALTS_OK ||
         tr_raft_handshake_make_hello(&config->handshake, &hello) != SALTS_OK)
@@ -376,6 +378,7 @@ int tr_raft_cnet_channel_create(
     channel->on_payload = config->on_payload;
     channel->payload_context = config->payload_context;
     channel->first_outbound_message_id = config->first_outbound_message_id;
+    channel->host_module_generation = config->host_module_generation;
     channel->status.phase = TR_RAFT_CNET_CHANNEL_CREATED;
     *out_channel = channel;
     return SALTS_OK;
@@ -440,6 +443,7 @@ int tr_raft_cnet_channel_capture_reply_origin(
         channel->connection.generation == 0U)
         return SALTS_EBUSY;
     *out = (tr_raft_transport_reply_origin_t){
+        .host_module_generation = channel->host_module_generation,
         .channel_instance = channel->channel_instance,
         .authenticated_peer_node_id =
             channel->status.authenticated_peer_node_id,
@@ -472,7 +476,9 @@ int tr_raft_cnet_channel_send_chunk_completion(
 
     origin = &completion->reply_origin;
     chunk = &completion->value.chunk;
-    if (origin->channel_instance == 0U ||
+    if (origin->host_module_generation == 0U ||
+        origin->channel_instance == 0U ||
+        channel->host_module_generation != origin->host_module_generation ||
         channel->status.terminal || channel->stopping ||
         channel->status.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
         !channel->bound ||
