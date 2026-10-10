@@ -432,6 +432,8 @@ static int peer_case_run(int mode)
         PEER_TRY(tr_raft_cnet_channel_get_status(f.server_channel, &ss));
         if (cs.payloads_admitted != expected_server ||
             ss.payloads_admitted != 1U ||
+            cs.sg_chunks_admitted != (mode == PEER_STREAMS ? 2U : 0U) ||
+            ss.sg_chunks_admitted != 0U ||
             cs.payloads_canceled != 0U || ss.payloads_canceled != 0U ||
             cs.payloads_admitted != cs.payloads_completed +
                 cs.payloads_canceled + cs.payload_writes_pending ||
@@ -502,6 +504,10 @@ cleanup:
             !end_client.terminal || !end_server.terminal ||
             end_client.payload_writes_pending != 0U ||
             end_server.payload_writes_pending != 0U ||
+            end_client.sg_chunks_admitted >
+                end_client.payloads_admitted ||
+            end_server.sg_chunks_admitted >
+                end_server.payloads_admitted ||
             end_client.payloads_admitted !=
                 end_client.payloads_completed + end_client.payloads_canceled ||
             end_server.payloads_admitted !=
