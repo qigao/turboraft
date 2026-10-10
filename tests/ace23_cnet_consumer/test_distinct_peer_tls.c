@@ -1325,8 +1325,15 @@ static int run_two_distinct_peers(int forge_node_three)
                         NODE_IDS[i] ||
                     chunk_completion.operation != TR_RAFT_MULTICORE_RECEIVE_CHUNK ||
                     chunk_completion.result != SALTS_OK ||
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+                    (i == 0U && (chunk_completion.value.chunk.ack_valid ||
+                                  chunk_completion.value.chunk.durable_or_installed)) ||
+                    (i == 1U && (!chunk_completion.value.chunk.ack_valid ||
+                                  !chunk_completion.value.chunk.durable_or_installed)) ||
+#else
                     chunk_completion.value.chunk.ack_valid ||
                     chunk_completion.value.chunk.durable_or_installed ||
+#endif
                     chunk_completion.value.chunk.kind !=
                         (i == 0U ? TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK
                                  : TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) ||
@@ -1341,18 +1348,72 @@ static int run_two_distinct_peers(int forge_node_three)
                     result = SALTS_EPROTO;
                     break;
                 }
-                /* These owner callbacks are test-only and never fsync; they
-                 * MUST NOT cause a positive network ACK, even when the TLS
-                 * Channel generation is still ACTIVE. */
-                if (tr_raft_cnet_channel_send_chunk_completion(
-                        binding->channel, &chunk_completion) != SALTS_ENOTSUP) {
-                    failed_stage = "mock-owned chunk forged a positive network ACK";
-                    result = SALTS_EPROTO;
-                    break;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+                if (i == 1U) {
+                    tr_raft_multicore_completion_t stale = chunk_completion;
+                    tr_raft_cnet_channel_status_t before = {0}, after = {0};
+                    tr_raft_cnet_channel_t *other =
+                        f.verified_payloads[0].channel == binding->channel
+                            ? f.verified_payloads[1].channel
+                            : f.verified_payloads[0].channel;
+                    TRY_STAGE(tr_raft_cnet_channel_get_status(
+                        binding->channel, &before));
+                    /* The real WAL commit has finished on the Group Owner.
+                     * Foreign TLS/Component generation cannot send its ACK
+                     * or reserve any CNet send credit. */
+                    stale.reply_origin.host_module_generation += 1U;
+                    if (f.owner_groups[1].installed_snapshots != 1U ||
+                        f.clients_received[1].snapshot_acks != 0U ||
+                        tr_raft_cnet_channel_send_chunk_completion(
+                            binding->channel, &stale) != SALTS_ECANCELED ||
+                        tr_raft_cnet_channel_send_chunk_completion(
+                            other, &chunk_completion) != SALTS_ECANCELED) {
+                        failed_stage = "durable Snapshot stale-generation ACK fencing";
+                        result = SALTS_EPROTO;
+                        break;
+                    }
+                    TRY_STAGE(tr_raft_cnet_channel_get_status(
+                        binding->channel, &after));
+                    if (before.payloads_admitted != after.payloads_admitted ||
+                        before.payload_writes_pending !=
+                            after.payload_writes_pending) {
+                        failed_stage = "rejected stale ACK consumed send credits";
+                        result = SALTS_EPROTO;
+                        break;
+                    }
+                    TRY_STAGE(tr_raft_cnet_channel_send_chunk_completion(
+                        binding->channel, &chunk_completion));
+                } else
+#endif
+                {
+                    /* Group101 DATA handler never fsyncs, so cannot ACK. */
+                    if (tr_raft_cnet_channel_send_chunk_completion(
+                            binding->channel, &chunk_completion) != SALTS_ENOTSUP) {
+                        failed_stage = "mock-owned DATA forged positive network ACK";
+                        result = SALTS_EPROTO;
+                        break;
+                    }
                 }
             }
         }
     }
+
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    if (!forge_node_three && result == SALTS_OK) {
+        /* The receiver reached disk before CNet admitted this ACK. Poll
+         * only the original two CNet Owners, no background retry/queue. */
+        for (round = 0U; round < MAX_PROGRESS &&
+             f.clients_received[1].snapshot_acks == 0U; ++round) {
+            TRY_STAGE(cnet_client_poll(&f.server, 1U, &events));
+            TRY_STAGE(cnet_client_poll(&f.clients, 1U, &events));
+        }
+        if (f.clients_received[1].snapshot_acks != 1U ||
+            f.clients_received[1].wrong_payload != 0) {
+            failed_stage = "certified Node3 did not receive exactly one durable Snapshot ACK";
+            result = SALTS_EPROTO;
+        }
+    }
+#endif
 
 cleanup:
     {
@@ -1362,6 +1423,18 @@ cleanup:
             result = close_status;
         }
     }
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    if (f.snapshot_prefix != NULL) {
+        if (result == SALTS_OK && !forge_node_three) {
+            result = durable_snapshot_verify_and_catch_up(f.snapshot_prefix);
+            if (result != SALTS_OK)
+                failed_stage = "reopen installed WAL and commit index20 catch-up";
+        }
+        durable_snapshot_cleanup_files(f.snapshot_prefix);
+        free(f.snapshot_prefix);
+        f.snapshot_prefix = NULL;
+    }
+#endif
 #undef TRY_STAGE
     if (result != SALTS_OK) {
         fprintf(stderr,
@@ -1377,6 +1450,15 @@ cleanup:
     return result;
 }
 
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+spec("ACE 2.3 real mTLS Snapshot to WAL Group Owner and durable reply")
+{
+    it("installs Node3 Snapshot on exact Group Owner, fences stale ACK, restarts and catches up")
+    {
+        check_equal(run_two_distinct_peers(0), SALTS_OK);
+    }
+}
+#else
 spec("ACE 2.3 two real distinct TLS-certified Raft Node IDs")
 {
     it("simultaneously admits Node1 and Node3 certificates and isolates bidirectional Raft groups")
@@ -1389,3 +1471,4 @@ spec("ACE 2.3 two real distinct TLS-certified Raft Node IDs")
         check_equal(run_two_distinct_peers(1), SALTS_OK);
     }
 }
+#endif
