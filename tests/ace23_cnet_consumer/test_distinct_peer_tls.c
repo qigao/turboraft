@@ -366,25 +366,35 @@ static int owner_group_open(void *context, tr_raft_owner_t *owner,
         wal.max_live_segments = 4U;
         wal.max_log_entries = 16U;
         wal.max_snapshot_bytes = 1024U;
-#ifdef TURBORAFT_TEST_PROCESS_REOPEN
-        /* This MUST open the previous, killed process's committed WAL.
-         * A fresh empty WAL or a partially published Snapshot is failure,
-         * not a silent recovery fallback. */
+#ifdef TURBORAFT_TEST_PROCESS_ROLE
+        /* Controller seeded a real fsynced term1/index1 prefix before N.
+         * Both the killed N and fresh N+1 processes MUST reopen it, never
+         * allocate an empty replacement WAL as a compatibility fallback. */
         wal.create_if_missing = false;
 #else
         wal.create_if_missing = true;
 #endif
         rc = tr_raft_wal_storage_open(&wal, &probe->snapshot_wal);
         if (rc != SALTS_OK) return rc;
-#ifdef TURBORAFT_TEST_PROCESS_REOPEN
+#ifdef TURBORAFT_TEST_PROCESS_ROLE
         {
             tr_raft_wal_recovery_t recovered = {0};
             rc = tr_raft_wal_storage_load(probe->snapshot_wal, &recovered);
+            /* Strict actual Raft WAL provenance both BEFORE old N's
+             * partial ACK and AFTER its unclean SIGKILL. No apparent
+             * recovery is valid if the committed old prefix vanished. */
             if (rc == SALTS_OK &&
-                (recovered.snapshot_index != 0U ||
+                (recovered.term != 1U ||
+                 recovered.voted_for != 1U ||
+                 recovered.snapshot_index != 0U ||
                  recovered.snapshot_size != 0U ||
-                 recovered.commit_index != 0U ||
-                 recovered.entry_count != 0U))
+                 recovered.commit_index != 1U ||
+                 recovered.entry_count != 1U ||
+                 recovered.entries == NULL ||
+                 recovered.entries[0].index != 1U ||
+                 recovered.entries[0].term != 1U ||
+                 recovered.entries[0].data_length != 3U ||
+                 memcmp(recovered.entries[0].data, "old", 3U) != 0))
                 rc = SALTS_EPROTO;
             tr_raft_wal_recovery_destroy(&recovered);
             if (rc != SALTS_OK) {
