@@ -95,8 +95,7 @@ target_link_libraries(turboraft_ace23_dso_epoch
                       PRIVATE TurboRaft::CNet Salts::ComponentPlugin
                               Salts::Plugin Salts::Platform Salts::TinyTest)
 target_compile_definitions(turboraft_ace23_dso_epoch PRIVATE
-    TURBORAFT_ACE23_EPOCH_DSO_PATH=
-        "$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture>")
+    TURBORAFT_ACE23_EPOCH_DSO_PATH="$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture>")
 add_dependencies(turboraft_ace23_dso_epoch
                  turboraft_ace23_dso_epoch_fixture)
 add_test(NAME turboraft.ace23_dso_epoch
