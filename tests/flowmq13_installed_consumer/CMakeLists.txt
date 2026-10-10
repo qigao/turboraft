@@ -155,3 +155,22 @@ add_test(NAME turboraft.flowmq13.snapshot_replay
          COMMAND turboraft_flowmq13_snapshot_replay)
 set_tests_properties(turboraft.flowmq13.snapshot_replay
                      PROPERTIES TIMEOUT 25)
+
+# Real verified Node3 physical TLS N -> N+1 reconnect with an actual
+# WAL-durable Group103 completion held past N teardown. Old Origin is
+# rejected before new CNet send credit, and ONLY explicit application
+# retransmission through N+1 may return an already-installed full ACK.
+# The SnapshotReceiver must not re-run its WAL install on the duplicate.
+add_executable(turboraft_flowmq13_cnet_snapshot_reconnect
+               ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+target_compile_definitions(turboraft_flowmq13_cnet_snapshot_reconnect PRIVATE
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT=1
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_link_libraries(turboraft_flowmq13_cnet_snapshot_reconnect PRIVATE
+    TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+    TurboRaft::WalStorage Salts::Platform Salts::TinyTest)
+add_test(NAME turboraft.flowmq13.cnet_snapshot_reconnect
+         COMMAND turboraft_flowmq13_cnet_snapshot_reconnect)
+set_tests_properties(turboraft.flowmq13.cnet_snapshot_reconnect
+                     PROPERTIES TIMEOUT 65)
