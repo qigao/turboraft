@@ -349,6 +349,20 @@ target_link_libraries(
   PUBLIC TurboRaft::Core
   PRIVATE Salts::Core)
 
+# Storage-only thin Group Owner ACK composition over the existing validated
+# SnapshotReceiver and DataStreamReceiver; no second queue or worker.
+add_library(turboraft_chunk_receivers STATIC
+            src/runtime/raft_multicore_chunk_receivers.c)
+add_library(TurboRaft::ChunkReceivers ALIAS turboraft_chunk_receivers)
+set_target_properties(turboraft_chunk_receivers PROPERTIES
+                      EXPORT_NAME ChunkReceivers
+                      FOLDER "libraries/runtime")
+target_include_directories(turboraft_chunk_receivers
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(turboraft_chunk_receivers
+  PUBLIC TurboRaft::Multicore TurboRaft::SnapshotReceiver TurboRaft::DataStream)
+
 add_library(turboraft_wal_storage STATIC
             src/storage/raft_wal_storage.c)
 cmake_config_target(turboraft_wal_storage
@@ -642,6 +656,7 @@ endif()
 set(TURBORAFT_INSTALL_TARGETS turboraft_core turboraft_component turboraft_service turboraft_multicore)
 foreach(_turboraft_install_candidate IN ITEMS
         turboraft_snapshot_receiver
+        turboraft_chunk_receivers
         turboraft_node_config
         turboraft_snapshot_sender
         turboraft_data_stream
