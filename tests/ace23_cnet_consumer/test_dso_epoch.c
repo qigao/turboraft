@@ -261,4 +261,135 @@ spec("ACE 2.3 real Plugin DSO callback quiescence and stable host epoch")
         check_equal(cmeta_plugin_registry_destroy(
             &registry), CMETA_PLUGIN_OK);
     }
+    it("keeps provider-backed N and N+1 scopes independently pinned during publication")
+    {
+        const cmeta_plugin_registry_config registry_config = {.capacity = 1U};
+        cmeta_plugin_registry registry = {0};
+        cmeta_plugin_ref plugin = {0};
+        salts_component_plugin_runtime host = SALTS_COMPONENT_PLUGIN_RUNTIME_INIT;
+        salts_component_plugin_generation generations[2] = {
+            SALTS_COMPONENT_PLUGIN_GENERATION_INIT,
+            SALTS_COMPONENT_PLUGIN_GENERATION_INIT
+        };
+        salts_component_plugin_scope scopes[2] = {
+            SALTS_COMPONENT_PLUGIN_SCOPE_INIT,
+            SALTS_COMPONENT_PLUGIN_SCOPE_INIT
+        };
+        salts_component_deployment deployments[2][1] = {{{0}}};
+        salts_component_instance instances[2][1] = {{{0}}};
+        salts_component_dependency dependencies[2][1] = {{{0}}};
+        size_t activation_order[2][1] = {{0}};
+        salts_component_plugin_module modules[2][1] = {{{0}}};
+        salts_component_plugin_generation_storage stores[2] = {{0}};
+        salts_component_plugin_generation *previous = NULL;
+        salts_component_service services[2] = {{0}};
+        tr_ace23_dso_callback callbacks[2] = {
+            tr_ace23_dso_callback_bind(NULL, NULL),
+            tr_ace23_dso_callback_bind(NULL, NULL)
+        };
+        cmeta_plugin_lifecycle_info info = {0};
+        bool quiescent = false;
+        unsigned g;
+
+        check_equal(cmeta_plugin_registry_init(
+            &registry, &registry_config), CMETA_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_load(
+            &registry, TURBORAFT_ACE23_EPOCH_DSO_PATH, &plugin),
+            CMETA_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_start(
+            &registry, plugin), CMETA_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_init(
+            &host), SALTS_COMPONENT_PLUGIN_OK);
+
+        for (g = 0U; g < 2U; ++g) {
+            stores[g] = (salts_component_plugin_generation_storage){
+                .deployments = deployments[g], .deployment_capacity = 1U,
+                .instances = instances[g], .instance_capacity = 1U,
+                .dependencies = dependencies[g], .dependency_capacity = 1U,
+                .activation_order = activation_order[g],
+                .activation_capacity = 1U,
+                .modules = modules[g], .module_capacity = 1U
+            };
+            if (g == 0U) {
+                check_equal(publish_host_generation(
+                    &host, &generations[g], UINT64_C(90011001) + g,
+                    &registry, plugin, &stores[g]),
+                    SALTS_COMPONENT_PLUGIN_OK);
+            } else {
+                const salts_component_plugin_source source = {
+                    .plugin = plugin,
+                    .export_id = "turboraft.ace23.dso-component"
+                };
+                check_equal(salts_component_plugin_generation_build(
+                    &generations[g], UINT64_C(90011001) + g, &registry,
+                    &stores[g], NULL, 0U, &source, 1U, NULL, 0U),
+                    SALTS_COMPONENT_PLUGIN_OK);
+                check_equal(salts_component_plugin_runtime_publish(
+                    &host, &generations[g], &previous),
+                    SALTS_COMPONENT_PLUGIN_OK);
+                check_true(previous == &generations[0]);
+                check_equal(generations[0].state,
+                            SALTS_COMPONENT_PLUGIN_GENERATION_DRAINING);
+            }
+            check_equal(salts_component_plugin_scope_acquire(
+                &host, &scopes[g]), SALTS_COMPONENT_PLUGIN_OK);
+            check_equal(salts_component_plugin_scope_generation_id(
+                &scopes[g]), UINT64_C(90011001) + g);
+            check_equal(salts_component_plugin_scope_find_service(
+                &scopes[g], tr_ace23_dso_callback_interface(),
+                &services[g]), SALTS_COMPONENT_PLUGIN_OK);
+            check_equal(tr_ace23_dso_callback_borrow_from_object(
+                services[g].object, services[g].interfaces, &callbacks[g]),
+                CMETA_OK);
+            check_true(tr_ace23_dso_callback_valid(&callbacks[g]));
+            check_true(cmeta_plugin_lease_valid(modules[g][0].lease));
+        }
+
+        /* The two published generation leases are owned independently,
+         * even when both candidates happen to use one identical DSO
+         * provider. A future integration can supply distinct DSOs without
+         * introducing an alternate module lifetime authority. */
+        check_equal(cmeta_plugin_registry_get_lifecycle(
+            &registry, plugin, &info), CMETA_PLUGIN_OK);
+        check_equal(info.active_leases, (size_t)2U);
+        check_equal(salts_component_plugin_generation_drain(
+            &host, &generations[0]), SALTS_COMPONENT_PLUGIN_BUSY);
+        check_equal(salts_component_plugin_runtime_close(
+            &host, &previous), SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &generations[1]);
+        check_equal(salts_component_plugin_generation_drain(
+            &host, &generations[1]), SALTS_COMPONENT_PLUGIN_BUSY);
+
+        check_equal(cmeta_plugin_registry_request_stop(
+            &registry, plugin), CMETA_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugin), CMETA_PLUGIN_BUSY);
+
+        check_equal(salts_component_plugin_scope_release(
+            &scopes[0]), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &host, &generations[0]), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_get_lifecycle(
+            &registry, plugin, &info), CMETA_PLUGIN_OK);
+        check_equal(info.active_leases, (size_t)1U);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugin), CMETA_PLUGIN_BUSY);
+        check_equal(salts_component_plugin_scope_release(
+            &scopes[1]), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &host, &generations[1]), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_get_lifecycle(
+            &registry, plugin, &info), CMETA_PLUGIN_OK);
+        check_equal(info.active_leases, (size_t)0U);
+        check_equal(cmeta_plugin_registry_poll_quiescent(
+            &registry, plugin, &quiescent), CMETA_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugin), CMETA_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_destroy(
+            &host), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_destroy(
+            &registry), CMETA_PLUGIN_OK);
+    }
+
 }
