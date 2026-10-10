@@ -16,6 +16,11 @@ extern "C" {
  * bounded reconnect state. No Raft-owned timer, retry loop, reactor, queue,
  * raw-runtime persistence, or duplicated Plugin/module lease is created.
  *
+ * The Channel configuration REQUIRES host_module_generation != 0, issued
+ * by the stable Component/Plugin domain outside any reloadable provider DSO.
+ * A new module load needs a fresh host generation even when the OS reuses
+ * the same DSO mapping/addresses. Failure to provide an epoch fails create.
+ *
  * This object remains address-stable on the SAME owner thread until destroy.
  * Its manager/client, TLS credentials and the caller-owned fingerprint lists
  * must remain valid until manager recycle and peer destruction. Never call
