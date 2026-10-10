@@ -1390,8 +1390,9 @@ static int qualify_two_certified_peer_group_pressure(
 #endif
 
     /* The second frame is valid and identical to the FIRST Snapshot at
-     * transport decode time; the only rejection is Group103's exhausted
-     * owned item/completion capacity, not malformed bytes or forged ID. */
+     * transport decode time. Rejection is caused solely by the TESTED
+     * capacity dimension of Group103: item slots or held SG byte lease,
+     * never malformed bytes, TLS identity, or forged Group metadata. */
     memset(bytes, 0x7b, sizeof(bytes));
     snapshot.group_id = 103U;
     snapshot.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
@@ -2575,7 +2576,11 @@ spec("ACE 2.3 real mTLS Snapshot to WAL Group Owner and durable reply")
 #endif
 #else
 #ifdef TURBORAFT_TEST_TLS_GROUP_PRESSURE
-spec("ACE 2.3 real mTLS Group103 exhaustion never poisons sibling Group101")
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+spec("ACE 2.3 certified TLS held-SG-byte backpressure versus independent Group Owner")
+#else
+spec("ACE 2.3 real mTLS Group103 item exhaustion never poisons sibling Group101")
+#endif
 {
     it("closes only overloaded certified Node3, preserves Node1, and returns all group credits")
     {
