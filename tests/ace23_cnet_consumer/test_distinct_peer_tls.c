@@ -76,7 +76,11 @@ typedef struct verified_payload_context {
     struct identity_fixture *fixture;
     tr_raft_cnet_channel_t *channel;
     tr_raft_transport_reply_origin_t chunk_origin; /* captured on CNet owner */
-    uint64_t chunk_request_id; /* one admitted chunk per certified Node */
+    uint64_t chunk_request_id; /* most recent admitted chunk */
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+    tr_raft_transport_reply_origin_t prior_chunk_origin;
+    uint64_t prior_chunk_request_id;
+#endif
 } verified_payload_context;
 
 typedef struct identity_fixture {
@@ -205,7 +209,13 @@ static int on_server_payload(void *user, const tr_raft_transport_payload_t *msg)
     } else if (msg->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
         const tr_raft_snapshot_chunk_t *d = &msg->data.snapshot_chunk;
         if (msg->group_id != 103U || d->from != 3U || d->to != 2U ||
-            d->snapshot_index != 19U || d->data_length != 24U ||
+            d->snapshot_index != 19U ||
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+            d->data_length != 12U ||
+            d->snapshot_offset != sink->received_snapshot * 12U ||
+#else
+            d->data_length != 24U ||
+#endif
             d->data == NULL) goto invalid;
         for (size_t i = 0U; i < d->data_length; ++i)
             if (d->data[i] != 0x7bU) goto invalid;
@@ -526,6 +536,13 @@ static int on_server_payload_and_forward(
                 result = tr_raft_multicore_ingress_submit_with_origin(
                     fixture->owner_ingress, payload, &origin, &request_id);
             if (result == SALTS_OK) {
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+                if (binding->chunk_request_id != 0U) {
+                    binding->prior_chunk_origin = binding->chunk_origin;
+                    binding->prior_chunk_request_id =
+                        binding->chunk_request_id;
+                }
+#endif
                 binding->chunk_origin = origin;
                 binding->chunk_request_id = request_id;
             }
@@ -1271,6 +1288,16 @@ static int run_two_distinct_peers(int forge_node_three)
                         snapshot.data.snapshot_chunk.snapshot_digest));
 #endif
                     TRY_STAGE(tr_raft_cnet_channel_send(f.outbound[0], &data));
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+                    snapshot.data.snapshot_chunk.data_length = 12U;
+                    snapshot.data.snapshot_chunk.done = false;
+                    TRY_STAGE(tr_raft_cnet_channel_send(f.outbound[1], &snapshot));
+                    snapshot.data.snapshot_chunk.snapshot_offset = 12U;
+                    snapshot.data.snapshot_chunk.data_length = 12U;
+                    snapshot.data.snapshot_chunk.data = s + 12U;
+                    snapshot.data.snapshot_chunk.done = true;
+                    snapshot.data.snapshot_chunk.has_configuration = false;
+#endif
                     TRY_STAGE(tr_raft_cnet_channel_send(f.outbound[1], &snapshot));
                     /* This memory is borrowed until send returns, NOT held
                      * until TLS send terminal or Owner callback. */
@@ -1288,7 +1315,11 @@ static int run_two_distinct_peers(int forge_node_three)
         if (sent && f.server_received.received_from_one == 1U &&
             f.server_received.received_from_three == 1U &&
             f.server_received.received_data == 1U &&
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+            f.server_received.received_snapshot == 2U &&
+#else
             f.server_received.received_snapshot == 1U &&
+#endif
             f.clients_received[0].received == 1U &&
             f.clients_received[1].received == 1U)
             break;
@@ -1300,7 +1331,11 @@ static int run_two_distinct_peers(int forge_node_three)
             f.server_received.received_from_one != 1U ||
             f.server_received.received_from_three != 1U ||
             f.server_received.received_data != 1U ||
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+            f.server_received.received_snapshot != 2U ||
+#else
             f.server_received.received_snapshot != 1U ||
+#endif
             f.server_received.wrong_payloads ||
             f.clients_received[0].received != 1U ||
             f.clients_received[1].received != 1U ||
@@ -1339,7 +1374,12 @@ static int run_two_distinct_peers(int forge_node_three)
          f.stop_from_payload_result != SALTS_EBUSY ||
          f.destroy_from_payload_result != SALTS_EBUSY ||
          f.server_payload_inflight != 0U ||
-         f.server_payload_completed != (forge_node_three ? 1U : 2U * LINK_COUNT))) {
+         f.server_payload_completed !=
+             (forge_node_three ? 1U : 2U * LINK_COUNT
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+              + 1U
+#endif
+             ))) {
         result = SALTS_EPROTO;
         failed_stage = "real CNet callback must reject stop and Channel destroy";
     }
@@ -1423,7 +1463,13 @@ static int run_two_distinct_peers(int forge_node_three)
                     chunk_completion.value.chunk.kind !=
                         (i == 0U ? TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK
                                  : TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) ||
-                    f.owner_groups[i].chunk_calls != 1U ||
+                    f.owner_groups[i].chunk_calls !=
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+                        (i == 1U ? 2U : 1U) ||
+#else
+                        1U ||
+#endif
+
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
                     (i == 0U && f.owner_groups[i].chunk_error) ||
                     (i == 1U && !f.owner_groups[i].chunk_error) ||
