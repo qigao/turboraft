@@ -140,6 +140,12 @@ jobs:
           cmake --build .ci/build-flowmq13-consumer --parallel 2
           ctest --test-dir .ci/build-flowmq13-consumer --output-on-failure \
             --output-junit flowmq13-results.xml --no-tests=error
+          # Each pass starts a new process/epoll owner and fresh WAL prefix;
+          # CTest repeats whole lifecycle fixtures, never a Raft send retry.
+          ctest --test-dir .ci/build-flowmq13-consumer \
+            -L cnet-snapshot-lifecycle --repeat until-fail:25 \
+            --output-on-failure --no-tests=error \
+            --output-junit flowmq13-snapshot-repeat.xml
 
       - name: Report ccache statistics
         if: always()
@@ -154,5 +160,6 @@ jobs:
           path: |
             .ci/build-flowmq13-consumer/Testing/Temporary
             .ci/build-flowmq13-consumer/flowmq13-results.xml
+            .ci/build-flowmq13-consumer/flowmq13-snapshot-repeat.xml
             .ci/build-flowmq13-full/CMakeCache.txt
           if-no-files-found: warn
