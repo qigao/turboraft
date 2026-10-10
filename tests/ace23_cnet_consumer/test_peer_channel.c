@@ -904,6 +904,24 @@ static int peer_case_run(int mode)
                 accepted = 1;
             }
         }
+        /* The second certified TLS connection has its own CNet
+         * slot/generation, Channel instance and B Component generation.
+         * A remains live until its terminal callback is drained. */
+        if (mode == PEER_DSO_AB_PUBLICATION &&
+            connected_b && !accepted_b) {
+            ready = 0;
+            PEER_TRY(cnet_listener_wait(&f.listener, 0U, &ready));
+            if (ready) {
+                cnet_observer observer =
+                    tr_raft_cnet_channel_observer(f.server_channel_b);
+                PEER_TRY(cnet_listener_accept_tls(
+                    &f.listener, &f.server, &f.tls_server,
+                    &observer, &f.inbound_b));
+                PEER_TRY(tr_raft_cnet_channel_attach(
+                    f.server_channel_b, f.inbound_b));
+                accepted_b = 1;
+            }
+        }
         PEER_TRY(cnet_client_poll(&f.server, 1U, &events));
         PEER_TRY(tr_raft_cnet_channel_get_status(f.client_channel, &cs));
         PEER_TRY(tr_raft_cnet_channel_get_status(f.server_channel, &ss));
@@ -1115,8 +1133,69 @@ static int peer_case_run(int mode)
             }
             sent = 1;
         }
+        /* Only the original certified CNet Owner creates/attaches B's
+         * transport after generation B has published and the A callback
+         * returned. The controller never touches socket/Channel state. */
+        if (mode == PEER_DSO_AB_PUBLICATION && sent &&
+            !connected_b && f.server_sink.count == 1U &&
+            atomic_load_explicit(&dso.b_ready, memory_order_acquire)) {
+            client_channel_b = client_channel;
+            server_channel_b = server_channel;
+            client_channel_b.host_module_generation =
+                salts_component_plugin_scope_generation_id(&dso.scope_b);
+            server_channel_b.host_module_generation =
+                salts_component_plugin_scope_generation_id(&dso.scope_b);
+            client_channel_b.payload_context = &f.client_sink_b;
+            server_channel_b.payload_context = &f.server_sink_b;
+            PEER_TRY(tr_raft_cnet_channel_create(
+                &client_channel_b, &f.client_channel_b));
+            PEER_TRY(tr_raft_cnet_channel_create(
+                &server_channel_b, &f.server_channel_b));
+            dso.verified_channel_b = f.server_channel_b;
+            options.observer =
+                tr_raft_cnet_channel_observer(f.client_channel_b);
+            PEER_TRY(cnet_connect(&f.client, &options, &f.outbound_b));
+            PEER_TRY(tr_raft_cnet_channel_attach(
+                f.client_channel_b, f.outbound_b));
+            connected_b = 1;
+        }
+        if (mode == PEER_DSO_AB_PUBLICATION && connected_b && accepted_b &&
+            !sent_b) {
+            tr_raft_transport_payload_t request = {0}, response = {0};
+            PEER_TRY(tr_raft_cnet_channel_get_status(
+                f.client_channel_b, &cs_b));
+            PEER_TRY(tr_raft_cnet_channel_get_status(
+                f.server_channel_b, &ss_b));
+            if (cs_b.phase == TR_RAFT_CNET_CHANNEL_FAILED ||
+                ss_b.phase == TR_RAFT_CNET_CHANNEL_FAILED) {
+                result = SALTS_EPROTO;
+                error_stage = "second provider TLS authentication failed";
+                goto cleanup;
+            }
+            if (cs_b.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
+                ss_b.phase == TR_RAFT_CNET_CHANNEL_ACTIVE) {
+                request.group_id = response.group_id = 42U;
+                request.kind = response.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+                request.data.raft.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+                request.data.raft.from = 1U;
+                request.data.raft.to = 2U;
+                request.data.raft.term = 3U;
+                response.data.raft.type = TR_RAFT_MSG_HEARTBEAT_RESPONSE;
+                response.data.raft.from = 2U;
+                response.data.raft.to = 1U;
+                response.data.raft.term = 3U;
+                PEER_TRY(tr_raft_cnet_channel_send(
+                    f.client_channel_b, &request));
+                PEER_TRY(tr_raft_cnet_channel_send(
+                    f.server_channel_b, &response));
+                sent_b = 1;
+            }
+        }
         if (sent && f.client_sink.count == 1U &&
-            f.server_sink.count == (mode == PEER_STREAMS ? 3U : 1U))
+            f.server_sink.count == (mode == PEER_STREAMS ? 3U : 1U) &&
+            (mode != PEER_DSO_AB_PUBLICATION ||
+             (sent_b && f.client_sink_b.count == 1U &&
+              f.server_sink_b.count == 1U)))
             break;
     }
 
