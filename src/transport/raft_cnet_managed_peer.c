@@ -313,6 +313,35 @@ int tr_raft_cnet_managed_peer_send(
                ? SALTS_ENOSPC : result;
 }
 
+int tr_raft_cnet_managed_peer_capture_reply_origin(
+    tr_raft_cnet_managed_peer_t *peer, tr_raft_group_id_t group_id,
+    tr_raft_transport_reply_origin_t *out_origin)
+{
+    if (out_origin == NULL) return SALTS_EINVAL;
+    *out_origin = (tr_raft_transport_reply_origin_t){0};
+    if (peer == NULL || group_id == 0U) return SALTS_EINVAL;
+    if (peer->stopped || !peer->current_protocol_ready ||
+        peer->channel == NULL)
+        return SALTS_EBUSY;
+    return tr_raft_cnet_channel_capture_reply_origin(
+        peer->channel, group_id, out_origin);
+}
+
+int tr_raft_cnet_managed_peer_send_chunk_completion(
+    tr_raft_cnet_managed_peer_t *peer,
+    const tr_raft_multicore_completion_t *completion)
+{
+    if (peer == NULL || completion == NULL) return SALTS_EINVAL;
+    if (peer->stopped || !peer->current_protocol_ready ||
+        peer->channel == NULL)
+        return SALTS_ECANCELED;
+    /* Never resolve a stale N callback through the current dial N+1:
+     * Channel enforces strict incarnation, authenticated Node/Group and
+     * CNet physical slot+generation before consuming a single send credit. */
+    return tr_raft_cnet_channel_send_chunk_completion(
+        peer->channel, completion);
+}
+
 static int tr_managed_group_enqueue(
     void *context,
     const tr_raft_message_t *message)
