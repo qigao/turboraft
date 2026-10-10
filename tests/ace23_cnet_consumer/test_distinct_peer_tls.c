@@ -5,7 +5,13 @@
 #include <salts/thread.h>
 
 #include <cmeta_error.h>
+#ifndef TURBORAFT_TEST_PROCESS_ROLE
 #include <tinytest.h>
+#endif
+#ifdef TURBORAFT_TEST_PROCESS_ROLE
+#include <signal.h>
+#include <unistd.h>
+#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -33,6 +39,11 @@
 #define CERT_SERVER_NODE2 "44e8fe3ce37ede1c2a1b5d36efa345cb662887d4250d17a000ebea2e834aed95"
 
 enum { LINK_COUNT = 2, MAX_PROGRESS = 4500 };
+#ifdef TURBORAFT_TEST_PROCESS_ROLE
+/* Per-process test input, not serialized Raft state. Only WAL files may
+ * cross the SIGKILL/exec boundary. */
+static const char *process_wal_prefix;
+#endif
 
 typedef struct remote_probe {
     tr_raft_node_id_t node_id;
@@ -355,9 +366,34 @@ static int owner_group_open(void *context, tr_raft_owner_t *owner,
         wal.max_live_segments = 4U;
         wal.max_log_entries = 16U;
         wal.max_snapshot_bytes = 1024U;
+#ifdef TURBORAFT_TEST_PROCESS_REOPEN
+        /* This MUST open the previous, killed process's committed WAL.
+         * A fresh empty WAL or a partially published Snapshot is failure,
+         * not a silent recovery fallback. */
+        wal.create_if_missing = false;
+#else
         wal.create_if_missing = true;
+#endif
         rc = tr_raft_wal_storage_open(&wal, &probe->snapshot_wal);
         if (rc != SALTS_OK) return rc;
+#ifdef TURBORAFT_TEST_PROCESS_REOPEN
+        {
+            tr_raft_wal_recovery_t recovered = {0};
+            rc = tr_raft_wal_storage_load(probe->snapshot_wal, &recovered);
+            if (rc == SALTS_OK &&
+                (recovered.snapshot_index != 0U ||
+                 recovered.snapshot_size != 0U ||
+                 recovered.commit_index != 0U ||
+                 recovered.entry_count != 0U))
+                rc = SALTS_EPROTO;
+            tr_raft_wal_recovery_destroy(&recovered);
+            if (rc != SALTS_OK) {
+                (void)tr_raft_wal_storage_close(probe->snapshot_wal);
+                probe->snapshot_wal = NULL;
+                return rc;
+            }
+        }
+#endif
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
         {
             tr_raft_wal_io_fault_provider_t faults = {0};
@@ -899,7 +935,9 @@ static void durable_snapshot_cleanup_files(const char *prefix)
     (void)cmeta_fs_unlink(path);
     (void)snprintf(path, sizeof(path), "%s.lock", prefix);
     (void)cmeta_fs_unlink(path);
+#ifndef TURBORAFT_TEST_PROCESS_ROLE
     (void)tt_remove_file(prefix);
+#endif
 }
 #endif
 
@@ -1360,7 +1398,20 @@ static int run_two_distinct_peers(int forge_node_three)
     }
 
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+#ifdef TURBORAFT_TEST_PROCESS_ROLE
+    /* A process controller owns this exact path across writer SIGKILL and
+     * a new OS process. No self-generated new root or cleanup in writer. */
+    if (process_wal_prefix == NULL || *process_wal_prefix == '\0') {
+        result = SALTS_EINVAL;
+        failed_stage = "controller supplied authoritative WAL prefix";
+        goto cleanup;
+    }
+    f.snapshot_prefix = malloc(strlen(process_wal_prefix) + 1U);
+    if (f.snapshot_prefix != NULL)
+        strcpy(f.snapshot_prefix, process_wal_prefix);
+#else
     f.snapshot_prefix = tt_make_temp_file("turboraft-cnet-snapshot", ".data");
+#endif
     if (f.snapshot_prefix == NULL) {
         result = SALTS_ENOMEM;
         failed_stage = "create isolated Snapshot WAL prefix";
