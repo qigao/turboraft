@@ -944,9 +944,34 @@ static int durable_snapshot_reconnect(
 
     RREQUIRE(f != NULL && uri != NULL && events != NULL &&
              f->delayed_snapshot_ready &&
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+             f->owner_groups[1].installed_snapshots == 0U &&
+             f->server_received.received_snapshot == 1U &&
+             f->owner_groups[1].chunk_calls == 1U &&
+             f->delayed_snapshot_completion.value.chunk.ack.snapshot.next_offset == 12U &&
+             !f->delayed_snapshot_completion.value.chunk.durable_or_installed &&
+#else
              f->owner_groups[1].installed_snapshots == 1U &&
+             f->delayed_snapshot_completion.value.chunk.ack.snapshot.next_offset == 24U &&
+             f->delayed_snapshot_completion.value.chunk.durable_or_installed &&
+#endif
              f->clients_received[1].snapshot_acks == 0U,
-             "durable N receipt was held rather than sent");
+             "N receipt is exact, not forged or already delivered");
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+    /* The old progress acknowledgement is a REAL TLS receipt on N,
+     * but has NO WAL installation semantics. Do not tear down before
+     * Node3 confirms its receipt. */
+    for (round = 0U; round < MAX_PROGRESS &&
+         f->clients_received[1].snapshot_progress_acks == 0U; ++round) {
+        RTRY(cnet_client_poll(&f->server, 1U, events));
+        RTRY(cnet_client_poll(&f->clients, 1U, events));
+    }
+    RREQUIRE(round < MAX_PROGRESS &&
+             f->clients_received[1].snapshot_progress_acks == 1U &&
+             f->clients_received[1].snapshot_acks == 0U &&
+             f->clients_received[1].wrong_payload == 0U,
+             "N delivered exactly one accepted non-durable progress ACK");
+#endif
     for (n = 0U; n < LINK_COUNT; ++n) {
         RTRY(tr_raft_cnet_channel_get_status(f->inbound[n], &inbound));
         if (inbound.authenticated_peer_node_id == 3U) {
@@ -1058,7 +1083,7 @@ static int durable_snapshot_reconnect(
     RREQUIRE(tr_raft_cnet_channel_send_chunk_completion(
                  f->inbound[socket],
                  &f->delayed_snapshot_completion) == SALTS_ECANCELED,
-             "old WAL-durable ACK cannot be sent by new TLS Channel");
+             "old N Owner ACK must not be sent via N+1 TLS");
     RTRY(tr_raft_cnet_channel_get_status(f->inbound[socket], &after));
     RREQUIRE(before.payloads_admitted == after.payloads_admitted &&
              before.payload_writes_pending == after.payload_writes_pending &&
