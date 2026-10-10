@@ -421,7 +421,8 @@ int tr_raft_multicore_submit_owned_chunk(
     } else return SALTS_ENOTSUP;
 
     if (reply_origin != NULL &&
-        (reply_origin->channel_instance == 0U ||
+        (reply_origin->host_module_generation == 0U ||
+         reply_origin->channel_instance == 0U ||
          reply_origin->authenticated_peer_node_id == 0U ||
          reply_origin->group_id != payload->group_id ||
          reply_origin->connection_token == 0U ||
