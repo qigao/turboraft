@@ -235,6 +235,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
   add_executable(turboraft_flowmq13_cnet_process_restart
                  test_cnet_process_restart.c)
+  target_link_libraries(turboraft_flowmq13_cnet_process_restart PRIVATE
+      TurboRaft::WalStorage)
   add_test(NAME turboraft.flowmq13.cnet_process_restart
            COMMAND turboraft_flowmq13_cnet_process_restart
                    "$<TARGET_FILE:turboraft_flowmq13_cnet_crash_writer>"
