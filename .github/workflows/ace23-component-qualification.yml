@@ -341,7 +341,7 @@ jobs:
           cmake --build .ci/build-ace23-owner-tsan-consumer --parallel 2
           ctest --test-dir .ci/build-ace23-owner-tsan-consumer \
             --output-on-failure --output-junit tsan-results.xml \
-            -R '^turboraft[.]ace23_owner_ingress' --no-tests=error
+            -R '^turboraft[.]ace23_(owner_ingress|dso_epoch)$' --no-tests=error
 
       - name: Report ccache statistics
         if: always()
