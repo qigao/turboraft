@@ -10,6 +10,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+#include <turboraft/raft_wal_storage.h>
+#include <turboraft/raft_snapshot_receiver.h>
+#include <turboraft/raft_multicore_chunk_receivers.h>
+#include <cmeta_crypto.h>
+#include <cmeta_fs.h>
+#include <stdlib.h>
+#endif
+
 #ifndef TURBORAFT_ACE23_FIXTURE_DIR
 #error "TURBORAFT_ACE23_FIXTURE_DIR must be defined for TLS fixture tests"
 #endif
@@ -26,6 +35,9 @@ typedef struct remote_probe {
     tr_raft_node_id_t node_id;
     size_t received;
     int wrong_payload;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    size_t snapshot_acks;
+#endif
 } remote_probe;
 
 typedef struct server_probe {
@@ -44,6 +56,11 @@ typedef struct owner_raft_probe {
     size_t chunk_calls;
     size_t chunk_bytes;
     int chunk_error;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    tr_raft_wal_storage_t *snapshot_wal; /* owned by Group 103 thread */
+    tr_raft_snapshot_receiver_t *snapshot_receiver;
+    size_t installed_snapshots;
+#endif
 } owner_raft_probe;
 
 /* CNet's verified inbound callback borrows one exact Channel generation.
@@ -99,6 +116,9 @@ typedef struct identity_fixture {
     int clients_live, server_live, listener_live, server_tls_live;
     int directory_manager_live;
     int accepted;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    char *snapshot_prefix; /* host owns path, Group 103 owns open file */
+#endif
 } identity_fixture;
 
 static const tr_raft_node_id_t NODE_IDS[LINK_COUNT] = {1U, 3U};
@@ -237,6 +257,30 @@ static int owner_apply(void *context, const tr_raft_entry_t *entries,
     return owner_storage(context);
 }
 
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+/* Runs ONLY on Group 103's actual Multicore Owner thread. A successful
+ * install performs production WAL file/segment/manifest durability BEFORE
+ * SnapshotReceiver can mark the terminal response installed. */
+static int durable_snapshot_install(
+    void *context, tr_raft_term_t leader_term,
+    tr_raft_index_t snapshot_index, tr_raft_term_t snapshot_term,
+    const tr_raft_conf_t *configuration, const uint8_t *bytes, size_t size)
+{
+    owner_raft_probe *probe = (owner_raft_probe *)context;
+    int result;
+    if (probe == NULL || probe->snapshot_wal == NULL ||
+        probe->thread != cmeta_thread_current_token()) {
+        if (probe != NULL) probe->wrong_owner = 1;
+        return SALTS_EPROTO;
+    }
+    result = tr_raft_wal_storage_install_snapshot(
+        probe->snapshot_wal, leader_term, snapshot_index,
+        snapshot_term, configuration, bytes, size);
+    if (result == SALTS_OK) ++probe->installed_snapshots;
+    return result;
+}
+#endif
+
 static int owner_group_open(void *context, tr_raft_owner_t *owner,
                             uint64_t group_id, tr_raft_service_t **out_service)
 {
@@ -250,6 +294,35 @@ static int owner_group_open(void *context, tr_raft_owner_t *owner,
     if (!tr_raft_owner_contains(owner, group_id) ||
         tr_raft_owner_index(owner) != index)
         probe->wrong_owner = 1;
+
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    if (group_id == 103U) {
+        tr_raft_wal_storage_config_t wal = {0};
+        tr_raft_snapshot_receiver_config_t receiver = {0};
+        int rc;
+        wal.path_prefix = fixture->snapshot_prefix;
+        wal.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
+        wal.max_transaction_bytes = 8U * 1024U;
+        wal.max_live_segments = 4U;
+        wal.max_log_entries = 16U;
+        wal.max_snapshot_bytes = 1024U;
+        wal.create_if_missing = true;
+        rc = tr_raft_wal_storage_open(&wal, &probe->snapshot_wal);
+        if (rc != SALTS_OK) return rc;
+        receiver.self_id = 2U;
+        receiver.max_snapshot_bytes = 1024U;
+        receiver.max_buffered_snapshot_bytes = 1024U;
+        receiver.install = durable_snapshot_install;
+        receiver.install_context = probe;
+        rc = tr_raft_snapshot_receiver_create(
+            &receiver, &probe->snapshot_receiver);
+        if (rc != SALTS_OK) {
+            (void)tr_raft_wal_storage_close(probe->snapshot_wal);
+            probe->snapshot_wal = NULL;
+            return rc;
+        }
+    }
+#endif
 
     service.core.self_id = 2U;
     service.core.voters = fixture->owner_voters;
@@ -271,7 +344,20 @@ static int owner_group_open(void *context, tr_raft_owner_t *owner,
     service.transport.enqueue = owner_transport_send;
     service.state_machine.context = probe;
     service.state_machine.apply_batch = owner_apply;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    {
+        int rc = tr_raft_service_create(&service, out_service);
+        if (rc != SALTS_OK && probe->snapshot_wal != NULL) {
+            tr_raft_snapshot_receiver_destroy(probe->snapshot_receiver);
+            probe->snapshot_receiver = NULL;
+            (void)tr_raft_wal_storage_close(probe->snapshot_wal);
+            probe->snapshot_wal = NULL;
+        }
+        return rc;
+    }
+#else
     return tr_raft_service_create(&service, out_service);
+#endif
 }
 
 static void owner_group_close(void *context, tr_raft_owner_t *owner,
@@ -283,6 +369,15 @@ static void owner_group_close(void *context, tr_raft_owner_t *owner,
     if (probe->thread != cmeta_thread_current_token() ||
         tr_raft_owner_service(owner, group_id) != NULL)
         probe->wrong_owner = 1;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    tr_raft_snapshot_receiver_destroy(probe->snapshot_receiver);
+    probe->snapshot_receiver = NULL;
+    if (probe->snapshot_wal != NULL) {
+        if (tr_raft_wal_storage_close(probe->snapshot_wal) != SALTS_OK)
+            probe->wrong_owner = 1;
+        probe->snapshot_wal = NULL;
+    }
+#endif
     probe->closed = 1;
 }
 
@@ -301,6 +396,23 @@ static int owner_receive_chunk(
     uint8_t expected;
     if (probe->thread != cmeta_thread_current_token() ||
         !tr_raft_owner_contains(owner, group_id)) probe->wrong_owner = 1;
+
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    if (group_id == 103U &&
+        payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+        tr_raft_multicore_chunk_receivers_t receivers = {0};
+        int result;
+        receivers.snapshot = probe->snapshot_receiver;
+        result = tr_raft_multicore_chunk_receivers_handle(
+            &receivers, payload, out);
+        if (result != SALTS_OK) probe->chunk_error = 1;
+        else {
+            probe->chunk_bytes += payload->data.snapshot_chunk.data_length;
+            ++probe->chunk_calls;
+        }
+        return result;
+    }
+#endif
 
     if (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK) {
         data = payload->data.data_chunk.data;
