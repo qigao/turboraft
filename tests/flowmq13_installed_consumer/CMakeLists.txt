@@ -17,13 +17,18 @@ foreach(root SALTS_ROOT SALTS_UTILS_ROOT FLOWMQ_ROOT TURBORAFT_ROOT)
   endif()
 endforeach()
 
+# Normalize host paths before passing them through find_package/vcpkg macros:
+# raw Windows backslashes (for example D:\\a) are not valid CMake escapes.
+file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" _flowmq13_salts_root)
+file(TO_CMAKE_PATH "$ENV{FLOWMQ_ROOT}" _flowmq13_flowmq_root)
+file(TO_CMAKE_PATH "$ENV{TURBORAFT_ROOT}" _flowmq13_turboraft_root)
 find_package(Salts 2.3.0 EXACT CONFIG REQUIRED
-             PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+             PATHS "${_flowmq13_salts_root}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_package(FlowMQ 1.3.0 EXACT CONFIG REQUIRED
-             PATHS "$ENV{FLOWMQ_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+             PATHS "${_flowmq13_flowmq_root}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_package(TurboRaft 0.3.1 EXACT CONFIG REQUIRED
              COMPONENTS FlowMQ SnapshotSender SnapshotReceiver CNet
-             PATHS "$ENV{TURBORAFT_ROOT}"
+             PATHS "${_flowmq13_turboraft_root}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 # Reuse the existing formal TurboRaft test suite, rather than a header-only
