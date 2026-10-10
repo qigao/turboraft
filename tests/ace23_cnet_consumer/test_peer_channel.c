@@ -649,26 +649,33 @@ static int peer_record(void *context,
          * the admission ticket takes its epoch from the stable host scope,
          * never from a DSO-local static, pointer or recycled socket slot. */
         tr_raft_transport_reply_origin_t origin = {0};
-        if (sink->dso->verified_channel == NULL ||
+        tr_raft_cnet_channel_t *channel = sink->provider_b
+            ? sink->dso->verified_channel_b : sink->dso->verified_channel;
+        salts_component_plugin_scope *scope = sink->provider_b
+            ? &sink->dso->scope_b : &sink->dso->scope;
+        tr_ace23_dso_callback *callback = sink->provider_b
+            ? &sink->dso->callback_b : &sink->dso->callback;
+        if (channel == NULL ||
             tr_raft_cnet_channel_capture_reply_origin(
-                sink->dso->verified_channel, payload->group_id,
-                &origin) != SALTS_OK ||
+                channel, payload->group_id, &origin) != SALTS_OK ||
             origin.host_module_generation !=
-                salts_component_plugin_scope_generation_id(
-                    &sink->dso->scope) ||
+                salts_component_plugin_scope_generation_id(scope) ||
             origin.authenticated_peer_node_id != sink->expected_from ||
             origin.group_id != payload->group_id ||
             origin.channel_instance == 0U ||
             origin.connection_token == 0U)
             goto invalid;
-        sink->dso->captured_origin = origin;
+        if (sink->provider_b)
+            sink->dso->captured_origin_b = origin;
+        else
+            sink->dso->captured_origin = origin;
 
-        /* Executing DSO text INSIDE verified CNet progress owner callback.
-         * The published ComponentPlugin generation owns the sole module
-         * lease until the CNet terminal barrier and Scope drain. */
-        if (tr_ace23_dso_callback_invoke(&sink->dso->callback) != 1)
+        /* The caller-driven CNet Owner dispatches to the exact published
+         * provider generation from this Channel, never the old A vtable. */
+        if (tr_ace23_dso_callback_invoke(callback) != 1)
             goto invalid;
-        ++sink->dso->network_callbacks;
+        if (sink->provider_b) ++sink->dso->network_callbacks_b;
+        else ++sink->dso->network_callbacks;
     }
     return SALTS_OK;
 invalid:
