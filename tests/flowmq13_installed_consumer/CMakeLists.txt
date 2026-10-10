@@ -298,3 +298,24 @@ add_test(NAME turboraft.flowmq13.cnet_group_pressure
 set_tests_properties(turboraft.flowmq13.cnet_group_pressure
                      PROPERTIES TIMEOUT 65
                                 LABELS "cnet-snapshot-lifecycle;cnet-group-pressure")
+
+# Separate from ITEM saturation: one real certified Node3 Snapshot lease
+# is parked in its exact Group103 Owner, retaining 24 BYTE credits. Capacity
+# remains 3 (one ITEM slot still free), so a second legitimate TLS Snapshot
+# fails ONLY the per-Group SG byte preflight with ENOSPC. Group101 Owner
+# processes both of its own requests while Group103 callback is paused.
+# Caller releases that test-only callback gate before terminal cleanup.
+add_executable(turboraft_flowmq13_cnet_byte_pressure
+               ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+target_compile_definitions(turboraft_flowmq13_cnet_byte_pressure PRIVATE
+    TURBORAFT_TEST_TLS_GROUP_PRESSURE=1
+    TURBORAFT_TEST_TLS_BYTE_PRESSURE=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_link_libraries(turboraft_flowmq13_cnet_byte_pressure PRIVATE
+    TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+    Salts::Platform Salts::TinyTest)
+add_test(NAME turboraft.flowmq13.cnet_byte_pressure
+         COMMAND turboraft_flowmq13_cnet_byte_pressure)
+set_tests_properties(turboraft.flowmq13.cnet_byte_pressure
+                     PROPERTIES TIMEOUT 65
+                                LABELS "cnet-snapshot-lifecycle;cnet-byte-pressure")
