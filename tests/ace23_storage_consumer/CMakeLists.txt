@@ -25,3 +25,11 @@ target_link_libraries(turboraft_ace23_chunk_receivers
 add_test(NAME turboraft.ace23_chunk_receivers
          COMMAND turboraft_ace23_chunk_receivers)
 set_tests_properties(turboraft.ace23_chunk_receivers PROPERTIES TIMEOUT 25)
+
+add_executable(turboraft_ace23_chunk_owner test_chunk_owner.c)
+target_link_libraries(turboraft_ace23_chunk_owner
+                      PRIVATE TurboRaft::ChunkReceivers
+                              Salts::Platform Salts::TinyTest)
+add_test(NAME turboraft.ace23_chunk_owner
+         COMMAND turboraft_ace23_chunk_owner)
+set_tests_properties(turboraft.ace23_chunk_owner PROPERTIES TIMEOUT 25)
