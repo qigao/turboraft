@@ -550,13 +550,15 @@ through a simulated delivery function:
   storage-settlement retry**. Muting a test *Core callback* is NOT the
   same as a physical packet loss / OS link failure.
 - `turboraft.flowmq13.cnet_core_quorum_ticked_loss` extends that negative
-  gate by continuing **eight monotonic-time Raft leader heartbeats** with
-  both remote callbacks silent. The leader's in-memory persisted Ready,
-  `commit_index`, and `applied_index` are checked for safety on every
-  network progress iteration; no remote Append ACK is admitted. Restore
-  Node3's callback and require a fresh certified TLS response before
-  commit4, then converge Node1. The leader-only ticks do **not** exercise
-  independent election clocks, leader churn, or a real TCP partition.
+  gate by continuing **eight monotonic-time Raft ticks** with both remote
+  callbacks silent. `CheckQuorum` must eventually DEMOTE minority Leader
+  Node2 rather than let it retain authority. Persisted Ready, `commit_index`
+  and `applied_index` are checked on every progress iteration and remain
+  at 3 despite the uncommitted index4 log. Restoring Node3 must yield a
+  **fresh real TLS vote** and a higher-term election before a new certified
+  Append ACK can commit4; Node1 then catches up. This is a true Raft
+  minority-role transition but still only simulates loss at Core callbacks:
+  it does **not** exercise independent node election clocks or TCP faults.
 
 The CNet test harness has finite 15-second TLS read and 5-second write
 timeouts, an 8-second bounded Raft progress phase, and drives heartbeats

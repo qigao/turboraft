@@ -390,10 +390,11 @@ set_tests_properties(turboraft.flowmq13.cnet_core_quorum_loss
                                 LABELS "cnet-snapshot-lifecycle;cnet-raft-quorum-real-wire")
 
 # Separate negative gate: keep Node1 and Node3 unable to step their
-# authenticated TLS Raft frames while driving EIGHT actual monotonic-time
-# Node2 leader ticks. Commit/apply index4 MUST remain forbidden on every
-# poll and heartbeat; only a fresh certified Node3 response after unmuting
-# can advance the log. Callback muting is NOT a physical TCP partition.
+# authenticated TLS Raft frames while driving EIGHT monotonic-time Raft
+# ticks on Node2. CheckQuorum MUST demote the minority leader while
+# commit/apply index4 remains forbidden at every poll/tick. A fresh
+# certified Node3 vote and Append ACK then re-elect/commit after unmuting.
+# Callback muting is NOT a physical TCP partition.
 add_executable(turboraft_flowmq13_cnet_core_quorum_ticked_loss
                test_cnet_two_link_quorum.c)
 target_compile_definitions(turboraft_flowmq13_cnet_core_quorum_ticked_loss PRIVATE
