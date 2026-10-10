@@ -163,7 +163,10 @@ static int load_core(tr_raft_wal_storage_t *wal, unsigned node_id,
     config.initial_election_timeout_ticks = node_id + 2U;
     config.initial_term = recovered.term;
     config.initial_vote = recovered.voted_for;
-    config.initial_log_entries = recovered.entries;
+    /* WAL recovery owns an allocated entries buffer even for count=0;
+     * Core explicitly rejects a NON-NULL pointer when no entries exist. */
+    config.initial_log_entries = recovered.entry_count != 0U
+                                    ? recovered.entries : NULL;
     config.initial_log_entry_count = recovered.entry_count;
     config.initial_commit_index = recovered.commit_index;
     config.initial_applied_index = 0U;
