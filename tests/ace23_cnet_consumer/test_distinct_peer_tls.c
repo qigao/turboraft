@@ -785,6 +785,47 @@ done:
     return result;
 }
 
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+static int durable_snapshot_verify_failed(const char *prefix)
+{
+    tr_raft_wal_storage_t *storage = NULL;
+    tr_raft_wal_recovery_t recovery = {0};
+    tr_raft_wal_storage_config_t config = {0};
+    char published[SALTS_FS_MAX_PATH];
+    int result;
+    config.path_prefix = prefix;
+    config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
+    config.max_transaction_bytes = 8U * 1024U;
+    config.max_live_segments = 4U;
+    config.max_log_entries = 16U;
+    config.max_snapshot_bytes = 1024U;
+    config.create_if_missing = false;
+    result = tr_raft_wal_storage_open(&config, &storage);
+    if (result != SALTS_OK) return result;
+    result = tr_raft_wal_storage_load(storage, &recovery);
+    if (result == SALTS_OK) {
+        if (recovery.snapshot_index != 0U ||
+            recovery.snapshot_size != 0U ||
+            recovery.commit_index != 0U ||
+            recovery.entry_count != 0U)
+            result = SALTS_EPROTO;
+    }
+    tr_raft_wal_recovery_destroy(&recovery);
+    if (result == SALTS_OK) {
+        int length = snprintf(published, sizeof(published),
+                              "%s.snapshot.19.3", prefix);
+        if (length < 0 || (size_t)length >= sizeof(published) ||
+            cmeta_fs_access(published, SALTS_FS_ACCESS_EXISTS) == SALTS_OK)
+            result = SALTS_EPROTO;
+    }
+    {
+        int close_result = tr_raft_wal_storage_close(storage);
+        if (result == SALTS_OK) result = close_result;
+    }
+    return result;
+}
+#endif
+
 static void durable_snapshot_cleanup_files(const char *prefix)
 {
     char path[SALTS_FS_MAX_PATH];
@@ -1359,12 +1400,22 @@ static int run_two_distinct_peers(int forge_node_three)
                     chunk_completion.reply_origin.authenticated_peer_node_id !=
                         NODE_IDS[i] ||
                     chunk_completion.operation != TR_RAFT_MULTICORE_RECEIVE_CHUNK ||
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+                    chunk_completion.result !=
+                        (i == 1U ? SALTS_EIO : SALTS_OK) ||
+#else
                     chunk_completion.result != SALTS_OK ||
+#endif
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
                     (i == 0U && (chunk_completion.value.chunk.ack_valid ||
                                   chunk_completion.value.chunk.durable_or_installed)) ||
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+                    (i == 1U && (chunk_completion.value.chunk.ack_valid ||
+                                  chunk_completion.value.chunk.durable_or_installed)) ||
+#else
                     (i == 1U && (!chunk_completion.value.chunk.ack_valid ||
                                   !chunk_completion.value.chunk.durable_or_installed)) ||
+#endif
 #else
                     chunk_completion.value.chunk.ack_valid ||
                     chunk_completion.value.chunk.durable_or_installed ||
@@ -1373,7 +1424,12 @@ static int run_two_distinct_peers(int forge_node_three)
                         (i == 0U ? TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK
                                  : TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) ||
                     f.owner_groups[i].chunk_calls != 1U ||
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+                    (i == 0U && f.owner_groups[i].chunk_error) ||
+                    (i == 1U && !f.owner_groups[i].chunk_error) ||
+#else
                     f.owner_groups[i].chunk_error ||
+#endif
                     f.owner_groups[i].chunk_bytes != (i == 0U ? 16U : 24U) ||
                     tr_raft_multicore_group_status(
                         f.raft_owners, 100U + NODE_IDS[i], &status) != SALTS_OK ||
@@ -1385,6 +1441,19 @@ static int run_two_distinct_peers(int forge_node_three)
                 }
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
                 if (i == 1U) {
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+                    /* An actual Snapshot staging write failed in the
+                     * Group Owner. CNet must never manufacture an ACK. */
+                    if (f.owner_groups[1].installed_snapshots != 0U ||
+                        f.owner_groups[1].snapshot_write_faults != 1U ||
+                        f.clients_received[1].snapshot_acks != 0U ||
+                        tr_raft_cnet_channel_send_chunk_completion(
+                            binding->channel, &chunk_completion) != SALTS_ENOTSUP) {
+                        failed_stage = "failed WAL snapshot must not ACK or retry";
+                        result = SALTS_EPROTO;
+                        break;
+                    }
+#else
                     tr_raft_multicore_completion_t stale = chunk_completion;
                     tr_raft_cnet_channel_status_t before = {0}, after = {0};
                     tr_raft_cnet_channel_t *other =
@@ -1418,6 +1487,7 @@ static int run_two_distinct_peers(int forge_node_three)
                     }
                     TRY_STAGE(tr_raft_cnet_channel_send_chunk_completion(
                         binding->channel, &chunk_completion));
+#endif
                 } else
 #endif
                 {
@@ -1434,6 +1504,13 @@ static int run_two_distinct_peers(int forge_node_three)
     }
 
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+    if (!forge_node_three && result == SALTS_OK &&
+        f.clients_received[1].snapshot_acks != 0U) {
+        failed_stage = "failed snapshot unexpectedly ACKed before close";
+        result = SALTS_EPROTO;
+    }
+#else
     if (!forge_node_three && result == SALTS_OK) {
         /* The receiver reached disk before CNet admitted this ACK. Poll
          * only the original two CNet Owners, no background retry/queue. */
@@ -1449,6 +1526,7 @@ static int run_two_distinct_peers(int forge_node_three)
         }
     }
 #endif
+#endif
 
 cleanup:
     {
@@ -1461,9 +1539,15 @@ cleanup:
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
     if (f.snapshot_prefix != NULL) {
         if (result == SALTS_OK && !forge_node_three) {
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+            result = durable_snapshot_verify_failed(f.snapshot_prefix);
+            if (result != SALTS_OK)
+                failed_stage = "failed TLS Snapshot leaked into reopened WAL";
+#else
             result = durable_snapshot_verify_and_catch_up(f.snapshot_prefix);
             if (result != SALTS_OK)
                 failed_stage = "reopen installed WAL and commit index20 catch-up";
+#endif
         }
         durable_snapshot_cleanup_files(f.snapshot_prefix);
         free(f.snapshot_prefix);
@@ -1486,6 +1570,15 @@ cleanup:
 }
 
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+spec("ACE 2.3 authenticated TLS Snapshot write fault is fail-closed")
+{
+    it("returns errored Group completion, emits no ACK and reopens old WAL")
+    {
+        check_equal(run_two_distinct_peers(0), SALTS_OK);
+    }
+}
+#else
 spec("ACE 2.3 real mTLS Snapshot to WAL Group Owner and durable reply")
 {
     it("installs Node3 Snapshot on exact Group Owner, fences stale ACK, restarts and catches up")
@@ -1493,6 +1586,7 @@ spec("ACE 2.3 real mTLS Snapshot to WAL Group Owner and durable reply")
         check_equal(run_two_distinct_peers(0), SALTS_OK);
     }
 }
+#endif
 #else
 spec("ACE 2.3 two real distinct TLS-certified Raft Node IDs")
 {
