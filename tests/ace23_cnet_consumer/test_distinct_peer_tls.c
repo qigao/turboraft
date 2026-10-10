@@ -882,6 +882,50 @@ static int run_two_distinct_peers(int forge_node_three)
                     payload.data.raft.to = st.authenticated_peer_node_id;
                     TRY_STAGE(tr_raft_cnet_channel_send(f.inbound[i], &payload));
                 }
+                /* Two distinct TLS-certified peer IDs send a DATA and a
+                 * SNAPSHOT chunk. CNet owns their retained SG writes;
+                 * Directory admits them to the existing Multicore inbox. */
+                {
+                    tr_raft_transport_payload_t data = {0}, snapshot = {0};
+                    uint8_t d[16], s[24];
+                    memset(d, 0x39, sizeof(d));
+                    memset(s, 0x7b, sizeof(s));
+                    data.group_id = 101U;
+                    data.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+                    data.data.data_chunk.from = 1U;
+                    data.data.data_chunk.to = 2U;
+                    data.data.data_chunk.term = 3U;
+                    data.data.data_chunk.stream_id = 9U;
+                    data.data.data_chunk.stream_size = sizeof(d);
+                    data.data.data_chunk.data_length = sizeof(d);
+                    data.data.data_chunk.data = d;
+                    data.data.data_chunk.done = true;
+
+                    snapshot.group_id = 103U;
+                    snapshot.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
+                    snapshot.data.snapshot_chunk.from = 3U;
+                    snapshot.data.snapshot_chunk.to = 2U;
+                    snapshot.data.snapshot_chunk.term = 3U;
+                    snapshot.data.snapshot_chunk.snapshot_index = 19U;
+                    snapshot.data.snapshot_chunk.snapshot_term = 3U;
+                    snapshot.data.snapshot_chunk.snapshot_size = sizeof(s);
+                    snapshot.data.snapshot_chunk.data_length = sizeof(s);
+                    snapshot.data.snapshot_chunk.data = s;
+                    snapshot.data.snapshot_chunk.done = true;
+                    snapshot.data.snapshot_chunk.has_configuration = true;
+                    snapshot.data.snapshot_chunk.configuration.phase =
+                        TR_RAFT_CONF_FINAL;
+                    snapshot.data.snapshot_chunk.configuration.member_count = 1U;
+                    snapshot.data.snapshot_chunk.configuration.members[0].node_id = 2U;
+                    snapshot.data.snapshot_chunk.configuration.members[0].roles =
+                        TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+                    TRY_STAGE(tr_raft_cnet_channel_send(f.outbound[0], &data));
+                    TRY_STAGE(tr_raft_cnet_channel_send(f.outbound[1], &snapshot));
+                    /* This memory is borrowed until send returns, NOT held
+                     * until TLS send terminal or Owner callback. */
+                    memset(d, 0x44, sizeof(d));
+                    memset(s, 0x44, sizeof(s));
+                }
                 sent = 1;
             }
         }
@@ -892,6 +936,8 @@ static int run_two_distinct_peers(int forge_node_three)
             break;
         if (sent && f.server_received.received_from_one == 1U &&
             f.server_received.received_from_three == 1U &&
+            f.server_received.received_data == 1U &&
+            f.server_received.received_snapshot == 1U &&
             f.clients_received[0].received == 1U &&
             f.clients_received[1].received == 1U)
             break;
@@ -902,6 +948,8 @@ static int run_two_distinct_peers(int forge_node_three)
         if (!sent || f.accepted != LINK_COUNT ||
             f.server_received.received_from_one != 1U ||
             f.server_received.received_from_three != 1U ||
+            f.server_received.received_data != 1U ||
+            f.server_received.received_snapshot != 1U ||
             f.server_received.wrong_payloads ||
             f.clients_received[0].received != 1U ||
             f.clients_received[1].received != 1U ||
@@ -940,7 +988,7 @@ static int run_two_distinct_peers(int forge_node_three)
          f.stop_from_payload_result != SALTS_EBUSY ||
          f.destroy_from_payload_result != SALTS_EBUSY ||
          f.server_payload_inflight != 0U ||
-         f.server_payload_completed != (forge_node_three ? 1U : LINK_COUNT))) {
+         f.server_payload_completed != (forge_node_three ? 1U : 2U * LINK_COUNT))) {
         result = SALTS_EPROTO;
         failed_stage = "real CNet callback must reject stop and Channel destroy";
     }
@@ -973,6 +1021,30 @@ static int run_two_distinct_peers(int forge_node_three)
                 failed_stage = "forged TLS peer reached the other Raft Group";
                 result = SALTS_EPROTO;
                 break;
+            }
+            if (expected && !forge_node_three) {
+                tr_raft_multicore_completion_t chunk_completion = {0};
+                tr_raft_multicore_group_status_t status = {0};
+                observed = take_owner_completion(&f, i, &chunk_completion);
+                if (observed != SALTS_OK ||
+                    chunk_completion.operation != TR_RAFT_MULTICORE_RECEIVE_CHUNK ||
+                    chunk_completion.result != SALTS_OK ||
+                    chunk_completion.value.chunk.ack_valid ||
+                    chunk_completion.value.chunk.durable_or_installed ||
+                    chunk_completion.value.chunk.kind !=
+                        (i == 0U ? TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK
+                                 : TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) ||
+                    f.owner_groups[i].chunk_calls != 1U ||
+                    f.owner_groups[i].chunk_error ||
+                    f.owner_groups[i].chunk_bytes != (i == 0U ? 16U : 24U) ||
+                    tr_raft_multicore_group_status(
+                        f.raft_owners, 100U + NODE_IDS[i], &status) != SALTS_OK ||
+                    status.owned_chunk_bytes != 0U ||
+                    status.outstanding != 0U) {
+                    failed_stage = "verified TLS chunk not consumed by exact Group Owner";
+                    result = SALTS_EPROTO;
+                    break;
+                }
             }
         }
     }
