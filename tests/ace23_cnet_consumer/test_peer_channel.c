@@ -1,5 +1,11 @@
 #include <turboraft/raft_cnet_channel.h>
 
+#include "test_dso_epoch_fixture.h"
+#include <salts/plugin.h>
+#include <salts/component_plugin.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
+
 #include <cmeta_error.h>
 #include <tinytest.h>
 
@@ -8,6 +14,9 @@
 
 #ifndef TURBORAFT_ACE23_FIXTURE_DIR
 #error "Set the directory containing the checked-in loopback-only TLS fixtures"
+#endif
+#ifndef TURBORAFT_ACE23_EPOCH_DSO_PATH
+#error "Set the exact built Salts Plugin DSO fixture path"
 #endif
 
 #define CERT_NODE1 "eb571a92b33237897216c79501066b3e77391047eaeb6be084526c4769657549"
@@ -19,8 +28,100 @@ enum peer_mode {
     PEER_FOREIGN_CLUSTER,
     PEER_FORGED_NODE,
     PEER_UNAUTHORIZED_CERT,
-    PEER_ABORT_SG
+    PEER_ABORT_SG,
+    PEER_DSO_CALLBACK
 };
+
+typedef struct peer_dso_harness {
+    cmeta_plugin_registry registry;
+    cmeta_plugin_ref plugin;
+    cmeta_plugin_lease lease;
+    const cmeta_plugin_manifest *manifest; /* valid only while lease held */
+    const tr_ace23_dso_callback_state *module; /* same borrowed lifetime */
+    salts_component_plugin_runtime host;
+    salts_component_plugin_generation generation;
+    salts_component_plugin_scope scope;
+    cmeta_thread_t controller;
+    cmeta_plugin_status unload_while_callback;
+    cmeta_plugin_status stop_result;
+    cmeta_plugin_status unload_after_stop;
+    int controller_result;
+    int registry_open, loaded, started, lease_live;
+    int host_open, published, scope_live, controller_live;
+    unsigned network_callbacks;
+} peer_dso_harness;
+
+static void peer_dso_controller(void *context)
+{
+    peer_dso_harness *dso = (peer_dso_harness *)context;
+    const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+
+    while (atomic_load_explicit(
+               &dso->module->callback_entered, memory_order_acquire) == 0U) {
+        if (cmeta_monotonic_ms() >= deadline) {
+            dso->controller_result = SALTS_ETIMEDOUT;
+            (void)cmeta_plugin_registry_request_stop(&dso->registry, dso->plugin);
+            return;
+        }
+        cmeta_thread_yield();
+    }
+    /* The other thread is currently *inside* the DSO via a real verified
+     * CNet on_payload. Only the existing Salts::Plugin loader may unload.
+     * Its live module lease must prohibit dlclose both before/after stop. */
+    dso->unload_while_callback =
+        cmeta_plugin_registry_unload(&dso->registry, dso->plugin);
+    dso->stop_result =
+        cmeta_plugin_registry_request_stop(&dso->registry, dso->plugin);
+    dso->unload_after_stop =
+        cmeta_plugin_registry_unload(&dso->registry, dso->plugin);
+    dso->controller_result = SALTS_OK;
+}
+
+static int peer_dso_setup(peer_dso_harness *dso)
+{
+    const cmeta_plugin_registry_config registry_config = {.capacity = 1U};
+    const salts_component_plugin_generation_storage empty_storage = {0};
+    salts_component_plugin_generation *previous = NULL;
+
+    if (cmeta_plugin_registry_init(&dso->registry, &registry_config) !=
+        CMETA_PLUGIN_OK) return SALTS_EPROTO;
+    dso->registry_open = 1;
+    if (cmeta_plugin_registry_load(
+            &dso->registry, TURBORAFT_ACE23_EPOCH_DSO_PATH,
+            &dso->plugin) != CMETA_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->loaded = 1;
+    if (cmeta_plugin_registry_start(
+            &dso->registry, dso->plugin) != CMETA_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->started = 1;
+    if (cmeta_plugin_registry_acquire(
+            &dso->registry, dso->plugin, &dso->lease,
+            &dso->manifest) != CMETA_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->lease_live = 1;
+    dso->module = (const tr_ace23_dso_callback_state *)dso->manifest->self;
+    if (dso->module == NULL || dso->manifest->is_quiescent == NULL)
+        return SALTS_EPROTO;
+
+    if (salts_component_plugin_runtime_init(&dso->host) !=
+        SALTS_COMPONENT_PLUGIN_OK) return SALTS_EPROTO;
+    dso->host_open = 1;
+    if (salts_component_plugin_generation_build(
+            &dso->generation, UINT64_C(90010001), NULL,
+            &empty_storage, NULL, 0U, NULL, 0U, NULL, 0U) !=
+        SALTS_COMPONENT_PLUGIN_OK) return SALTS_EPROTO;
+    if (salts_component_plugin_runtime_publish(
+            &dso->host, &dso->generation, &previous) !=
+            SALTS_COMPONENT_PLUGIN_OK || previous != NULL)
+        return SALTS_EPROTO;
+    dso->published = 1;
+    if (salts_component_plugin_scope_acquire(
+            &dso->host, &dso->scope) != SALTS_COMPONENT_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->scope_live = 1;
+    return SALTS_OK;
+}
 
 typedef struct peer_sink {
     tr_raft_node_id_t expected_from;
@@ -30,6 +131,7 @@ typedef struct peer_sink {
     size_t data_count;
     size_t snapshot_count;
     int violation;
+    peer_dso_harness *dso; /* CNet Owner borrows DSO under host Plugin lease */
 } peer_sink_t;
 
 typedef struct peer_fixture {
@@ -142,6 +244,14 @@ static int peer_record(void *context,
     }
 
     ++sink->count;
+    if (sink->dso != NULL) {
+        /* Executing DSO text INSIDE verified CNet progress owner callback.
+         * Host's Plugin lease and Component scope remain live until the
+         * CNet terminal callback; no Group Owner calls into this DSO. */
+        if (!sink->dso->manifest->is_quiescent(
+                sink->dso->manifest->self)) goto invalid;
+        ++sink->dso->network_callbacks;
+    }
     return SALTS_OK;
 invalid:
     sink->violation = 1;
