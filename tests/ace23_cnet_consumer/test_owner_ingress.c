@@ -17,6 +17,9 @@ typedef struct owner_group {
     unsigned responses;
     bool wrong_owner;
     bool closed;
+    size_t chunk_calls;
+    size_t chunk_bytes;
+    bool chunk_invalid;
 } owner_group;
 
 typedef struct ingress_fixture {
@@ -154,11 +157,55 @@ static void test_group_close(void *context, tr_raft_owner_t *owner,
     group->closed = true;
 }
 
-static int fixture_create(ingress_fixture *fixture)
+/* Deliberately no durable receiver in this isolation fixture: verify the
+ * copied bytes reach the correct fixed OS Group Owner, but do not fabricate
+ * Snapshot/Data ACKs or claim persistence/fync from a mock callback. */
+static int test_receive_owned_chunk(
+    void *context, tr_raft_owner_t *owner, uint64_t group_id,
+    const tr_raft_transport_payload_t *payload,
+    tr_raft_multicore_chunk_result_t *out_result)
+{
+    ingress_fixture *fixture = (ingress_fixture *)context;
+    owner_group *group = &fixture->groups[group_slot(group_id)];
+    const uint8_t *data;
+    size_t size, i;
+    uint8_t expected;
+
+    if (!tr_raft_owner_contains(owner, group_id) ||
+        group->thread_token != cmeta_thread_current_token())
+        group->wrong_owner = true;
+    if (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK) {
+        data = payload->data.data_chunk.data;
+        size = payload->data.data_chunk.data_length;
+        expected = 0x39U;
+    } else if (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+        data = payload->data.snapshot_chunk.data;
+        size = payload->data.snapshot_chunk.data_length;
+        expected = 0x7bU;
+    } else return SALTS_EPROTO;
+
+    if (size != 0U && data == NULL) return SALTS_EPROTO;
+    for (i = 0U; i < size; ++i)
+        if (data[i] != expected) group->chunk_invalid = true;
+    group->chunk_bytes += size;
+    ++group->chunk_calls;
+    /* No actual SnapshotReceiver/DataStreamReceiver fsync in this fixture:
+     * a successful Owner callback must NOT manufacture durable ACKs. */
+    out_result->ack_valid = false;
+    out_result->durable_or_installed = false;
+    return group->chunk_invalid ? SALTS_EPROTO : SALTS_OK;
+}
+
+static int fixture_create_mode(ingress_fixture *fixture, bool stream)
 {
     tr_raft_multicore_factory_t factory = {
-        fixture, test_owner_open, test_owner_poll, test_owner_close,
-        test_group_open, test_group_close
+        .context = fixture,
+        .owner_open = test_owner_open,
+        .owner_poll = test_owner_poll,
+        .owner_close = test_owner_close,
+        .group_open = test_group_open,
+        .group_close = test_group_close,
+        .receive_chunk = stream ? test_receive_owned_chunk : NULL
     };
     size_t i;
     int result;
@@ -176,7 +223,8 @@ static int fixture_create(ingress_fixture *fixture)
     }
     fixture->config.version = TR_RAFT_MULTICORE_VERSION;
     fixture->config.owner_count = OWNER_COUNT;
-    fixture->config.capacity = 1U; /* includes unread completions */
+    fixture->config.capacity = stream ? 2U : 1U; /* includes completions */
+    fixture->config.owned_chunk_bytes_per_group = stream ? 512U : 0U;
     fixture->config.work_budget = 1U;
     fixture->config.tick_ms = 1000U;
     fixture->config.idle_ms = 1U;
@@ -187,6 +235,11 @@ static int fixture_create(ingress_fixture *fixture)
     if (result != SALTS_OK) return result;
     return tr_raft_multicore_ingress_create(
         fixture->runtime, 1001U, &fixture->ingress);
+}
+
+static int fixture_create(ingress_fixture *fixture)
+{
+    return fixture_create_mode(fixture, false);
 }
 
 static int wait_for_owners(ingress_fixture *fixture)
@@ -298,6 +351,39 @@ static void parallel_request_stop(void *arg)
     while (!atomic_load_explicit(p->start, memory_order_acquire))
         cmeta_thread_yield();
     tr_raft_multicore_request_stop(p->runtime);
+}
+
+static tr_raft_transport_payload_t stream_chunk(
+    uint64_t group_id, tr_raft_node_id_t from, bool snapshot,
+    const uint8_t *data, size_t bytes)
+{
+    tr_raft_transport_payload_t payload = {0};
+    payload.group_id = group_id;
+    payload.kind = snapshot ? TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK
+                            : TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+    if (snapshot) {
+        tr_raft_snapshot_chunk_t *chunk = &payload.data.snapshot_chunk;
+        chunk->from = from;
+        chunk->to = 2U;
+        chunk->term = 5U;
+        chunk->snapshot_index = 19U;
+        chunk->snapshot_term = 5U;
+        chunk->snapshot_size = bytes;
+        chunk->data_length = bytes;
+        chunk->data = data;
+        chunk->done = true;
+    } else {
+        tr_raft_data_chunk_t *chunk = &payload.data.data_chunk;
+        chunk->from = from;
+        chunk->to = 2U;
+        chunk->term = 5U;
+        chunk->stream_id = 17U;
+        chunk->stream_size = bytes;
+        chunk->data_length = bytes;
+        chunk->data = data;
+        chunk->done = true;
+    }
+    return payload;
 }
 
 spec("ACE 2.3 borrowed CNet Raft frame -> exact existing Multicore Owner")
