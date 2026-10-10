@@ -506,9 +506,22 @@ static int test_bounded_multi_link(void)
         goto done;
     }
 
-    /* ManagedDial must forward CNet's send callback to this exact TLS
-     * Channel generation. One local admitted write is either completed or
-     * pending here; it must never be credited twice or lost on reconnect. */
+    /* ManagedDial must forward a real CNet send terminal through Manager
+     * to this exact Channel generation. A mere received frame cannot prove
+     * on_send was forwarded, so continue Owner progress until both settle. */
+    for (i = 0U; i < PROGRESS_BUDGET; ++i) {
+        CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
+        CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
+        CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[1], &b));
+        if (a.channel.payloads_completed == 1U &&
+            b.channel.payloads_completed == 1U)
+            break;
+    }
+    if (i == PROGRESS_BUDGET) {
+        result = SALTS_ETIMEDOUT;
+        failed = "ManagedDial did not forward logical send completion";
+        goto done;
+    }
     CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
     CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[1], &b));
     if (a.channel.payloads_admitted != 1U ||
@@ -585,6 +598,18 @@ static int test_bounded_multi_link(void)
         failed = "explicit send after authorized reconnect";
     }
     if (result == SALTS_OK) {
+        /* Recycled Manager connection records must never transplant the old
+         * generation's send settlement into this freshly authorized link. */
+        for (i = 0U; i < PROGRESS_BUDGET; ++i) {
+            CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 1));
+            CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
+            if (a.channel.payloads_completed == 1U) break;
+        }
+        if (i == PROGRESS_BUDGET) {
+            result = SALTS_ETIMEDOUT;
+            failed = "reconnected generation lacks CNet on_send terminal";
+            goto done;
+        }
         CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
         if (a.channel.payloads_admitted != 1U ||
             a.channel.payloads_admitted !=
