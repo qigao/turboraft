@@ -125,13 +125,17 @@ non-durable `SNAPSHOT_ACK.next_offset=12`. It then dies from actual
 `SIGKILL` with no orderly receiver, listener or WAL cleanup. The controller
 rejects any exit except `SIGKILL` for this phase.
 
-A **new OS process** is passed only the same WAL path. Its Group103 Owner
-must reopen that path with `create_if_missing=false` and verify no partially
-received Snapshot, committed prefix or speculative offset has become
-authoritative; it must not silently create a replacement WAL. The new process
-builds fresh CNet/TLS/HELLO/Group owner identities, explicitly sends the
-complete matching Snapshot again from offset 0, and requires one installed,
-WAL-durable final ACK. Reopening that WAL after the network lifecycle ends
+Before either worker starts, the controller writes and fsyncs a **real**
+term1/vote1/index1 Raft entry through installed `TurboRaft::WalStorage`, then
+closes the original writer. Both the soon-to-die TLS process and the
+**new OS process** are passed only the same WAL path. Their Group103 owners
+must reopen it with `create_if_missing=false`, verify the original
+term/vote/index1 committed prefix has survived intact and verify that no
+partially received Snapshot or speculative offset has become authoritative.
+Neither process may silently create an empty replacement WAL. The new
+process builds fresh CNet/TLS/HELLO/Group owner identities, explicitly
+sends the complete matching Snapshot again from offset 0, and requires one
+installed, WAL-durable final ACK. Reopening that WAL after the network lifecycle ends
 must recover the full Snapshot19 and a subsequently committed index20 log
 suffix. There is **no persisted receiver cursor, native CNet connection
 token, host-module generation, group mailbox, or automatic application
