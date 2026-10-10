@@ -54,6 +54,10 @@ typedef struct peer_dso_harness {
     cmeta_plugin_status unload_while_callback;
     cmeta_plugin_status stop_result;
     cmeta_plugin_status unload_after_stop;
+    salts_component_plugin_status close_while_callback;
+    salts_component_plugin_status drain_while_callback;
+    salts_component_plugin_generation *retired_by_controller;
+    int controller_closed_publication;
     int controller_result;
     int registry_open, loaded, started;
     int host_open, published, scope_live, controller_live;
@@ -79,6 +83,21 @@ static void peer_dso_controller(void *context)
      * Its live module lease must prohibit dlclose both before/after stop. */
     dso->unload_while_callback =
         cmeta_plugin_registry_unload(&dso->registry, dso->plugin);
+    /* Closing publication is allowed while a Scope has already admitted
+     * the CNet callback. Draining the provider/DSO must remain BUSY. The
+     * controller never touches or releases the original Scope object. */
+    dso->close_while_callback =
+        salts_component_plugin_runtime_close(
+            &dso->host, &dso->retired_by_controller);
+    if (dso->close_while_callback == SALTS_COMPONENT_PLUGIN_OK &&
+        dso->retired_by_controller == &dso->generation) {
+        dso->controller_closed_publication = 1;
+        dso->drain_while_callback =
+            salts_component_plugin_generation_drain(
+                &dso->host, &dso->generation);
+    } else {
+        dso->drain_while_callback = SALTS_COMPONENT_PLUGIN_INVALID_STATE;
+    }
     dso->stop_result =
         cmeta_plugin_registry_request_stop(&dso->registry, dso->plugin);
     dso->unload_after_stop =
@@ -197,8 +216,12 @@ static int peer_dso_finish(peer_dso_harness *dso)
     if ((expr) != (wanted)) result = SALTS_EPROTO; \
 } while (0)
     if (dso->published) {
-        DSO_CLEAN(salts_component_plugin_runtime_close(
-            &dso->host, &retired), SALTS_COMPONENT_PLUGIN_OK);
+        if (dso->controller_closed_publication) {
+            retired = dso->retired_by_controller;
+        } else {
+            DSO_CLEAN(salts_component_plugin_runtime_close(
+                &dso->host, &retired), SALTS_COMPONENT_PLUGIN_OK);
+        }
         if (retired != &dso->generation) result = SALTS_EPROTO;
         if (dso->scope_live) {
             DSO_CLEAN(salts_component_plugin_generation_drain(
@@ -920,6 +943,10 @@ cleanup:
             (joined != SALTS_OK ||
              dso.controller_result != SALTS_OK ||
              dso.unload_while_callback != CMETA_PLUGIN_BUSY ||
+             dso.close_while_callback != SALTS_COMPONENT_PLUGIN_OK ||
+             dso.retired_by_controller != &dso.generation ||
+             dso.drain_while_callback != SALTS_COMPONENT_PLUGIN_BUSY ||
+             !dso.controller_closed_publication ||
              dso.stop_result != CMETA_PLUGIN_OK ||
              dso.unload_after_stop != CMETA_PLUGIN_BUSY)) {
             result = SALTS_EPROTO;
