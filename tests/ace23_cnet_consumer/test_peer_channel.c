@@ -416,7 +416,7 @@ static int peer_case_run(int mode)
                     goto cleanup;
                 }
                 sent = 1;
-                break; /* no progress after admission, only terminal drain */
+                break; /* stop() itself may advance writes during draining */
             }
             tr_raft_transport_payload_t request = {0};
             tr_raft_transport_payload_t response = {0};
@@ -603,12 +603,20 @@ cleanup:
         } else if (mode == PEER_ABORT_SG &&
                    (end_client.sg_chunks_admitted != 2U ||
                     end_client.payloads_admitted != 2U ||
-                    end_client.payloads_completed != 0U ||
-                    end_client.payloads_canceled != 2U)) {
-            /* Neither admitted write reached an owner-poll send terminal;
-             * terminal cleanup must cancel each exactly once. */
+                    end_client.payloads_completed > 2U ||
+                    end_client.payloads_canceled > 2U ||
+                    end_client.payloads_completed +
+                        end_client.payloads_canceled != 2U)) {
+            /* cnet_client_stop() progresses native writes while draining.
+             * Previously pending SG writes may finish successfully OR be
+             * canceled by the terminal callback. Both are terminal exactly
+             * once, and neither can be replayed or grant duplicate credit. */
+            fprintf(stderr, "SG terminal settled completed=%llu canceled=%llu pending=%zu\n",
+                    (unsigned long long)end_client.payloads_completed,
+                    (unsigned long long)end_client.payloads_canceled,
+                    end_client.payload_writes_pending);
             result = SALTS_EPROTO;
-            error_stage = "unprogressed SG writes did not cancel exactly once";
+            error_stage = "SG shutdown lost or double-settled logical writes";
         }
     }
     if (f.client_channel != NULL) {
@@ -652,7 +660,7 @@ spec("ACE 2.3 CNet owner-bound authenticated Raft channel")
         check_equal(peer_case_run(PEER_STREAMS), SALTS_OK);
     }
 
-    it("cancels two pending 64KiB TLS SG chunks once on terminal close")
+    it("settles two pending 64KiB TLS SG chunks exactly once on terminal close")
     {
         check_equal(peer_case_run(PEER_ABORT_SG), SALTS_OK);
     }
