@@ -367,3 +367,24 @@ add_test(NAME turboraft.flowmq13.cnet_core_quorum
 set_tests_properties(turboraft.flowmq13.cnet_core_quorum
                      PROPERTIES TIMEOUT 65
                                 LABELS "cnet-snapshot-lifecycle;cnet-raft-quorum-real-wire")
+
+# NEGATIVE majority gate over the same two genuinely certified Node1/Node3
+# CNet TLS connections: while Node1's and Node3's decoded Raft callbacks
+# deliberately withhold Core.step, a new Node2 Append is only LOCAL and
+# MUST NOT become committed/applied without a true 2-of-3 remote ACK.
+# Restore Node3 and let bounded Raft ticks re-probe through actual TLS;
+# only its authentic reply permits commit4. Then unmute/recreate Node1
+# and require exact four-entry convergence. No implicit CNet application
+# message replay; this is receive-CALLBACK muting, not a network partition.
+add_executable(turboraft_flowmq13_cnet_core_quorum_loss
+               test_cnet_two_link_quorum.c)
+target_compile_definitions(turboraft_flowmq13_cnet_core_quorum_loss PRIVATE
+    TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_link_libraries(turboraft_flowmq13_cnet_core_quorum_loss PRIVATE
+    TurboRaft::CNet TurboRaft::Core Salts::Platform)
+add_test(NAME turboraft.flowmq13.cnet_core_quorum_loss
+         COMMAND turboraft_flowmq13_cnet_core_quorum_loss)
+set_tests_properties(turboraft.flowmq13.cnet_core_quorum_loss
+                     PROPERTIES TIMEOUT 65
+                                LABELS "cnet-snapshot-lifecycle;cnet-raft-quorum-real-wire")
