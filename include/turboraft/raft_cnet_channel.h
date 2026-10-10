@@ -38,6 +38,12 @@ typedef struct tr_raft_cnet_channel_config {
     const tr_raft_cnet_identity_policy_t *identity; /* immutable borrowed */
     tr_raft_handshake_config_t handshake; /* copied local node+cluster contract */
     uint64_t first_outbound_message_id; /* nonzero; never reset on this channel */
+    /* REQUIRED: distinct nonzero epoch supplied by a host owner that
+     * survives Component/Plugin DSO unload/reload. It must NEVER be reused
+     * for another module generation in this host lifetime. A zero epoch
+     * rejects Channel creation (fail closed); the CNet provider does not
+     * mint or persist this cross-DSO identity. */
+    uint64_t host_module_generation;
     tr_raft_transport_payload_handler_fn on_payload; /* owner-thread callback */
     void *payload_context; /* borrowed for entire lifetime */
 } tr_raft_cnet_channel_config_t;
