@@ -241,5 +241,5 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                    "$<TARGET_FILE:turboraft_flowmq13_cnet_recover_writer>")
   set_tests_properties(turboraft.flowmq13.cnet_process_restart
                        PROPERTIES TIMEOUT 65
-                                  LABELS "cnet-process-crash;wal-recovery")
+                                  LABELS "cnet-snapshot-lifecycle;cnet-process-crash;wal-recovery")
 endif()
