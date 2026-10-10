@@ -1706,6 +1706,49 @@ static int run_two_distinct_peers(int forge_node_three)
                     }
                 }
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+                if (i == 1U) {
+                    /* Exactly one certified Node3 chunk arrived on N; no
+                     * terminal chunk was sent. Consume its Group Owner
+                     * completion and deliver only the partial ACK.
+                     * Preserve the OLD, immutable completion ticket across
+                     * CNet N teardown for N+1 generation fencing. */
+                    if (observed != SALTS_OK || binding == NULL ||
+                        binding->chunk_request_id == 0U ||
+                        chunk_completion.request_id !=
+                            binding->chunk_request_id ||
+                        chunk_completion.reply_origin.channel_instance !=
+                            binding->chunk_origin.channel_instance ||
+                        chunk_completion.reply_origin.connection_token !=
+                            binding->chunk_origin.connection_token ||
+                        chunk_completion.reply_origin.authenticated_peer_node_id != 3U ||
+                        chunk_completion.reply_origin.group_id != 103U ||
+                        chunk_completion.operation != TR_RAFT_MULTICORE_RECEIVE_CHUNK ||
+                        chunk_completion.result != SALTS_OK ||
+                        chunk_completion.value.chunk.kind !=
+                            TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK ||
+                        !chunk_completion.value.chunk.ack_valid ||
+                        !chunk_completion.value.chunk.ack.snapshot.accepted ||
+                        chunk_completion.value.chunk.durable_or_installed ||
+                        chunk_completion.value.chunk.ack.snapshot.next_offset != 12U ||
+                        f.owner_groups[1].chunk_calls != 1U ||
+                        f.owner_groups[1].chunk_bytes != 12U ||
+                        f.owner_groups[1].installed_snapshots != 0U ||
+                        tr_raft_multicore_group_status(
+                            f.raft_owners, 103U, &status) != SALTS_OK ||
+                        status.owned_chunk_bytes != 0U ||
+                        status.outstanding != 0U) {
+                        failed_stage = "old TLS partial chunk completion not bounded or accepted";
+                        result = SALTS_EPROTO;
+                        break;
+                    }
+                    f.delayed_snapshot_completion = chunk_completion;
+                    f.delayed_snapshot_ready = 1;
+                    TRY_STAGE(tr_raft_cnet_channel_send_chunk_completion(
+                        binding->channel, &chunk_completion));
+                    continue;
+                }
+#else
                 if (i == 1U) {
                     /* The FIRST chunk is a valid progress ACK only, not a
                      * durable/installed receipt. Its completion/lease ID
@@ -1777,6 +1820,7 @@ static int run_two_distinct_peers(int forge_node_three)
                         binding->channel, &chunk_completion));
                     observed = take_owner_completion(&f, i, &chunk_completion);
                 }
+#endif
 #endif
                 if (observed != SALTS_OK || binding == NULL ||
                     binding->chunk_request_id == 0U ||
@@ -2013,7 +2057,11 @@ spec("ACE 2.3 authenticated TLS Snapshot write fault is fail-closed")
 }
 #else
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+spec("ACE 2.3 Node3 TLS partial Snapshot reconnect keeps WAL uncommitted until N+1")
+#else
 spec("ACE 2.3 real Node3 mTLS N to N+1 WAL-durable Snapshot ACK fencing")
+#endif
 {
     it("drains N, rejects old durable ACK, explicitly resends and only N+1 confirms installed WAL")
     {
