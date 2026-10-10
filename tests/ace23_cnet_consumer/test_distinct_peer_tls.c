@@ -131,6 +131,12 @@ typedef struct identity_fixture {
     int accepted;
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
     char *snapshot_prefix; /* host owns path, Group 103 owns open file */
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT
+    /* Immutable final Owner completion is retained as a VALUE past physical
+     * CNet generation N teardown; no borrowed request/DSO handle crosses. */
+    tr_raft_multicore_completion_t delayed_snapshot_completion;
+    int delayed_snapshot_ready;
+#endif
 #endif
 } identity_fixture;
 
