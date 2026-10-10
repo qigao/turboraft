@@ -364,87 +364,117 @@ static int peer_dso_setup(peer_dso_harness *dso)
     return SALTS_OK;
 }
 
-/* No native DSO may be unloaded while an old Channel callback can
- * borrow it. B is still published/leased when A is actually dlclosed.
- * This is the host's explicit post-CNet-terminal settlement barrier. */
-static int peer_dso_finish_ab(peer_dso_harness *dso)
+/* The caller must prove BOTH A CNet connections terminal and destroy
+ * the Channel objects before this function runs. B's verified TLS Channel
+ * is still ACTIVE, protected by its separately published Scope and module
+ * lease; no listener/client stop has been issued. */
+static int peer_dso_unload_a(peer_dso_harness *dso)
 {
     cmeta_plugin_lifecycle_info info = {0};
     bool quiet = false;
-    int result = SALTS_OK;
 
-#define AB_REQUIRE(expr, wanted) do { \
-    if ((expr) != (wanted)) result = SALTS_EPROTO; \
-} while (0)
-    if (!dso->controller_closed_publication ||
+    if (!dso->loaded || !dso->scope_live || !dso->scope_b_live ||
+        !dso->published_b || !dso->loaded_b ||
+        !dso->controller_closed_publication ||
         dso->retired_by_controller != &dso->generation_b ||
-        !dso->scope_live || !dso->scope_b_live ||
-        !dso->loaded || !dso->loaded_b ||
+        dso->generation.state !=
+            SALTS_COMPONENT_PLUGIN_GENERATION_DRAINING ||
         dso->network_callbacks_b != 1U ||
         dso->captured_origin_b.host_module_generation != UINT64_C(90010002) ||
         dso->captured_origin_b.channel_instance == 0U ||
         atomic_load_explicit(
-            &dso->module_b->callback_completed, memory_order_acquire) != 1U)
-        return SALTS_EBUSY; /* fail closed; never force a live DSO unload */
+            &dso->module_b->callback_completed, memory_order_acquire) != 1U ||
+        atomic_load_explicit(
+            &dso->module_b->stop_requested, memory_order_acquire))
+        return SALTS_EBUSY;
 
-    AB_REQUIRE(salts_component_plugin_generation_drain(
-        &dso->host, &dso->generation),
-        SALTS_COMPONENT_PLUGIN_BUSY);
-    AB_REQUIRE(salts_component_plugin_scope_release(
-        &dso->scope), SALTS_COMPONENT_PLUGIN_OK);
-    dso->scope_live = 0;
-    AB_REQUIRE(salts_component_plugin_generation_drain(
-        &dso->host, &dso->generation), SALTS_COMPONENT_PLUGIN_OK);
-    if (result != SALTS_OK) return result;
-    AB_REQUIRE(cmeta_plugin_registry_get_lifecycle(
-        &dso->registry, dso->plugin, &info), CMETA_PLUGIN_OK);
-    if (info.active_leases != 0U) return SALTS_EBUSY;
-    AB_REQUIRE(cmeta_plugin_registry_poll_quiescent(
-        &dso->registry, dso->plugin, &quiet), CMETA_PLUGIN_OK);
-    if (!quiet || result != SALTS_OK) return SALTS_EBUSY;
-    AB_REQUIRE(cmeta_plugin_registry_unload(
-        &dso->registry, dso->plugin), CMETA_PLUGIN_OK);
-    if (result != SALTS_OK) return result;
-    dso->loaded = 0;
-
-    /* The B Component interface, Scope and lease must be usable after
-     * provider image A has really been unmapped. */
-    if (!tr_ace23_dso_callback_valid(&dso->callback_b) ||
-        salts_component_plugin_scope_generation_id(&dso->scope_b) !=
-            UINT64_C(90010002))
+    if (salts_component_plugin_generation_drain(
+            &dso->host, &dso->generation) !=
+            SALTS_COMPONENT_PLUGIN_BUSY ||
+        salts_component_plugin_scope_release(&dso->scope) !=
+            SALTS_COMPONENT_PLUGIN_OK)
         return SALTS_EPROTO;
-    AB_REQUIRE(cmeta_plugin_registry_get_lifecycle(
-        &dso->registry, dso->plugin_b, &info), CMETA_PLUGIN_OK);
-    if (info.active_leases != 1U) return SALTS_EPROTO;
-    AB_REQUIRE(cmeta_plugin_registry_unload(
-        &dso->registry, dso->plugin_b), CMETA_PLUGIN_BUSY);
-    AB_REQUIRE(salts_component_plugin_generation_drain(
-        &dso->host, &dso->generation_b), SALTS_COMPONENT_PLUGIN_BUSY);
-    AB_REQUIRE(salts_component_plugin_scope_release(
-        &dso->scope_b), SALTS_COMPONENT_PLUGIN_OK);
+    dso->scope_live = 0;
+    if (salts_component_plugin_generation_drain(
+            &dso->host, &dso->generation) !=
+            SALTS_COMPONENT_PLUGIN_OK ||
+        cmeta_plugin_registry_get_lifecycle(
+            &dso->registry, dso->plugin, &info) != CMETA_PLUGIN_OK ||
+        info.active_leases != 0U ||
+        cmeta_plugin_registry_poll_quiescent(
+            &dso->registry, dso->plugin, &quiet) != CMETA_PLUGIN_OK ||
+        !quiet ||
+        cmeta_plugin_registry_unload(
+            &dso->registry, dso->plugin) != CMETA_PLUGIN_OK)
+        return SALTS_EBUSY;
+    dso->loaded = 0;
+    dso->published = 0;
+
+    /* No host may route an old A-origin into B even after actual A dlclose.
+     * B remains STARTED, still owns one module lease, and its exact Scope
+     * is usable for the next Raft TLS payload. */
+    info = (cmeta_plugin_lifecycle_info){0};
+    if (!tr_ace23_dso_callback_valid(&dso->callback_b) ||
+        salts_component_plugin_scope_generation_id(
+            &dso->scope_b) != UINT64_C(90010002) ||
+        cmeta_plugin_registry_get_lifecycle(
+            &dso->registry, dso->plugin_b, &info) != CMETA_PLUGIN_OK ||
+        info.active_leases != 1U ||
+        info.state != CMETA_PLUGIN_LIFECYCLE_STARTED ||
+        cmeta_plugin_registry_unload(
+            &dso->registry, dso->plugin_b) != CMETA_PLUGIN_BUSY)
+        return SALTS_EPROTO;
+    return SALTS_OK;
+}
+
+/* Only after BOTH B CNet Channel terminal callbacks and destroys. A must
+ * have already been truly unloaded while B remained network ACTIVE. */
+static int peer_dso_finish_ab(peer_dso_harness *dso)
+{
+    cmeta_plugin_lifecycle_info info = {0};
+    bool quiet = false;
+
+    if (dso->loaded || dso->scope_live || !dso->loaded_b ||
+        !dso->scope_b_live || !dso->published_b ||
+        !dso->controller_closed_publication ||
+        dso->retired_by_controller != &dso->generation_b ||
+        dso->network_callbacks_b != 2U ||
+        atomic_load_explicit(
+            &dso->module_b->callback_completed, memory_order_acquire) != 2U)
+        return SALTS_EBUSY;
+    if (cmeta_plugin_registry_request_stop(
+            &dso->registry, dso->plugin_b) != CMETA_PLUGIN_OK ||
+        salts_component_plugin_generation_drain(
+            &dso->host, &dso->generation_b) !=
+            SALTS_COMPONENT_PLUGIN_BUSY ||
+        cmeta_plugin_registry_unload(
+            &dso->registry, dso->plugin_b) != CMETA_PLUGIN_BUSY ||
+        salts_component_plugin_scope_release(
+            &dso->scope_b) != SALTS_COMPONENT_PLUGIN_OK)
+        return SALTS_EPROTO;
     dso->scope_b_live = 0;
-    AB_REQUIRE(salts_component_plugin_generation_drain(
-        &dso->host, &dso->generation_b), SALTS_COMPONENT_PLUGIN_OK);
-    if (result != SALTS_OK) return result;
-    AB_REQUIRE(cmeta_plugin_registry_get_lifecycle(
-        &dso->registry, dso->plugin_b, &info), CMETA_PLUGIN_OK);
-    if (info.active_leases != 0U) return SALTS_EPROTO;
-    quiet = false;
-    AB_REQUIRE(cmeta_plugin_registry_poll_quiescent(
-        &dso->registry, dso->plugin_b, &quiet), CMETA_PLUGIN_OK);
-    if (!quiet || result != SALTS_OK) return SALTS_EBUSY;
-    AB_REQUIRE(cmeta_plugin_registry_unload(
-        &dso->registry, dso->plugin_b), CMETA_PLUGIN_OK);
-    if (result != SALTS_OK) return result;
+    if (salts_component_plugin_generation_drain(
+            &dso->host, &dso->generation_b) !=
+            SALTS_COMPONENT_PLUGIN_OK ||
+        cmeta_plugin_registry_get_lifecycle(
+            &dso->registry, dso->plugin_b, &info) != CMETA_PLUGIN_OK ||
+        info.active_leases != 0U ||
+        cmeta_plugin_registry_poll_quiescent(
+            &dso->registry, dso->plugin_b, &quiet) != CMETA_PLUGIN_OK ||
+        !quiet ||
+        cmeta_plugin_registry_unload(
+            &dso->registry, dso->plugin_b) != CMETA_PLUGIN_OK)
+        return SALTS_EBUSY;
     dso->loaded_b = 0;
     dso->published_b = 0;
-    dso->published = 0;
-    AB_REQUIRE(salts_component_plugin_runtime_destroy(
-        &dso->host), SALTS_COMPONENT_PLUGIN_OK);
-    AB_REQUIRE(cmeta_plugin_registry_destroy(
-        &dso->registry), CMETA_PLUGIN_OK);
-#undef AB_REQUIRE
-    return result;
+    if (salts_component_plugin_runtime_destroy(
+            &dso->host) != SALTS_COMPONENT_PLUGIN_OK ||
+        cmeta_plugin_registry_destroy(
+            &dso->registry) != CMETA_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->host_open = 0;
+    dso->registry_open = 0;
+    return SALTS_OK;
 }
 
 /* Called ONLY after BOTH CNet clients have drained terminal callbacks
