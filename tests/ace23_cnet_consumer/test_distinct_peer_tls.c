@@ -15,6 +15,9 @@
 
 #include <stdio.h>
 #include <string.h>
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+#include <stdatomic.h>
+#endif
 
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
 #include <turboraft/raft_wal_storage.h>
@@ -140,6 +143,11 @@ typedef struct identity_fixture {
     int clients_live, server_live, listener_live, server_tls_live;
     int directory_manager_live;
     int accepted;
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+    /* Test-only release gate, no new mailbox/worker or serialized state. */
+    atomic_int byte_pressure_started;
+    atomic_int byte_pressure_release;
+#endif
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
     char *snapshot_prefix; /* host owns path, Group 103 owns open file */
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT
@@ -506,6 +514,19 @@ static int owner_receive_chunk(
     if (probe->thread != cmeta_thread_current_token() ||
         !tr_raft_owner_contains(owner, group_id)) probe->wrong_owner = 1;
 
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+    if (group_id == 103U &&
+        payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+        /* Exact Group103 Owner deliberately retains its 24-byte lease.
+         * CNet progress and the independent Group101 Owner continue. */
+        atomic_store_explicit(&f->byte_pressure_started, 1,
+                              memory_order_release);
+        while (!atomic_load_explicit(&f->byte_pressure_release,
+                                     memory_order_acquire))
+            cmeta_sleep_ms(1U);
+    }
+#endif
+
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
     if (group_id == 103U &&
         payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
@@ -561,12 +582,17 @@ static int start_raft_group_owners(identity_fixture *f)
      * reserve one completion credit before the test drains any of them.
      * Keep the *same* bounded per-Group Owner ring, sized for 3 admissions.
      * The baseline test still exercises capacity=2 without extra credits. */
-#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+#if defined(TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED) || \
+    defined(TURBORAFT_TEST_TLS_BYTE_PRESSURE)
     f->owner_config.capacity = 3U;
 #else
     f->owner_config.capacity = 2U;
 #endif
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+    f->owner_config.owned_chunk_bytes_per_group = 24U;
+#else
     f->owner_config.owned_chunk_bytes_per_group = 512U;
+#endif
     f->owner_config.work_budget = 1U;
     f->owner_config.tick_ms = 1000U;
     f->owner_config.idle_ms = 1U;
