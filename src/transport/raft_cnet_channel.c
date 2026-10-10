@@ -505,7 +505,15 @@ int tr_raft_cnet_channel_send_chunk_completion(
         reply.data.data_ack = *ack;
     } else if (chunk->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
         const tr_raft_snapshot_ack_t *ack = &chunk->ack.snapshot;
+        /* Snapshot ACK has no separate wire-level durable flag, and the
+         * SnapshotSender treats accepted next_offset == snapshot_size as
+         * FINAL. Forbid any caller from translating mere partial progress
+         * into a full-size success without an installed Owner receipt.
+         * Duplicates of already installed transfers retain installed=true. */
         if (!ack->accepted ||
+            ack->next_offset > ack->snapshot_size ||
+            chunk->durable_or_installed !=
+                (ack->next_offset == ack->snapshot_size) ||
             ack->from != channel->local.local_node_id ||
             ack->to != origin->authenticated_peer_node_id)
             return SALTS_EPROTO;
