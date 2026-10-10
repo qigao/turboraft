@@ -827,6 +827,44 @@ spec("ACE 2.3 borrowed CNet Raft frame -> exact existing Multicore Owner")
         check_equal(fixture_destroy(&f), SALTS_OK);
     }
 
+    it("rejects forged lease pointers and malformed chunk admission without callbacks")
+    {
+        ingress_fixture f = {0};
+        tr_raft_multicore_request_t forged = {0};
+        tr_raft_multicore_group_status_t status = {0};
+        tr_raft_transport_payload_t invalid = {0};
+        uint8_t bytes[32] = {0};
+        uint64_t id = UINT64_C(44);
+
+        check_equal(fixture_create_mode(&f, true), SALTS_OK);
+        check_equal(wait_for_owners(&f), SALTS_OK);
+
+        /* The private pointer operation must never be accepted through
+         * the public generic Multicore interface. */
+        forged.operation = TR_RAFT_MULTICORE_RECEIVE_CHUNK;
+        forged.request_id = 101U;
+        forged.value.chunk.internal_owned_chunk = (void *)bytes;
+        check_equal(tr_raft_multicore_submit(
+            f.runtime, 101U, &forged), SALTS_EINVAL);
+
+        /* Each failure leaves output ID zero, no lease, no completion. */
+        invalid = stream_chunk(101U, 1U, false, NULL, sizeof(bytes));
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &invalid, &id), SALTS_EPROTO);
+        check_equal(id, UINT64_C(0));
+        invalid = stream_chunk(101U, 1U, false, bytes,
+                               TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES + 1U);
+        check_equal(tr_raft_multicore_ingress_submit(
+            f.ingress, &invalid, &id), SALTS_EPROTO);
+        check_equal(id, UINT64_C(0));
+        check_equal(tr_raft_multicore_group_status(
+            f.runtime, 101U, &status), SALTS_OK);
+        check_equal(status.owned_chunk_bytes, (size_t)0U);
+        check_equal(status.outstanding, (size_t)0U);
+        check_equal(f.groups[0].chunk_calls, (size_t)0U);
+        check_equal(fixture_destroy(&f), SALTS_OK);
+    }
+
     it("cancels owned DATA/SNAPSHOT exactly once and releases all bytes on stop")
     {
         ingress_fixture f = {0};
