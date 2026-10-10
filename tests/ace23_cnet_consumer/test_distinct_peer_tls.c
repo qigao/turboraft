@@ -31,6 +31,8 @@ typedef struct remote_probe {
 typedef struct server_probe {
     size_t received_from_one;
     size_t received_from_three;
+    size_t received_data;
+    size_t received_snapshot;
     size_t wrong_payloads;
 } server_probe;
 
@@ -39,6 +41,9 @@ typedef struct owner_raft_probe {
     int wrong_owner;
     int closed;
     size_t egress_replies;
+    size_t chunk_calls;
+    size_t chunk_bytes;
+    int chunk_error;
 } owner_raft_probe;
 
 /* CNet's verified inbound callback borrows one exact Channel generation.
@@ -151,16 +156,33 @@ static tr_raft_handshake_config_t hello_config(tr_raft_node_id_t node)
 static int on_server_payload(void *user, const tr_raft_transport_payload_t *msg)
 {
     server_probe *sink = (server_probe *)user;
-    if (msg == NULL || msg->kind != TR_RAFT_WIRE_PAYLOAD_RAFT ||
-        msg->data.raft.to != 2U ||
-        msg->data.raft.type != TR_RAFT_MSG_HEARTBEAT_REQUEST ||
-        msg->data.raft.term != 3U) goto invalid;
-
-    if (msg->data.raft.from == 1U && msg->group_id == 101U)
-        ++sink->received_from_one;
-    else if (msg->data.raft.from == 3U && msg->group_id == 103U)
-        ++sink->received_from_three;
-    else goto invalid;
+    if (msg == NULL) goto invalid;
+    if (msg->kind == TR_RAFT_WIRE_PAYLOAD_RAFT) {
+        if (msg->data.raft.to != 2U ||
+            msg->data.raft.type != TR_RAFT_MSG_HEARTBEAT_REQUEST ||
+            msg->data.raft.term != 3U) goto invalid;
+        if (msg->data.raft.from == 1U && msg->group_id == 101U)
+            ++sink->received_from_one;
+        else if (msg->data.raft.from == 3U && msg->group_id == 103U)
+            ++sink->received_from_three;
+        else goto invalid;
+    } else if (msg->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK) {
+        const tr_raft_data_chunk_t *d = &msg->data.data_chunk;
+        if (msg->group_id != 101U || d->from != 1U || d->to != 2U ||
+            d->stream_id != 9U || d->data_length != 16U || d->data == NULL)
+            goto invalid;
+        for (size_t i = 0U; i < d->data_length; ++i)
+            if (d->data[i] != 0x39U) goto invalid;
+        ++sink->received_data;
+    } else if (msg->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+        const tr_raft_snapshot_chunk_t *d = &msg->data.snapshot_chunk;
+        if (msg->group_id != 103U || d->from != 3U || d->to != 2U ||
+            d->snapshot_index != 19U || d->data_length != 24U ||
+            d->data == NULL) goto invalid;
+        for (size_t i = 0U; i < d->data_length; ++i)
+            if (d->data[i] != 0x7bU) goto invalid;
+        ++sink->received_snapshot;
+    } else goto invalid;
 
     return SALTS_OK;
 invalid:
@@ -262,6 +284,41 @@ static void owner_group_close(void *context, tr_raft_owner_t *owner,
     probe->closed = 1;
 }
 
+/* A real authenticated CNet callback owns its view only until return.
+ * These test sinks verify the Core-owned copy on the exact Raft Group
+ * thread and deliberately avoid fabricating any persisted ACK. */
+static int owner_receive_chunk(
+    void *context, tr_raft_owner_t *owner, uint64_t group_id,
+    const tr_raft_transport_payload_t *payload,
+    tr_raft_multicore_chunk_result_t *out)
+{
+    identity_fixture *f = (identity_fixture *)context;
+    owner_raft_probe *probe = &f->owner_groups[raft_group_slot(group_id)];
+    const uint8_t *data;
+    size_t bytes;
+    uint8_t expected;
+    if (probe->thread != cmeta_thread_current_token() ||
+        !tr_raft_owner_contains(owner, group_id)) probe->wrong_owner = 1;
+
+    if (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK) {
+        data = payload->data.data_chunk.data;
+        bytes = payload->data.data_chunk.data_length;
+        expected = 0x39U;
+    } else if (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+        data = payload->data.snapshot_chunk.data;
+        bytes = payload->data.snapshot_chunk.data_length;
+        expected = 0x7bU;
+    } else return SALTS_EPROTO;
+    if (data == NULL || bytes == 0U) return SALTS_EPROTO;
+    for (size_t i = 0U; i < bytes; ++i)
+        if (data[i] != expected) probe->chunk_error = 1;
+    probe->chunk_bytes += bytes;
+    ++probe->chunk_calls;
+    out->ack_valid = false; /* no actual Snapshot/Data durability here */
+    out->durable_or_installed = false;
+    return probe->chunk_error ? SALTS_EPROTO : SALTS_OK;
+}
+
 static int start_raft_group_owners(identity_fixture *f)
 {
     tr_raft_multicore_factory_t factory = {0};
@@ -280,6 +337,7 @@ static int start_raft_group_owners(identity_fixture *f)
     f->owner_config.version = TR_RAFT_MULTICORE_VERSION;
     f->owner_config.owner_count = LINK_COUNT;
     f->owner_config.capacity = 2U;
+    f->owner_config.owned_chunk_bytes_per_group = 512U;
     f->owner_config.work_budget = 1U;
     f->owner_config.tick_ms = 1000U;
     f->owner_config.idle_ms = 1U;
@@ -288,6 +346,7 @@ static int start_raft_group_owners(identity_fixture *f)
     factory.context = f;
     factory.group_open = owner_group_open;
     factory.group_close = owner_group_close;
+    factory.receive_chunk = owner_receive_chunk;
     result = tr_raft_multicore_create(
         &f->owner_config, &factory, &f->raft_owners);
     if (result != SALTS_OK) return result;
