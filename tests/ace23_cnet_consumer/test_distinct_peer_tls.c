@@ -1360,13 +1360,34 @@ static int qualify_two_certified_peer_group_pressure(
     }
     PCHECK(healthy != NULL && saturated != NULL && healthy != saturated,
            "two distinct certified Node1/Node3 physical peers");
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+    /* Wait only for proof that the actual Group103 callback owns the first
+     * 24-byte lease. Do not release it until Node1 demonstrates progress. */
+    for (round = 0U; round < MAX_PROGRESS &&
+         !atomic_load_explicit(&f->byte_pressure_started,
+                               memory_order_acquire); ++round)
+        cmeta_sleep_ms(1U);
+    PCHECK(round < MAX_PROGRESS &&
+           !atomic_load_explicit(&f->byte_pressure_release,
+                                 memory_order_acquire),
+           "real Group103 thread holds the first 24-byte retained SG lease");
+#endif
     PTRY(tr_raft_multicore_group_status(
         f->raft_owners, 101U, &group_one));
     PTRY(tr_raft_multicore_group_status(
         f->raft_owners, 103U, &group_three));
     PCHECK(group_one.outstanding == 2U && group_three.outstanding == 2U &&
            group_one.rejected == 0U && group_three.rejected == 0U,
-           "separate 2-credit Raft Group rings saturated before TLS overload");
+           "two existing Group completions remain reserved");
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+    PCHECK(f->owner_config.capacity == 3U &&
+           f->owner_config.owned_chunk_bytes_per_group == 24U &&
+           group_three.owned_chunk_bytes == 24U,
+           "byte-full Group103 has SPARE item credit but zero byte credits");
+#else
+    PCHECK(f->owner_config.capacity == 2U,
+           "item-full Group103 has no remaining completion credit");
+#endif
 
     /* The second frame is valid and identical to the FIRST Snapshot at
      * transport decode time; the only rejection is Group103's exhausted
@@ -1417,8 +1438,25 @@ static int qualify_two_certified_peer_group_pressure(
     PCHECK(group_one.outstanding == 2U && group_one.rejected == 0U &&
            group_three.outstanding == 2U && group_three.rejected == 1U,
            "failed Group103 admission preserves both groups' prior credits");
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+    PCHECK(group_three.owned_chunk_bytes == 24U &&
+           !atomic_load_explicit(&f->byte_pressure_release,
+                                 memory_order_acquire),
+           "rejected Node3 SG never stole bytes; first lease still held");
+#endif
 
     for (i = 0U; i < LINK_COUNT; ++i) {
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+        if (i == 1U) {
+            /* Node1 work progresses even while Node3 Owner is blocked.
+             * Never leave the Owner stalled through fixture destruction. */
+            PCHECK(f->owner_groups[0].chunk_calls == 1U &&
+                   f->owner_groups[1].chunk_calls == 0U,
+                   "sibling owner processed work while Node3 Owner paused");
+            atomic_store_explicit(&f->byte_pressure_release, 1,
+                                  memory_order_release);
+        }
+#endif
         size_t action;
         for (action = 0U; action < 2U; ++action) {
             memset(&completion, 0, sizeof(completion));
@@ -1493,6 +1531,11 @@ static int qualify_two_certified_peer_group_pressure(
            !status_one.terminal, "healthy certified TLS link remains ACTIVE");
     result = SALTS_OK;
 done:
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+    /* Every early fail path MUST release an in-progress owner callback. */
+    atomic_store_explicit(&f->byte_pressure_release, 1,
+                          memory_order_release);
+#endif
 #undef PTRY
 #undef PCHECK
     return result;
@@ -1523,6 +1566,10 @@ static int run_two_distinct_peers(int forge_node_three)
 #define TRY_STAGE(expr) do { result = (expr); \
     if (result != SALTS_OK) { failed_stage = #expr; goto cleanup; } } while (0)
 
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+    atomic_init(&f.byte_pressure_started, 0);
+    atomic_init(&f.byte_pressure_release, 0);
+#endif
     TRY_STAGE(fixture_path(ca_file, sizeof(ca_file), "ca.pem"));
     TRY_STAGE(fixture_path(multi_ca_file, sizeof(multi_ca_file),
                            "three-node-client-ca.pem"));
@@ -2425,6 +2472,12 @@ static int run_two_distinct_peers(int forge_node_three)
 #endif
 
 cleanup:
+#ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
+    /* Even errors before the byte-pressure assertion cannot strand the
+     * separate Group103 Owner inside the test-only callback gate. */
+    atomic_store_explicit(&f.byte_pressure_release, 1,
+                          memory_order_release);
+#endif
     {
         int close_status = fixture_cleanup(&f);
         if (result == SALTS_OK && close_status != SALTS_OK) {
