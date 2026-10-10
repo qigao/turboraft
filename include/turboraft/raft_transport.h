@@ -48,10 +48,12 @@ typedef struct tr_raft_transport_payload {
     } data;
 } tr_raft_transport_payload_t;
 
-/* Ephemeral authenticated Channel-origin receipt. Exactly one verified
- * CNet Channel instance owns an instance ID: same peer/Group cannot reuse it
- * after terminal/reconnect. No socket descriptor, pointer, TLS secret or
- * persistent runtime state crosses the Raft Group Owner boundary.
+/* Ephemeral, provider-neutral authenticated Channel-origin receipt.
+ * The {host_module_generation,channel_instance} pair is unique while the
+ * stable host's generation issuer honors its never-reuse contract: a DSO
+ * unload/reload may reset Channel's local serial but MUST rotate the
+ * host-issued module generation. No socket descriptor, pointer, TLS secret
+ * or persistent runtime state crosses the Raft Group Owner boundary.
  *
  * All zero means an unbound ingress request: it can be consumed locally,
  * but must NEVER be used to send a network ACK. */
