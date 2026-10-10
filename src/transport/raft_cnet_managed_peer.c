@@ -108,6 +108,17 @@ static void tr_managed_peer_on_receive(
         peer->observer.on_receive(peer->observer.user, connection, view);
 }
 
+static void tr_managed_peer_on_send(
+    void *context, cnet_connection connection, size_t bytes)
+{
+    tr_raft_cnet_managed_peer_t *peer =
+        (tr_raft_cnet_managed_peer_t *)context;
+    /* The ManagedDial owns the connection generation; the Channel owns
+     * settlement metadata. Forward only on the same CNet progress Owner. */
+    if (peer->observer.on_send != NULL)
+        peer->observer.on_send(peer->observer.user, connection, bytes);
+}
+
 static int tr_managed_peer_fresh_channel(
     tr_raft_cnet_managed_peer_t *peer)
 {
@@ -202,6 +213,7 @@ int tr_raft_cnet_managed_peer_create(
     dial.connection.observer = (cnet_observer){
         .on_state = tr_managed_peer_on_state,
         .on_receive = tr_managed_peer_on_receive,
+        .on_send = tr_managed_peer_on_send,
         .user = peer
     };
     dial.recovery = config->reconnect;
