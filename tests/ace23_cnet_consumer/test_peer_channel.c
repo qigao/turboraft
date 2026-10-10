@@ -18,7 +18,8 @@ enum peer_mode {
     PEER_STREAMS,
     PEER_FOREIGN_CLUSTER,
     PEER_FORGED_NODE,
-    PEER_UNAUTHORIZED_CERT
+    PEER_UNAUTHORIZED_CERT,
+    PEER_ABORT_SG
 };
 
 typedef struct peer_sink {
@@ -198,6 +199,11 @@ static int peer_case_run(int mode)
     if (result != SALTS_OK) { error_stage = #expr; goto cleanup; } \
 } while (0)
 
+    if (mode == PEER_ABORT_SG) {
+        /* Only this terminal-race fixture enlarges CNet's explicit maximum
+         * logical write. All ordinary small-message tests keep their limit. */
+        client_config.max_send_bytes = TR_RAFT_TRANSPORT_MAX_PACKET_SIZE;
+    }
     f.client_sink.expected_from = 2U;
     f.client_sink.expected_to = mode == PEER_FORGED_NODE ? 3U : 1U;
     f.server_sink.expected_from = 1U;
@@ -326,7 +332,8 @@ static int peer_case_run(int mode)
         PEER_TRY(tr_raft_cnet_channel_get_status(f.client_channel, &cs));
         PEER_TRY(tr_raft_cnet_channel_get_status(f.server_channel, &ss));
 
-        if (mode != PEER_VALID && mode != PEER_STREAMS) {
+        if (mode != PEER_VALID && mode != PEER_STREAMS &&
+            mode != PEER_ABORT_SG) {
             if (ss.phase == TR_RAFT_CNET_CHANNEL_FAILED)
                 break;
             continue;
@@ -342,6 +349,75 @@ static int peer_case_run(int mode)
         if (!sent &&
             cs.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
             ss.phase == TR_RAFT_CNET_CHANNEL_ACTIVE) {
+            if (mode == PEER_ABORT_SG) {
+                tr_raft_transport_payload_t data = {0};
+                tr_raft_transport_payload_t snapshot = {0};
+                tr_raft_cnet_channel_status_t before_close = {0};
+                uint8_t data_bytes[TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES];
+                uint8_t snapshot_bytes[TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES];
+
+                memset(data_bytes, 0xa5, sizeof(data_bytes));
+                memset(snapshot_bytes, 0x5a, sizeof(snapshot_bytes));
+                data.group_id = 43U;
+                data.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+                data.data.data_chunk.from = 1U;
+                data.data.data_chunk.to = 2U;
+                data.data.data_chunk.term = 3U;
+                data.data.data_chunk.stream_id = 19U;
+                data.data.data_chunk.stream_size = sizeof(data_bytes);
+                data.data.data_chunk.data_length = sizeof(data_bytes);
+                data.data.data_chunk.data = data_bytes;
+                data.data.data_chunk.done = true;
+
+                snapshot.group_id = 43U;
+                snapshot.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
+                snapshot.data.snapshot_chunk.from = 1U;
+                snapshot.data.snapshot_chunk.to = 2U;
+                snapshot.data.snapshot_chunk.term = 3U;
+                snapshot.data.snapshot_chunk.snapshot_index = 19U;
+                snapshot.data.snapshot_chunk.snapshot_term = 3U;
+                snapshot.data.snapshot_chunk.snapshot_size = sizeof(snapshot_bytes);
+                snapshot.data.snapshot_chunk.data_length = sizeof(snapshot_bytes);
+                snapshot.data.snapshot_chunk.data = snapshot_bytes;
+                snapshot.data.snapshot_chunk.done = true;
+                snapshot.data.snapshot_chunk.has_configuration = true;
+                snapshot.data.snapshot_chunk.configuration.phase =
+                    TR_RAFT_CONF_FINAL;
+                snapshot.data.snapshot_chunk.configuration.member_count = 1U;
+                snapshot.data.snapshot_chunk.configuration.members[0].node_id = 2U;
+                snapshot.data.snapshot_chunk.configuration.members[0].roles =
+                    TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+
+                /* Two full 64KiB chunks are admitted but never progressed
+                 * by this CNet Owner before close. CNet alone retains their
+                 * buffers; neither chunk is a second TurboRaft-owned queue. */
+                PEER_TRY(tr_raft_cnet_channel_send(f.client_channel, &data));
+                PEER_TRY(tr_raft_cnet_channel_send(f.client_channel, &snapshot));
+                PEER_TRY(tr_raft_cnet_channel_get_status(
+                    f.client_channel, &before_close));
+                if (before_close.sg_chunks_admitted != 2U ||
+                    before_close.payloads_admitted != 2U ||
+                    before_close.payload_writes_pending != 2U ||
+                    before_close.payloads_completed != 0U ||
+                    before_close.payloads_canceled != 0U) {
+                    result = SALTS_EPROTO;
+                    error_stage = "two SG logical writes must remain pending";
+                    goto cleanup;
+                }
+                /* Borrowed memory may be overwritten immediately: each
+                 * accepted send has already materialized canonical buffers. */
+                memset(data_bytes, 0x3c, sizeof(data_bytes));
+                memset(snapshot_bytes, 0xc3, sizeof(snapshot_bytes));
+                PEER_TRY(tr_raft_cnet_channel_stop(f.client_channel));
+                if (tr_raft_cnet_channel_send(f.client_channel, &data) !=
+                        SALTS_EBUSY) {
+                    result = SALTS_EPROTO;
+                    error_stage = "closed SG Channel admitted another write";
+                    goto cleanup;
+                }
+                sent = 1;
+                break; /* no progress after admission, only terminal drain */
+            }
             tr_raft_transport_payload_t request = {0};
             tr_raft_transport_payload_t response = {0};
             request.group_id = 42U;
@@ -410,7 +486,17 @@ static int peer_case_run(int mode)
             break;
     }
 
-    if (mode == PEER_VALID || mode == PEER_STREAMS) {
+    if (mode == PEER_ABORT_SG) {
+        PEER_TRY(tr_raft_cnet_channel_get_status(f.client_channel, &cs));
+        if (!sent || cs.sg_chunks_admitted != 2U ||
+            cs.payloads_admitted != 2U ||
+            cs.payload_writes_pending != 2U ||
+            cs.payloads_completed != 0U ||
+            cs.payloads_canceled != 0U) {
+            result = SALTS_EPROTO;
+            error_stage = "pending SG send must retain both logical credits";
+        }
+    } else if (mode == PEER_VALID || mode == PEER_STREAMS) {
         const size_t expected_server = mode == PEER_STREAMS ? 3U : 1U;
         /* Prove actual CNet logical write completions, not merely terminal
          * cancellation balancing the ledger after a successful receive. */
@@ -514,6 +600,15 @@ cleanup:
                 end_server.payloads_completed + end_server.payloads_canceled) {
             result = SALTS_EPROTO;
             error_stage = "CNet terminal write ledger must drain exactly once";
+        } else if (mode == PEER_ABORT_SG &&
+                   (end_client.sg_chunks_admitted != 2U ||
+                    end_client.payloads_admitted != 2U ||
+                    end_client.payloads_completed != 0U ||
+                    end_client.payloads_canceled != 2U)) {
+            /* Neither admitted write reached an owner-poll send terminal;
+             * terminal cleanup must cancel each exactly once. */
+            result = SALTS_EPROTO;
+            error_stage = "unprogressed SG writes did not cancel exactly once";
         }
     }
     if (f.client_channel != NULL) {
@@ -555,6 +650,11 @@ spec("ACE 2.3 CNet owner-bound authenticated Raft channel")
     it("sends group-aware DATA and SNAPSHOT chunks over the same mTLS channel")
     {
         check_equal(peer_case_run(PEER_STREAMS), SALTS_OK);
+    }
+
+    it("cancels two pending 64KiB TLS SG chunks once on terminal close")
+    {
+        check_equal(peer_case_run(PEER_ABORT_SG), SALTS_OK);
     }
 
     it("rejects a different cluster before delivering any Raft payload")
