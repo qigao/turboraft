@@ -83,6 +83,26 @@ add_test(NAME turboraft.ace23_owner_ingress
          COMMAND turboraft_ace23_owner_ingress)
 set_tests_properties(turboraft.ace23_owner_ingress PROPERTIES TIMEOUT 20)
 
+# Genuine Plugin-managed native DSO: the fixture owns only its test-local
+# counter/callbacks; Salts::Plugin alone owns load/unload and module leases.
+# The host-side published ComponentPlugin runtime survives DSO reload.
+add_library(turboraft_ace23_dso_epoch_fixture MODULE
+            test_dso_epoch_fixture.c)
+target_link_libraries(turboraft_ace23_dso_epoch_fixture
+                      PRIVATE Salts::Plugin)
+add_executable(turboraft_ace23_dso_epoch test_dso_epoch.c)
+target_link_libraries(turboraft_ace23_dso_epoch
+                      PRIVATE TurboRaft::CNet Salts::ComponentPlugin
+                              Salts::Plugin Salts::Platform Salts::TinyTest)
+target_compile_definitions(turboraft_ace23_dso_epoch PRIVATE
+    TURBORAFT_ACE23_EPOCH_DSO_PATH=
+        "$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture>")
+add_dependencies(turboraft_ace23_dso_epoch
+                 turboraft_ace23_dso_epoch_fixture)
+add_test(NAME turboraft.ace23_dso_epoch
+         COMMAND turboraft_ace23_dso_epoch)
+set_tests_properties(turboraft.ace23_dso_epoch PROPERTIES TIMEOUT 30)
+
 add_executable(turboraft_ace23_cnet_cpp cnet_cpp.cpp)
 target_link_libraries(turboraft_ace23_cnet_cpp PRIVATE TurboRaft::CNet TurboRaft::Multicore)
 add_test(NAME turboraft.ace23_cnet_installed_cpp
