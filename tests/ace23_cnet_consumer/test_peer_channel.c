@@ -370,6 +370,88 @@ static int peer_dso_setup(peer_dso_harness *dso)
     return SALTS_OK;
 }
 
+/* No native DSO may be unloaded while an old Channel callback can
+ * borrow it. B is still published/leased when A is actually dlclosed.
+ * This is the host's explicit post-CNet-terminal settlement barrier. */
+static int peer_dso_finish_ab(peer_dso_harness *dso)
+{
+    cmeta_plugin_lifecycle_info info = {0};
+    salts_component_plugin_generation *retired = NULL;
+    bool quiet = false;
+    int result = SALTS_OK;
+
+#define AB_REQUIRE(expr, wanted) do { \
+    if ((expr) != (wanted)) result = SALTS_EPROTO; \
+} while (0)
+    if (!dso->controller_closed_publication ||
+        dso->retired_by_controller != &dso->generation_b ||
+        !dso->scope_live || !dso->scope_b_live ||
+        !dso->loaded || !dso->loaded_b ||
+        dso->worker_b_live || !dso->worker_b_result ||
+        atomic_load_explicit(
+            &dso->module_b->callback_completed, memory_order_acquire) != 1U)
+        return SALTS_EBUSY; /* fail closed; never force a live DSO unload */
+
+    AB_REQUIRE(salts_component_plugin_generation_drain(
+        &dso->host, &dso->generation),
+        SALTS_COMPONENT_PLUGIN_BUSY);
+    AB_REQUIRE(salts_component_plugin_scope_release(
+        &dso->scope), SALTS_COMPONENT_PLUGIN_OK);
+    dso->scope_live = 0;
+    AB_REQUIRE(salts_component_plugin_generation_drain(
+        &dso->host, &dso->generation), SALTS_COMPONENT_PLUGIN_OK);
+    if (result != SALTS_OK) return result;
+    AB_REQUIRE(cmeta_plugin_registry_get_lifecycle(
+        &dso->registry, dso->plugin, &info), CMETA_PLUGIN_OK);
+    if (info.active_leases != 0U) return SALTS_EBUSY;
+    AB_REQUIRE(cmeta_plugin_registry_poll_quiescent(
+        &dso->registry, dso->plugin, &quiet), CMETA_PLUGIN_OK);
+    if (!quiet || result != SALTS_OK) return SALTS_EBUSY;
+    AB_REQUIRE(cmeta_plugin_registry_unload(
+        &dso->registry, dso->plugin), CMETA_PLUGIN_OK);
+    if (result != SALTS_OK) return result;
+    dso->loaded = 0;
+
+    /* The B Component interface, Scope and lease must be usable after
+     * provider image A has really been unmapped. */
+    if (!tr_ace23_dso_callback_valid(&dso->callback_b) ||
+        salts_component_plugin_scope_generation_id(&dso->scope_b) !=
+            UINT64_C(90010002))
+        return SALTS_EPROTO;
+    AB_REQUIRE(cmeta_plugin_registry_get_lifecycle(
+        &dso->registry, dso->plugin_b, &info), CMETA_PLUGIN_OK);
+    if (info.active_leases != 1U) return SALTS_EPROTO;
+    AB_REQUIRE(cmeta_plugin_registry_unload(
+        &dso->registry, dso->plugin_b), CMETA_PLUGIN_BUSY);
+    AB_REQUIRE(salts_component_plugin_generation_drain(
+        &dso->host, &dso->generation_b), SALTS_COMPONENT_PLUGIN_BUSY);
+    AB_REQUIRE(salts_component_plugin_scope_release(
+        &dso->scope_b), SALTS_COMPONENT_PLUGIN_OK);
+    dso->scope_b_live = 0;
+    AB_REQUIRE(salts_component_plugin_generation_drain(
+        &dso->host, &dso->generation_b), SALTS_COMPONENT_PLUGIN_OK);
+    if (result != SALTS_OK) return result;
+    AB_REQUIRE(cmeta_plugin_registry_get_lifecycle(
+        &dso->registry, dso->plugin_b, &info), CMETA_PLUGIN_OK);
+    if (info.active_leases != 0U) return SALTS_EPROTO;
+    quiet = false;
+    AB_REQUIRE(cmeta_plugin_registry_poll_quiescent(
+        &dso->registry, dso->plugin_b, &quiet), CMETA_PLUGIN_OK);
+    if (!quiet || result != SALTS_OK) return SALTS_EBUSY;
+    AB_REQUIRE(cmeta_plugin_registry_unload(
+        &dso->registry, dso->plugin_b), CMETA_PLUGIN_OK);
+    if (result != SALTS_OK) return result;
+    dso->loaded_b = 0;
+    dso->published_b = 0;
+    dso->published = 0;
+    AB_REQUIRE(salts_component_plugin_runtime_destroy(
+        &dso->host), SALTS_COMPONENT_PLUGIN_OK);
+    AB_REQUIRE(cmeta_plugin_registry_destroy(
+        &dso->registry), CMETA_PLUGIN_OK);
+#undef AB_REQUIRE
+    return result;
+}
+
 /* Called ONLY after BOTH CNet clients have drained terminal callbacks
  * and both Channels were destroyed. Plugin is the sole dlclose authority;
  * this test does not copy a Scope or create an alternative DSO lease. */
