@@ -47,6 +47,7 @@ typedef struct tr_raft_cnet_channel_status {
     uint64_t handshake_packets_sent;
     uint64_t payloads_admitted;
     uint64_t payloads_received;
+    uint64_t sg_chunks_admitted; /* nonempty DATA/SNAPSHOT retained vectors */
     /* Owner-local logical-write settlement, distinct from remote delivery.
      * CNet retains payload buffers; this is bounded metadata, NOT a queue. */
     uint64_t payloads_completed;
@@ -85,6 +86,13 @@ int tr_raft_cnet_channel_get_status(
  * canceled. These counters never imply remote delivery/commit/WAL fsync.
  * Rejected admission creates no pending write, no automatic retry, and no
  * second TurboRaft queue. All calls/status access are owner-thread only.
+ *
+ * Nonempty DATA/SNAPSHOT chunks are materialized once from the borrowed
+ * source bytes into a bounded Salts Core buffer, then submitted as CNet's
+ * retained [wire prefix, payload] scatter/gather vector (never a flattened
+ * CNet write or an extra TurboRaft queue). CNet retains references through
+ * its ordered on_send or terminal state; the caller may reuse source bytes
+ * immediately after return. sg_chunks_admitted counts this exact path.
  */
 int tr_raft_cnet_channel_send(
     tr_raft_cnet_channel_t *channel,
