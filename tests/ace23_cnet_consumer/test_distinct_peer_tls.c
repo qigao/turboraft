@@ -1583,12 +1583,17 @@ static int pressure_reconnect(
 #endif
 
 static int qualify_two_certified_peer_group_pressure(
-    identity_fixture *f, size_t *events)
+    identity_fixture *f, const char *uri, size_t *events)
 {
     tr_raft_cnet_channel_t *healthy = NULL, *saturated = NULL;
     tr_raft_cnet_channel_status_t status_one = {0}, status_three = {0};
     tr_raft_multicore_group_status_t group_one = {0}, group_three = {0};
     tr_raft_multicore_completion_t completion = {0};
+#ifdef TURBORAFT_TEST_TLS_PRESSURE_RECONNECT
+    tr_raft_multicore_completion_t old_node3_chunk = {0};
+#else
+    (void)uri; /* only explicit reconnect variant needs the listener URI */
+#endif
     tr_raft_transport_payload_t snapshot = {0}, heartbeat = {0};
     uint8_t bytes[24];
     size_t i;
@@ -1734,6 +1739,9 @@ static int qualify_two_certified_peer_group_pressure(
                                      : TR_RAFT_MULTICORE_RECEIVE_CHUNK),
                    "each accepted Raft/SG request returned one ordered Group result");
             if (action == 1U) {
+#ifdef TURBORAFT_TEST_TLS_PRESSURE_RECONNECT
+                if (i == 1U) old_node3_chunk = completion; /* value, not lease */
+#endif
                 PCHECK(!completion.value.chunk.ack_valid &&
                        !completion.value.chunk.durable_or_installed &&
                        completion.value.chunk.kind ==
@@ -1795,6 +1803,9 @@ static int qualify_two_certified_peer_group_pressure(
     PTRY(tr_raft_cnet_channel_get_status(healthy, &status_one));
     PCHECK(status_one.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
            !status_one.terminal, "healthy certified TLS link remains ACTIVE");
+#ifdef TURBORAFT_TEST_TLS_PRESSURE_RECONNECT
+    PTRY(pressure_reconnect(f, uri, events, &old_node3_chunk));
+#endif
     result = SALTS_OK;
 done:
 #ifdef TURBORAFT_TEST_TLS_BYTE_PRESSURE
@@ -2338,7 +2349,7 @@ static int run_two_distinct_peers(int forge_node_three)
 
 #ifdef TURBORAFT_TEST_TLS_GROUP_PRESSURE
     if (!forge_node_three && result == SALTS_OK) {
-        result = qualify_two_certified_peer_group_pressure(&f, &events);
+        result = qualify_two_certified_peer_group_pressure(&f, uri, &events);
         if (result != SALTS_OK)
             failed_stage = "real Node3 Group103 capacity must not poison Node1";
         goto cleanup;
