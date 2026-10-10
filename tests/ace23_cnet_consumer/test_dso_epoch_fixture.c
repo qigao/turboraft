@@ -31,6 +31,7 @@ static cmeta_plugin_status CMETA_PLUGIN_CALL tr_plugin_start(void *self)
 {
     tr_ace23_dso_callback_state *state = self;
     atomic_store_explicit(&state->stop_requested, false, memory_order_release);
+    atomic_store_explicit(&state->release_callback, false, memory_order_release);
     atomic_store_explicit(&state->callback_entered, 0U, memory_order_release);
     atomic_store_explicit(&state->callback_completed, 0U, memory_order_release);
     return CMETA_PLUGIN_OK;
@@ -53,7 +54,9 @@ static bool CMETA_PLUGIN_CALL tr_plugin_is_quiescent(const void *self)
     atomic_fetch_add_explicit(
         &state->callback_entered, 1U, memory_order_release);
     while (!atomic_load_explicit(
-               &state->stop_requested, memory_order_acquire))
+               &state->stop_requested, memory_order_acquire) &&
+           !atomic_load_explicit(
+               &state->release_callback, memory_order_acquire))
         thrd_yield();
     atomic_fetch_add_explicit(
         &state->callback_completed, 1U, memory_order_release);
