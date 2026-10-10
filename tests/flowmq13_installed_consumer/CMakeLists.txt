@@ -246,6 +246,24 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                                   LABELS "cnet-snapshot-lifecycle;cnet-process-crash;wal-recovery")
 endif()
 
+# #149 P0: three SIMULTANEOUS independently exec'ed Linux processes, each
+# owning one real RaftCore and a separate authoritative fsynced WalStorage.
+# A deliberately TEST-seeded uncommitted entry must survive SIGKILL/re-exec
+# without becoming committed. Node1/Node3 remain alive and unchanged; the
+# WAL exclusive-writer lock rejects a second opener while Node2 is live.
+# NO CNet/TLS/Raft consensus delivery exists in this foundation test yet.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(turboraft_flowmq13_three_process_wal_bootstrap
+                 test_three_process_wal_bootstrap.c)
+  target_link_libraries(turboraft_flowmq13_three_process_wal_bootstrap PRIVATE
+      TurboRaft::Core TurboRaft::WalStorage Salts::Platform)
+  add_test(NAME turboraft.flowmq13.three_process_wal_bootstrap
+           COMMAND turboraft_flowmq13_three_process_wal_bootstrap)
+  set_tests_properties(turboraft.flowmq13.three_process_wal_bootstrap
+                       PROPERTIES TIMEOUT 65
+                                  LABELS "raft-three-process-bootstrap;wal-process-isolation")
+endif()
+
 # Independent installed-SDK 64 MiB end-to-end SnapshotSender -> Raft wire
 # codec -> SnapshotReceiver/stream sink. No 64 MiB heap allocation or socket
 # simulation: sender uses a deterministic read_at source, fixed 64-KiB chunks,

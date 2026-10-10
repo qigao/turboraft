@@ -598,6 +598,35 @@ real physical network partition healing, automatic membership migration,
 or replacement parity for FlowMQ. All those remain hard gates before
 deleting FlowMQ.Native 1.3.0 or merging PR #148.
 
+### #149 Linux three-process Core/WAL bootstrap (separate from quorum)
+
+The installed full FlowMQ 1.3 profile now has a separate **Linux-only**
+`turboraft.flowmq13.three_process_wal_bootstrap` acceptance gate. Its
+controller launches **three concurrently live, independently exec'ed
+processes**, each with a distinct PID, new `RaftCore`, private controller
+socket, separate directory and an exclusive production `WalStorage` writer.
+All child startup status messages contain only copied scalar snapshots.
+An explicit test fixture seeds hard term/vote on each WAL, and **an
+uncommitted index1 only on Node2** (this is **not** a Raft proposal,
+replication, or majority commit). Opening Node2's WAL with a second writer
+while the process remains live must be rejected by the production file lock.
+Node2 then suffers a real **SIGKILL**, while Node1/Node3 remain alive;
+a new `fork+exec` worker reopens exactly the previous Node2 WAL with
+`create_if_missing=false`. It must recover the same exact uncommitted
+entry, term/vote, and **commit=0/applied=0**, with no handle or runtime
+state carried from the dead process. Independent Node1/Node3 stay unchanged.
+The Linux installed-SDK CI executes this isolated CTest with 25
+fresh-process repetitions and keeps its JUnit result separately labelled.
+
+**Scope boundary:** this tests process/WAL writer ownership and a forced
+process death, **not** a three-process Raft consensus, mTLS vote/Append
+traffic, real network partition, crash during an admitted but incomplete
+network send, or distributed durability/catch-up. Those are explicit
+remaining parts of [#149](https://github.com/qigao/turboraft/issues/149)
+under [#145](https://github.com/qigao/turboraft/issues/145); do not
+mislabel this bootstrap as full release/parity evidence. No production
+queue, fallbacks, public ABI or runtime-state persistence is added.
+
 ## 6. New-only packaging and gates
 
 - Single exact `Salts.Native 2.3.0-ace.sha<FULL_SHA>` candidate only after

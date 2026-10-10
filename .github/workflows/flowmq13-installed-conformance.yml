@@ -147,6 +147,15 @@ jobs:
             --output-on-failure --no-tests=error \
             --output-junit flowmq13-snapshot-repeat.xml
 
+          # Separate #149 Linux three-process WAL owner/bootstrap qualifier.
+          # Each repetition forks+execs three simultaneously live Core/WAL
+          # owners, SIGKILLs Node2, then reopens the exact uncommitted WAL.
+          # This is NOT a CNet quorum/partition/retry claim.
+          ctest --test-dir .ci/build-flowmq13-consumer \
+            -L raft-three-process-bootstrap --repeat until-fail:25 \
+            --output-on-failure --no-tests=error \
+            --output-junit flowmq13-three-process-wal-repeat.xml
+
           # Independent 64-MiB wire stream: print high-water RSS and
           # bounded chunk/ACK counters without changing the test gates.
           # Not an actual CNet socket bandwidth measurement.
@@ -167,5 +176,6 @@ jobs:
             .ci/build-flowmq13-consumer/Testing/Temporary
             .ci/build-flowmq13-consumer/flowmq13-results.xml
             .ci/build-flowmq13-consumer/flowmq13-snapshot-repeat.xml
+            .ci/build-flowmq13-consumer/flowmq13-three-process-wal-repeat.xml
             .ci/build-flowmq13-full/CMakeCache.txt
           if-no-files-found: warn
