@@ -386,6 +386,39 @@ another Group's credits or silently retries an uncommitted message.
 After stop, each already-accepted request produces exactly one
 `SALTS_ECANCELED` completion rather than disappearing.
 
+### Real certified multi-Peer Group overload: item vs byte credits
+
+Two additional **exact installed-SDK** fixtures reuse the existing
+separately certified Node1 and Node3 mTLS connections to Node2 and
+the **same two fixed** Multicore Group101/Group103 Owners:
+
+- `turboraft.flowmq13.cnet_group_pressure` reserves precisely
+  **two of two** per-Group completion/item credits (one verified Raft STEP
+  and one leased DATA/SNAPSHOT chunk). Another genuinely decoded Node3
+  Snapshot, with valid Node/Cluster/Group, fails **only** Group103's
+  `SALTS_ENOSPC` preflight. The corresponding Node3 TLS Channel faults
+  and settles terminally, without a third Owner callback or implicit retry.
+  Group101's authenticated Node1 Channel remains ACTIVE; after consuming
+  its original completions it admits and completes a further Raft heartbeat.
+- `turboraft.flowmq13.cnet_byte_pressure` instead configures
+  **capacity 3** but **24 bytes** per Group. An explicitly test-controlled
+  callback on the *real Group103 Owner thread* temporarily holds the first
+  24-byte SNAPSHOT SG lease. There is still a spare item slot, but a
+  second otherwise valid 24-byte Node3 TLS Snapshot fails `SALTS_ENOSPC`
+  from the **byte budget**, not from Item or certificate validation.
+  The separate Group101 Owner successfully finishes its own STEP and
+  DATA callback while Group103 is deliberately paused; the test releases
+  the owner before teardown and asserts all bytes and completions return
+  to their original Group with no duplicate ACK.
+
+Both use the existing CNet progression and Multicore rings: **no extra
+scheduler, fallback route, hidden buffering, or automatic application
+retransmission**. Failure remains explicitly **fail-closed**: overload
+closes only the affected Peer Channel. This is per-Group credit isolation
+under **two simultaneous real TLS clients**, not a claim of lossless
+pause/resume, three independently operating Raft servers, distributed
+quorum convergence or wire-level throughput equality with FlowMQ.
+
 The **CNet Channel** currently treats a negative payload callback result
 (including full capacity) as a failed connection and closes that Channel.
 This is fail-closed rather than lossless flow control: upstream peers must
