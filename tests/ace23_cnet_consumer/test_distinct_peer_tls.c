@@ -221,7 +221,14 @@ static int on_server_payload(void *user, const tr_raft_transport_payload_t *msg)
             d->snapshot_index != 19U ||
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
             d->data_length != 12U ||
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+            /* N delivers offset0; N+1 explicitly resends offset0 and
+             * completes offset12. Never infer a hidden transport replay. */
+            d->snapshot_offset !=
+                (sink->received_snapshot < 2U ? 0U : 12U) ||
+#else
             d->snapshot_offset != sink->received_snapshot * 12U ||
+#endif
 #else
             d->data_length != 24U ||
 #endif
@@ -1552,13 +1559,17 @@ static int run_two_distinct_peers(int forge_node_three)
                     snapshot.data.snapshot_chunk.data_length = 12U;
                     snapshot.data.snapshot_chunk.done = false;
                     TRY_STAGE(tr_raft_cnet_channel_send(f.outbound[1], &snapshot));
+#ifndef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
                     snapshot.data.snapshot_chunk.snapshot_offset = 12U;
                     snapshot.data.snapshot_chunk.data_length = 12U;
                     snapshot.data.snapshot_chunk.data = s + 12U;
                     snapshot.data.snapshot_chunk.done = true;
                     snapshot.data.snapshot_chunk.has_configuration = false;
-#endif
                     TRY_STAGE(tr_raft_cnet_channel_send(f.outbound[1], &snapshot));
+#endif
+#else
+                    TRY_STAGE(tr_raft_cnet_channel_send(f.outbound[1], &snapshot));
+#endif
                     /* This memory is borrowed until send returns, NOT held
                      * until TLS send terminal or Owner callback. */
                     memset(d, 0x44, sizeof(d));
@@ -1576,7 +1587,11 @@ static int run_two_distinct_peers(int forge_node_three)
             f.server_received.received_from_three == 1U &&
             f.server_received.received_data == 1U &&
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+            f.server_received.received_snapshot == 1U &&
+#else
             f.server_received.received_snapshot == 2U &&
+#endif
 #else
             f.server_received.received_snapshot == 1U &&
 #endif
@@ -1592,7 +1607,11 @@ static int run_two_distinct_peers(int forge_node_three)
             f.server_received.received_from_three != 1U ||
             f.server_received.received_data != 1U ||
 #ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+            f.server_received.received_snapshot != 1U ||
+#else
             f.server_received.received_snapshot != 2U ||
+#endif
 #else
             f.server_received.received_snapshot != 1U ||
 #endif
@@ -1636,7 +1655,8 @@ static int run_two_distinct_peers(int forge_node_three)
          f.server_payload_inflight != 0U ||
          f.server_payload_completed !=
              (forge_node_three ? 1U : 2U * LINK_COUNT
-#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+#if defined(TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED) && \
+    !defined(TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT)
               + 1U
 #endif
              ))) {
