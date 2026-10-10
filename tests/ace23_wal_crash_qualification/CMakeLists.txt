@@ -18,7 +18,7 @@ enable_testing()
 
 file(TO_CMAKE_PATH "$ENV{TURBORAFT_ROOT}" _wal_crash_root)
 find_package(TurboRaft 0.3.1 EXACT CONFIG REQUIRED
-             COMPONENTS WalStorage
+             COMPONENTS WalStorage SnapshotReceiver
              PATHS "${_wal_crash_root}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
@@ -38,4 +38,22 @@ foreach(phase IN ITEMS snapshot segment manifest)
                          PROPERTIES TIMEOUT 30
                                     LABELS "snapshot;process-crash;restart")
   endforeach()
+endforeach()
+
+# Real Linux SIGKILL while one SnapshotReceiver has consumed ONLY offset 0..12:
+# buffered mode owns transient in-RAM bytes; streamed mode deliberately
+# fsyncs a test-local 12-byte raw staging file but never promotes it to WAL.
+# The post-SIGKILL process explicitly rejects tail-only resume, discards any
+# orphan, retransmits from offset 0, publishes one WAL Snapshot via the
+# original installed SnapshotReceiver, then commits/reopens the Raft suffix.
+add_executable(turboraft_partial_snapshot_process_crash
+               test_partial_snapshot_process_crash.c)
+target_link_libraries(turboraft_partial_snapshot_process_crash PRIVATE
+    TurboRaft::SnapshotReceiver TurboRaft::WalStorage)
+foreach(mode IN ITEMS buffered streamed)
+  add_test(NAME "turboraft.ace23.partial_snapshot_crash_${mode}"
+           COMMAND turboraft_partial_snapshot_process_crash "${mode}")
+  set_tests_properties("turboraft.ace23.partial_snapshot_crash_${mode}"
+                       PROPERTIES TIMEOUT 35
+                                  LABELS "snapshot;process-crash;restart;receive")
 endforeach()
