@@ -369,9 +369,16 @@ scheduler. It allocates one small address-stable correlation generator but
 **no separate queue, timer, transport connection or thread**. A single
 atomic request-ID namespace may be shared by multiple CNet ingress
 producers, and the host must reserve disjoint ranges for unrelated submit
-callers. Only Raft messages are admitted; the complete
-`tr_raft_message_t` is inline so it is copied into Multicore's existing
-bounded request ring before the borrowed CNet decode callback returns.
+callers. Raft STEP messages use an **inline full-value copy** into
+Multicore's existing bounded request ring before the borrowed CNet callback
+returns. Snapshot and Data chunks instead use the explicitly separate
+`tr_raft_multicore_ingress_submit_with_origin()` owned-payload path:
+the original borrowed chunk is retained into one bounded lease; its bytes
+are released after the assigned Group Owner callback returns and before
+publishing the exact Group completion. Authenticated Node/Group, channel
+incarnation, connection token and Component generation travel as copied
+`reply_origin` values, not raw CNet runtime handles. Both item and
+byte credits are preflighted before retaining the borrowed chunk.
 Request and completion credits are reserved together; completion space
 is held until the application calls `tr_raft_multicore_take()`.
 Per-Group capacity exhaustion returns `SALTS_ENOSPC` and never steals
@@ -387,11 +394,19 @@ replay of an uncertain message. A later flow-control slice may establish
 bounded pause/resume with retained frame ownership and receive demand;
 until proven, do not claim zero-copy/lossless backpressure under overload.
 
-Snapshot/data chunks carry **borrowed byte pointers** and thus are
-explicitly rejected with `SALTS_ENOTSUP` by this bridge. They must use
-the future bounded SG buffer lease/terminal-ACK handoff, preserving
-ownership through the receiving Raft Owner and actual durable storage,
-not shallow-copying a descriptor into an inline Raft request.
+Snapshot/data chunks indeed carry **borrowed byte pointers** at the CNet
+decode edge; they are **not** shallow-copied into Raft STEP requests. The
+existing owned-chunk admission keeps exactly one bounded byte lease per
+accepted request until the receiving Group Owner finishes. In the real
+certified Node3 mTLS Snapshot fixture, Group103 `SnapshotReceiver` only
+reports a positive **installed** final receipt after production
+`WalStorage` has published the validated SHA-256 Snapshot and manifest.
+A partial accepted offset is progress only. CNet refuses to send a
+full-size `SNAPSHOT_ACK` without an installed owner receipt, and also
+rejects wrong-generation/foreign-channel completions **before using
+send credits**. A failed WAL Snapshot staging write must not be
+translated into a successful ACK. The single CNet progress owner and
+the existing Group Owner ring remain the only transport/compute owners.
 
 The bridge is also exercised **through a real mTLS wire receive** in
 `test_distinct_peer_tls.c`: two differently certified clients (Node 1
@@ -415,6 +430,34 @@ the adapter itself never stops or drains another owner or CNet instance.
 The host remains responsible for collecting every accepted completion
 and deciding whether the corresponding message generated a legal durable
 or applied transition. No raw runtime state is serialized.
+
+### Distinct qualification scopes: 64-MiB streaming vs quorum simulation
+
+The installed full-profile SDK consumer
+`turboraft.flowmq13.large_snapshot_stream` runs a **64-MiB** generated
+Snapshot through `SnapshotSender.begin_source(read_at)`, the real Raft
+wire chunk and cumulative-ACK codecs, and `SnapshotReceiver`'s streaming
+sink. It sends exactly **1,024 64-KiB chunks**, hard-gates the
+**four-inflight-chunk / 256-KiB sender slot bound**, rejects a fifth
+unacknowledged claim, and checks per-write/source-read limits, incremental
+SHA-256 and one terminal stream commit. The test allocates no logical
+64-MiB payload buffer. On **Linux**, it also gates the entire process's
+`getrusage(RUSAGE_SELF).ru_maxrss` at **48 MiB** (high-water RSS in KiB,
+not a precise heap allocator trace). CI prints the actual counters,
+not only test PASS. This validates the installed wire/stream contract,
+**not** actual CNet bandwidth, full transport backpressure, bounded
+streaming-WAL disk staging or cross-node catch-up.
+
+The installed Core consumer `turboraft.flowmq13.three_node_core` runs
+three independent Raft Core instances with **deterministically simulated
+links** and persisted Ready values. A former Leader is isolated; the
+other 2-of-3 quorum elects a new Leader and commits an ordered suffix.
+The old Leader's Core is destroyed/recreated while disconnected, then
+all three heal and must converge exactly on eight log entries and
+committed/applied indices. It uses a **bounded in-process message queue**,
+not real CNet connections or multi-host quorum. The real certified TLS,
+WAL and process-SIGKILL tests remain distinct and must not be combined
+into a false claim of automatic multi-node convergence.
 
 ## 6. New-only packaging and gates
 
