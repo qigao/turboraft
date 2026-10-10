@@ -1450,6 +1450,28 @@ static int run_two_distinct_peers(int forge_node_three)
                         chunk_completion.value.chunk.durable_or_installed ||
                         !chunk_completion.value.chunk.ack.snapshot.accepted ||
                         chunk_completion.value.chunk.ack.snapshot.next_offset != 12U) {
+                        fprintf(stderr,
+                            "segmented first chunk: take=%d bind=%u req=%llu prior=%llu current=%llu "
+                            "op=%d rc=%d kind=%d valid=%d durable=%d accepted=%d next=%llu "
+                            "gen=%llu/%llu inst=%llu/%llu token=%llu/%llu node=%llu group=%llu\\n",
+                            observed, binding != NULL,
+                            (unsigned long long)chunk_completion.request_id,
+                            (unsigned long long)(binding != NULL ? binding->prior_chunk_request_id : 0U),
+                            (unsigned long long)(binding != NULL ? binding->chunk_request_id : 0U),
+                            (int)chunk_completion.operation, chunk_completion.result,
+                            (int)chunk_completion.value.chunk.kind,
+                            (int)chunk_completion.value.chunk.ack_valid,
+                            (int)chunk_completion.value.chunk.durable_or_installed,
+                            (int)chunk_completion.value.chunk.ack.snapshot.accepted,
+                            (unsigned long long)chunk_completion.value.chunk.ack.snapshot.next_offset,
+                            (unsigned long long)chunk_completion.reply_origin.host_module_generation,
+                            (unsigned long long)(binding != NULL ? binding->prior_chunk_origin.host_module_generation : 0U),
+                            (unsigned long long)chunk_completion.reply_origin.channel_instance,
+                            (unsigned long long)(binding != NULL ? binding->prior_chunk_origin.channel_instance : 0U),
+                            (unsigned long long)chunk_completion.reply_origin.connection_token,
+                            (unsigned long long)(binding != NULL ? binding->prior_chunk_origin.connection_token : 0U),
+                            (unsigned long long)chunk_completion.reply_origin.authenticated_peer_node_id,
+                            (unsigned long long)chunk_completion.reply_origin.group_id);
                         failed_stage = "first TLS snapshot fragment falsely durable";
                         result = SALTS_EPROTO;
                         break;
