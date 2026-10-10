@@ -112,3 +112,24 @@ add_test(NAME turboraft.flowmq13.cnet_segmented_snapshot
          COMMAND turboraft_flowmq13_cnet_segmented_snapshot)
 set_tests_properties(turboraft.flowmq13.cnet_segmented_snapshot
                      PROPERTIES TIMEOUT 55)
+
+# Combined bounded multi-part delivery and real owner-local WAL failure:
+# the 12-byte interim chunk is accepted but NOT durable; terminal 12-byte
+# chunk fails at the first Snapshot staging write. No network success ACK,
+# no automatic replay, and no authoritative half-snapshot after reopen.
+add_executable(turboraft_flowmq13_cnet_segmented_fault
+               ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+target_compile_definitions(turboraft_flowmq13_cnet_segmented_fault PRIVATE
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT=1
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED=1
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_include_directories(turboraft_flowmq13_cnet_segmented_fault PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/storage")
+target_link_libraries(turboraft_flowmq13_cnet_segmented_fault PRIVATE
+    TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+    TurboRaft::WalStorage Salts::Platform Salts::TinyTest)
+add_test(NAME turboraft.flowmq13.cnet_segmented_fault
+         COMMAND turboraft_flowmq13_cnet_segmented_fault)
+set_tests_properties(turboraft.flowmq13.cnet_segmented_fault
+                     PROPERTIES TIMEOUT 55)
