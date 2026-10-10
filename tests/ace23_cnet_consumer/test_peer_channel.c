@@ -29,7 +29,8 @@ enum peer_mode {
     PEER_FORGED_NODE,
     PEER_UNAUTHORIZED_CERT,
     PEER_ABORT_SG,
-    PEER_DSO_CALLBACK
+    PEER_DSO_CALLBACK,
+    PEER_DSO_AB_PUBLICATION
 };
 
 typedef struct peer_dso_harness {
@@ -62,6 +63,28 @@ typedef struct peer_dso_harness {
     int registry_open, loaded, started;
     int host_open, published, scope_live, controller_live;
     unsigned network_callbacks;
+
+    /* A and B are separate native Plugin images. B is published while the
+     * certified CNet Owner's on_payload is still executing DSO A. */
+    int ab_publication;
+    cmeta_plugin_ref plugin_b;
+    salts_component_plugin_generation generation_b;
+    salts_component_plugin_scope scope_b;
+    salts_component_deployment deployments_b[1];
+    salts_component_instance instances_b[1];
+    salts_component_dependency dependencies_b[1];
+    size_t activation_order_b[1];
+    salts_component_plugin_module modules_b[1];
+    tr_ace23_dso_callback callback_b;
+    const tr_ace23_dso_callback_state *module_b;
+    cmeta_thread_t worker_b;
+    int worker_b_live, worker_b_result;
+    int loaded_b, started_b, published_b, scope_b_live;
+    cmeta_plugin_status unload_b_before_drain;
+    salts_component_plugin_status drain_a_while_b_published;
+    salts_component_plugin_status drain_b_while_callback;
+    atomic_bool b_ready;
+    atomic_bool release_b;
 } peer_dso_harness;
 
 static void peer_dso_controller(void *context)
@@ -107,7 +130,9 @@ static void peer_dso_controller(void *context)
 
 static int peer_dso_setup(peer_dso_harness *dso)
 {
-    const cmeta_plugin_registry_config registry_config = {.capacity = 1U};
+    const cmeta_plugin_registry_config registry_config = {
+        .capacity = dso->ab_publication ? 2U : 1U
+    };
     const salts_component_plugin_generation_storage storage = {
         .deployments = dso->deployments,
         .deployment_capacity = 1U,
