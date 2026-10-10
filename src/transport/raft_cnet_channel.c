@@ -18,6 +18,7 @@ struct tr_raft_cnet_channel {
     tr_raft_cnet_channel_status_t status;
     uint64_t first_outbound_message_id;
     unsigned callback_depth;
+    size_t handshake_writes_pending; /* on_send accounts HELLO/ACK first */
     int bound;
     int stopping;
 };
@@ -39,6 +40,7 @@ static int tr_channel_send_bytes(
     memcpy(mem_buffer_data(buffer), data, size);
     mem_set_used(buffer, size);
     result = cnet_send_buffer(channel->client, channel->connection, buffer);
+    if (result == SALTS_OK) ++channel->handshake_writes_pending;
     mem_buffer_release(buffer);
     return result;
 }
@@ -64,6 +66,32 @@ static void tr_channel_fault(tr_raft_cnet_channel_t *channel, int reason)
         ignored = cnet_close(channel->client, channel->connection);
         (void)ignored;
     }
+}
+
+/* CNet executes ordered logical send terminals on this same progress Owner.
+ * A Channel retains NO buffer references or raw CNet request handles here.
+ * TLS/HELLO writes are admitted before any post-HELLO Raft payload. */
+static void tr_channel_send_complete(
+    void *context, cnet_connection connection, size_t bytes)
+{
+    tr_raft_cnet_channel_t *channel = (tr_raft_cnet_channel_t *)context;
+
+    (void)bytes;
+    ++channel->callback_depth;
+    if (!channel->bound ||
+        !tr_channel_same_connection(channel->connection, connection) ||
+        channel->status.terminal) {
+        tr_channel_fault(channel, SALTS_EPROTO);
+    } else if (channel->handshake_writes_pending != 0U) {
+        --channel->handshake_writes_pending;
+    } else if (channel->status.payload_writes_pending != 0U) {
+        --channel->status.payload_writes_pending;
+        ++channel->status.payloads_completed;
+    } else {
+        /* No unmatched/duplicate local completion may grant fresh credit. */
+        tr_channel_fault(channel, SALTS_EPROTO);
+    }
+    --channel->callback_depth;
 }
 
 static int tr_channel_payload(void *context,
@@ -184,6 +212,12 @@ static void tr_channel_state(void *context,
             channel->status.phase = TR_RAFT_CNET_CHANNEL_FAILED;
         else
             channel->status.phase = TR_RAFT_CNET_CHANNEL_CLOSED;
+        /* CNet is terminal: every admitted but unsent logical payload has
+         * exactly one local cancellation, never remote delivery/replay. */
+        channel->status.payloads_canceled +=
+            (uint64_t)channel->status.payload_writes_pending;
+        channel->status.payload_writes_pending = 0U;
+        channel->handshake_writes_pending = 0U;
         channel->status.terminal = 1;
         channel->stopping = 1;
         tr_raft_handshake_exchange_destroy(channel->exchange);
@@ -310,6 +344,7 @@ cnet_observer tr_raft_cnet_channel_observer(
         observer.user = channel;
         observer.on_state = tr_channel_state;
         observer.on_receive = tr_channel_receive;
+        observer.on_send = tr_channel_send_complete;
     }
     return observer;
 }
@@ -353,6 +388,9 @@ int tr_raft_cnet_channel_send(
         channel->status.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
         channel->transport == NULL)
         return SALTS_EBUSY;
+    if (channel->status.payloads_admitted == UINT64_MAX ||
+        channel->status.payload_writes_pending == SIZE_MAX)
+        return SALTS_ERANGE;
 
     packet = mem_get_buffer(mem_global(), TR_RAFT_TRANSPORT_MAX_PACKET_SIZE);
     if (packet == NULL) return SALTS_ENOMEM;
@@ -364,7 +402,10 @@ int tr_raft_cnet_channel_send(
         mem_set_used(packet, size);
         result = cnet_send_buffer(
             channel->client, channel->connection, packet);
-        if (result == SALTS_OK) ++channel->status.payloads_admitted;
+        if (result == SALTS_OK) {
+            ++channel->status.payloads_admitted;
+            ++channel->status.payload_writes_pending;
+        }
     }
     mem_buffer_release(packet);
     return result;
