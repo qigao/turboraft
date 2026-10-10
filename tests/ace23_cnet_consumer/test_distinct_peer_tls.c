@@ -1425,6 +1425,41 @@ static int run_two_distinct_peers(int forge_node_three)
                         break;
                     }
                 }
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+                if (i == 1U) {
+                    /* The FIRST chunk is a valid progress ACK only, not a
+                     * durable/installed receipt. Its completion/lease ID
+                     * remains correlated even after the second TLS receive. */
+                    if (observed != SALTS_OK || binding == NULL ||
+                        binding->prior_chunk_request_id == 0U ||
+                        chunk_completion.request_id !=
+                            binding->prior_chunk_request_id ||
+                        chunk_completion.reply_origin.host_module_generation !=
+                            binding->prior_chunk_origin.host_module_generation ||
+                        chunk_completion.reply_origin.channel_instance !=
+                            binding->prior_chunk_origin.channel_instance ||
+                        chunk_completion.reply_origin.connection_token !=
+                            binding->prior_chunk_origin.connection_token ||
+                        chunk_completion.reply_origin.authenticated_peer_node_id != 3U ||
+                        chunk_completion.reply_origin.group_id != 103U ||
+                        chunk_completion.operation != TR_RAFT_MULTICORE_RECEIVE_CHUNK ||
+                        chunk_completion.result != SALTS_OK ||
+                        chunk_completion.value.chunk.kind !=
+                            TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK ||
+                        !chunk_completion.value.chunk.ack_valid ||
+                        chunk_completion.value.chunk.durable_or_installed ||
+                        !chunk_completion.value.chunk.ack.snapshot.accepted ||
+                        chunk_completion.value.chunk.ack.snapshot.next_offset != 12U) {
+                        failed_stage = "first TLS snapshot fragment falsely durable";
+                        result = SALTS_EPROTO;
+                        break;
+                    }
+                    /* Send no progress ACK: this test specifically proves
+                     * the final positive receipt can only follow WAL fsync.
+                     * The final completion is the next FIFO Owner result. */
+                    observed = take_owner_completion(&f, i, &chunk_completion);
+                }
+#endif
                 if (observed != SALTS_OK || binding == NULL ||
                     binding->chunk_request_id == 0U ||
                     chunk_completion.request_id != binding->chunk_request_id ||
