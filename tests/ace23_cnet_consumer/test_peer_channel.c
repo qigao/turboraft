@@ -257,14 +257,29 @@ static int peer_case_run(int mode)
         mode == PEER_FORGED_NODE ? 3U : 1U,
         mode == PEER_FOREIGN_CLUSTER);
     client_channel.first_outbound_message_id = 1U;
+    client_channel.host_module_generation = UINT64_C(90010001);
     client_channel.on_payload = peer_record;
     client_channel.payload_context = &f.client_sink;
     server_channel.client = &f.server;
     server_channel.identity = &f.server_policy;
     server_channel.handshake = peer_handshake(2U, 0);
     server_channel.first_outbound_message_id = 1U;
+    server_channel.host_module_generation = UINT64_C(90010001);
     server_channel.on_payload = peer_record;
     server_channel.payload_context = &f.server_sink;
+    /* A DSO-local static serial is insufficient: the loader/host must
+     * supply a nonzero epoch before ANY Channel can be published. */
+    {
+        tr_raft_cnet_channel_config_t invalid = client_channel;
+        tr_raft_cnet_channel_t *unused = (tr_raft_cnet_channel_t *)(uintptr_t)1U;
+        invalid.host_module_generation = 0U;
+        if (tr_raft_cnet_channel_create(&invalid, &unused) != SALTS_EINVAL ||
+            unused != NULL) {
+            result = SALTS_EPROTO;
+            error_stage = "missing host DSO epoch accepted";
+            goto cleanup;
+        }
+    }
     PEER_TRY(tr_raft_cnet_channel_create(
         &client_channel, &f.client_channel));
     PEER_TRY(tr_raft_cnet_channel_create(
