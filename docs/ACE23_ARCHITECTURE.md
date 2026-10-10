@@ -555,9 +555,11 @@ through a simulated delivery function:
   Node2 rather than let it retain authority. Persisted Ready, `commit_index`
   and `applied_index` are checked on every progress iteration and remain
   at 3 despite the uncommitted index4 log. Restoring Node3 must yield a
-  **fresh real TLS vote** and a higher-term election before a new certified
-  Append ACK can commit4; Node1 then catches up. This is a true Raft
-  minority-role transition but still only simulates loss at Core callbacks:
+  **fresh real TLS vote** and a higher-term election. The old-term index4
+  remains uncommitted after that election: only explicit proposal of a
+  **new-term index5 barrier**, authenticated Append ACK and majority match
+  may commit both entries. Node1 then catches up through index5. This is
+  a real Raft minority-role transition but only simulates loss at callbacks:
   it does **not** exercise independent node election clocks or TCP faults.
 
 The CNet test harness has finite 15-second TLS read and 5-second write

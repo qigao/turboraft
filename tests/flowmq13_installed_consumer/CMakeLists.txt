@@ -393,7 +393,8 @@ set_tests_properties(turboraft.flowmq13.cnet_core_quorum_loss
 # authenticated TLS Raft frames while driving EIGHT monotonic-time Raft
 # ticks on Node2. CheckQuorum MUST demote the minority leader while
 # commit/apply index4 remains forbidden at every poll/tick. A fresh
-# certified Node3 vote and Append ACK then re-elect/commit after unmuting.
+# certified Node3 vote then re-elect after unmuting; only a current-term
+# index5 barrier may commit the old-term index4 upon a true majority ACK.
 # Callback muting is NOT a physical TCP partition.
 add_executable(turboraft_flowmq13_cnet_core_quorum_ticked_loss
                test_cnet_two_link_quorum.c)

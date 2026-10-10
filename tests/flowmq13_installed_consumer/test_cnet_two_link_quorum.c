@@ -773,8 +773,7 @@ static int run_quorum(void)
 #endif
         TRY(tr_raft_core_status(f->nodes[1].core,&node2));
         TRY(tr_raft_core_status(f->nodes[2].core,&node3));
-        REQUIRE(node2.role == TR_RAFT_LEADER &&
-                node2.last_log_index == 4U &&
+        REQUIRE(node2.last_log_index == 4U &&
                 node2.commit_index == 3U && node2.applied_index == 3U &&
                 f->nodes[1].durable.length == 4U &&
                 f->nodes[1].durable.committed == 3U &&
@@ -784,22 +783,44 @@ static int run_quorum(void)
                 f->real_append_acks_from_three == acknowledgements_before,
                 "two silent certified peers cannot commit fourth Raft entry");
         f->node_three_muted = 0;
-        /* Only the RAFT protocol may re-probe a timed-out Append. There
-         * is no host-level retry of an admitted TLS or storage settlement. */
-        TRY(core_tick(f,1U,1U));
-        TRY(drive_until(f,4U,0));
 #ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS
+        /* CheckQuorum already demoted Node2. Recover by NEW authentic TLS
+         * votes and a higher term. Never directly commit the index4 entry
+         * from the PREVIOUS term: Raft only advances an old term once a
+         * CURRENT-term entry also reaches a majority. No host send retry. */
+        TRY(drive_until(f,3U,0));
         TRY(tr_raft_core_status(f->nodes[1].core,&node2));
         REQUIRE(node2.role == TR_RAFT_LEADER &&
                 node2.term > term_before &&
+                node2.last_log_index == 4U &&
+                node2.commit_index == 3U &&
+                node2.applied_index == 3U &&
+                f->nodes[1].durable.committed == 3U &&
                 f->real_votes_to_leader > votes_before,
-                "lost-majority candidate must re-elect via fresh TLS votes");
-#endif
+                "fresh TLS re-election must not directly commit old-term index4");
+        TRY(core_propose(f,5U,"new-term-quorum-barrier"));
+        REQUIRE(f->nodes[1].durable.length == 5U &&
+                f->nodes[1].durable.entries[3].term == term_before &&
+                f->nodes[1].durable.entries[4].term == node2.term,
+                "commit barrier must follow old-term index4 at current term");
+        TRY(drive_until(f,5U,0));
+        REQUIRE(f->nodes[1].durable.committed == 5U &&
+                f->nodes[1].durable.applied == 5U &&
+                f->nodes[2].durable.committed == 5U &&
+                f->nodes[0].durable.committed == 0U &&
+                f->real_append_acks_from_three > acknowledgements_before,
+                "new-term majority ACK commits current index5 and old index4");
+#else
+        /* No CheckQuorum ticks in the shorter minority fixture: an in-term
+         * Raft retry can obtain Node3's new certified Append ACK for index4. */
+        TRY(core_tick(f,1U,1U));
+        TRY(drive_until(f,4U,0));
         REQUIRE(f->nodes[1].durable.committed == 4U &&
                 f->nodes[2].durable.committed == 4U &&
                 f->nodes[0].durable.committed == 0U &&
                 f->real_append_acks_from_three > acknowledgements_before,
                 "Node3 restored real-TLS ACK advances exact 2/3 commit");
+#endif
     }
 #endif
     /* Destroy and reconstruct lagging independent Core1 from its persisted
@@ -827,7 +848,9 @@ static int run_quorum(void)
     }
     f->node_one_muted = 0;
     {
-#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS
+        const tr_raft_index_t target_commit = 5U;
+#elif defined(TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS)
         const tr_raft_index_t target_commit = 4U;
 #else
         const tr_raft_index_t target_commit = 3U;
@@ -839,7 +862,9 @@ static int run_quorum(void)
         size_t entry;
         tr_raft_status_t status = {0};
         TRY(tr_raft_core_status(f->nodes[i].core,&status));
-#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS
+        const tr_raft_index_t expected_final = 5U;
+#elif defined(TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS)
         const tr_raft_index_t expected_final = 4U;
 #else
         const tr_raft_index_t expected_final = 3U;
@@ -877,7 +902,11 @@ static int run_quorum(void)
 #ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
            "node3_muted=%zu,node3_append_misses=%zu,"
            "isolated_raft_ticks=%u,check_quorum_demotion=%d,"
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS
+           "committed=5,applied=5\n",
+#else
            "committed=4,applied=4\n",
+#endif
 #else
            "committed=3,applied=3\n",
 #endif
