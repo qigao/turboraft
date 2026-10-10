@@ -41,13 +41,7 @@ runs:
       run: |
         $ErrorActionPreference = "Stop"
         $packages = Join-Path $env:RUNNER_TEMP "turboraft-native-dependencies"
-        if ($env:SaltsNativeCandidateVersion -cnotmatch '^2\.3\.0-ace\.sha[0-9a-f]{40}
-        if ($LASTEXITCODE -ne 0) { throw "native SDK restore failed" }
-        $selected = @("salts", "salts-utils")
-        if ($env:SDK_ORM -eq "true") { $selected += @("flowmq", "chttp", "turbodb") }
-        python tools/ci/export_native_sdks.py --assets packaging/nuget/obj/project.assets.json --rid $env:SDK_RID --packages @selected --runtime-paths
-        if ($LASTEXITCODE -ne 0) { throw "native SDK resolution failed" }
-) {
+        if ($env:SaltsNativeCandidateVersion -cnotmatch '^2[.]3[.]0-ace[.]sha[0-9a-f]{40}$') {
           throw "Exact SHA-qualified Salts.Native 2.3 ACE candidate required; no 2.2 fallback"
         }
         foreach ($key in @('SaltsUtilsNativeVersion', 'FlowMQNativeVersion', 'CHttpNativeVersion')) {
