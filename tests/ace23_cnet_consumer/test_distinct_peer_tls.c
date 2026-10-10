@@ -52,6 +52,8 @@ struct identity_fixture;
 typedef struct verified_payload_context {
     struct identity_fixture *fixture;
     tr_raft_cnet_channel_t *channel;
+    tr_raft_transport_reply_origin_t chunk_origin; /* captured on CNet owner */
+    uint64_t chunk_request_id; /* one admitted chunk per certified Node */
 } verified_payload_context;
 
 typedef struct identity_fixture {
@@ -364,10 +366,26 @@ static int on_server_payload_and_forward(
     ++fixture->server_payload_inflight;
     result = on_server_payload(&fixture->server_received, payload);
     if (result == SALTS_OK) {
-        /* First TLS/Directory authenticated the borrowed CNet frame.
-         * Then Multicore copies it into the target Group's only bounded ring. */
-        result = tr_raft_multicore_ingress_receive(
-            fixture->owner_ingress, payload);
+        /* Directory authenticates this exact mTLS peer and Group first.
+         * Transfer only VALUES (Channel incarnation/Node/Group) and one
+         * explicitly owned chunk into the existing Group Owner ring. */
+        if (payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK ||
+            payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) {
+            tr_raft_transport_reply_origin_t origin = {0};
+            uint64_t request_id = 0U;
+            result = tr_raft_cnet_channel_capture_reply_origin(
+                binding->channel, payload->group_id, &origin);
+            if (result == SALTS_OK)
+                result = tr_raft_multicore_ingress_submit_with_origin(
+                    fixture->owner_ingress, payload, &origin, &request_id);
+            if (result == SALTS_OK) {
+                binding->chunk_origin = origin;
+                binding->chunk_request_id = request_id;
+            }
+        } else {
+            result = tr_raft_multicore_ingress_receive(
+                fixture->owner_ingress, payload);
+        }
     }
     if (result == SALTS_OK && fixture->stop_from_payload_checks == 0U) {
         /* This is a *real* TLS receive callback, not a simulated producer.
@@ -1025,8 +1043,27 @@ static int run_two_distinct_peers(int forge_node_three)
             if (expected && !forge_node_three) {
                 tr_raft_multicore_completion_t chunk_completion = {0};
                 tr_raft_multicore_group_status_t status = {0};
+                verified_payload_context *binding = NULL;
                 observed = take_owner_completion(&f, i, &chunk_completion);
-                if (observed != SALTS_OK ||
+                for (size_t k = 0U; k < LINK_COUNT; ++k) {
+                    if (f.verified_payloads[k].chunk_origin.authenticated_peer_node_id ==
+                            NODE_IDS[i]) {
+                        binding = &f.verified_payloads[k];
+                        break;
+                    }
+                }
+                if (observed != SALTS_OK || binding == NULL ||
+                    binding->chunk_request_id == 0U ||
+                    chunk_completion.request_id != binding->chunk_request_id ||
+                    chunk_completion.reply_origin.channel_instance !=
+                        binding->chunk_origin.channel_instance ||
+                    chunk_completion.reply_origin.connection_slot !=
+                        binding->chunk_origin.connection_slot ||
+                    chunk_completion.reply_origin.connection_generation !=
+                        binding->chunk_origin.connection_generation ||
+                    chunk_completion.reply_origin.group_id != 100U + NODE_IDS[i] ||
+                    chunk_completion.reply_origin.authenticated_peer_node_id !=
+                        NODE_IDS[i] ||
                     chunk_completion.operation != TR_RAFT_MULTICORE_RECEIVE_CHUNK ||
                     chunk_completion.result != SALTS_OK ||
                     chunk_completion.value.chunk.ack_valid ||
@@ -1041,7 +1078,16 @@ static int run_two_distinct_peers(int forge_node_three)
                         f.raft_owners, 100U + NODE_IDS[i], &status) != SALTS_OK ||
                     status.owned_chunk_bytes != 0U ||
                     status.outstanding != 0U) {
-                    failed_stage = "verified TLS chunk not consumed by exact Group Owner";
+                    failed_stage = "verified TLS origin was not returned by exact Group Owner";
+                    result = SALTS_EPROTO;
+                    break;
+                }
+                /* These owner callbacks are test-only and never fsync; they
+                 * MUST NOT cause a positive network ACK, even when the TLS
+                 * Channel generation is still ACTIVE. */
+                if (tr_raft_cnet_channel_send_chunk_completion(
+                        binding->channel, &chunk_completion) != SALTS_ENOTSUP) {
+                    failed_stage = "mock-owned chunk forged a positive network ACK";
                     result = SALTS_EPROTO;
                     break;
                 }
