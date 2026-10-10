@@ -182,6 +182,40 @@ jobs:
           ctest --test-dir .ci/build-ace23-cnet-consumer \
             --output-on-failure --output-junit cnet-results.xml
 
+      - name: Build isolated Snapshot and Data receiver storage SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B .ci/build-ace23-storage -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTURBORAFT_BUILD_PROFILE=storage-dev \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/ace23-storage"
+          cmake --build .ci/build-ace23-storage --parallel 2
+          cmake --install .ci/build-ace23-storage
+          echo "TURBORAFT_ROOT=$GITHUB_WORKSPACE/stage/ace23-storage" >> "$GITHUB_ENV"
+
+      - name: Test independent receiver ACK only after filesystem fsync
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tests/ace23_storage_consumer \
+            -B .ci/build-ace23-storage-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/.ci/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF
+          cmake --build .ci/build-ace23-storage-consumer --parallel 2
+          ctest --test-dir .ci/build-ace23-storage-consumer \
+            --output-on-failure --output-junit storage-results.xml \
+            --no-tests=error
+
       # Only TurboRaft CNet/Multicore and the standalone test consumers are
       # sanitizer-instrumented here. Published Salts SDK RC libraries remain
       # immutable release binaries; this is NOT whole-stack sanitizer parity.
@@ -277,6 +311,8 @@ jobs:
             .ci/build-ace23-consumer/component-results.xml
             .ci/build-ace23-cnet-consumer/Testing/Temporary
             .ci/build-ace23-cnet-consumer/cnet-results.xml
+            .ci/build-ace23-storage-consumer/Testing/Temporary
+            .ci/build-ace23-storage-consumer/storage-results.xml
             .ci/build-ace23-cnet-asan-consumer/Testing/Temporary
             .ci/build-ace23-cnet-asan-consumer/asan-ubsan-results.xml
             .ci/build-ace23-owner-tsan-consumer/Testing/Temporary
