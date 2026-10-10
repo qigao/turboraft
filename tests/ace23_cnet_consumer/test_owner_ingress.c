@@ -494,6 +494,10 @@ spec("ACE 2.3 borrowed CNet Raft frame -> exact existing Multicore Owner")
 
     it("races concurrent producer admission against runtime stop without losing completions")
     {
+        unsigned iteration;
+        /* Repeat fresh Runtime/Owner lifecycles to explore both ordering
+         * outcomes rather than relying on one favorable scheduler turn. */
+        for (iteration = 0U; iteration < 16U; ++iteration) {
         ingress_fixture f = {0};
         parallel_producer producers[PARALLEL_PRODUCERS] = {{0}};
         cmeta_thread_t threads[PARALLEL_PRODUCERS] = {0};
@@ -581,6 +585,7 @@ spec("ACE 2.3 borrowed CNet Raft frame -> exact existing Multicore Owner")
             check_equal(status.outstanding, (size_t)0U);
         }
         check_equal(fixture_destroy(&f), SALTS_OK);
+        }
     }
 
 
