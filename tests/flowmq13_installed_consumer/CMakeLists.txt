@@ -408,3 +408,23 @@ add_test(NAME turboraft.flowmq13.cnet_core_quorum_ticked_loss
 set_tests_properties(turboraft.flowmq13.cnet_core_quorum_ticked_loss
                      PROPERTIES TIMEOUT 65
                                 LABELS "cnet-snapshot-lifecycle;cnet-raft-quorum-real-wire;cnet-raft-quorum-ticked-minority")
+
+# Physical-link minority variant of the certified Raft quorum gate.
+# This really closes the Node3 CNet TLS socket N, waits for both terminal
+# ledgers, destroys N's callbacks, and starts a new certified TLS/HELLO
+# Channel N+1 on the SAME listener and CNet owners. Other test variants
+# keep their original silent-callback simulation and remain independent.
+# This test still has three Core objects in ONE OS process and in-memory
+# Ready persistence; it does not qualify three separate WAL writers.
+add_executable(turboraft_flowmq13_cnet_core_quorum_physical_loss
+               test_cnet_two_link_quorum.c)
+target_compile_definitions(turboraft_flowmq13_cnet_core_quorum_physical_loss PRIVATE
+    TURBORAFT_TEST_CERTIFIED_QUORUM_PHYSICAL_LOSS=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_link_libraries(turboraft_flowmq13_cnet_core_quorum_physical_loss PRIVATE
+    TurboRaft::CNet TurboRaft::Core Salts::Platform)
+add_test(NAME turboraft.flowmq13.cnet_core_quorum_physical_loss
+         COMMAND turboraft_flowmq13_cnet_core_quorum_physical_loss)
+set_tests_properties(turboraft.flowmq13.cnet_core_quorum_physical_loss
+                     PROPERTIES TIMEOUT 65
+                                LABELS "cnet-snapshot-lifecycle;cnet-raft-quorum-real-wire;cnet-raft-quorum-physical-link")

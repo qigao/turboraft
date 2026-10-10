@@ -9,6 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Physical-link loss reuses the ticked-minority Core safety assertions.
+ * No fallback transport is added to production or the test harness. */
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_PHYSICAL_LOSS
+#define TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS 1
+#endif
 /* A separately registered ticked-loss executable shares the negative
  * majority fixture; never change the positive quorum executable. */
 #ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS
@@ -83,6 +88,14 @@ typedef struct quorum_fixture {
     unsigned quorum_loss_ticks;
     int saw_check_quorum_demotion;
     int node_three_muted;
+#endif
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_PHYSICAL_LOSS
+    int node_three_link_down;
+    unsigned node_three_socket_slot;
+    unsigned node_three_reconnected;
+    size_t offline_raft_outputs;
+    tr_raft_transport_reply_origin_t node_three_old_origin;
+    tr_raft_transport_reply_origin_t node_three_new_origin;
 #endif
     int node_one_muted;
     int callback_error;
@@ -316,6 +329,22 @@ static int send_one(quorum_fixture_t *f)
 
     if (f->pending_count == 0U) return SALTS_OK;
     m = f->pending[0];
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_PHYSICAL_LOSS
+    if (f->node_three_link_down && (m.from == 3U || m.to == 3U)) {
+        /* Explicit TEST harness transport rejection while the real CNet
+         * connection is TERMINAL. This Ready output was NEVER admitted by
+         * CNet, so it is neither settlement retry nor network delivery.
+         * The authoritative Core must recover via a NEW election/Append. */
+        if (m.to == 3U && m.type == TR_RAFT_MSG_APPEND_REQUEST)
+            ++f->lost_append_three;
+        ++f->offline_raft_outputs;
+        if (f->pending_count > 1U)
+            memmove(&f->pending[0],&f->pending[1],
+                    (f->pending_count - 1U) * sizeof(f->pending[0]));
+        --f->pending_count;
+        return SALTS_OK;
+    }
+#endif
     if (m.from == 2U && (m.to == 1U || m.to == 3U)) {
         for (i = 0U; i < PEERS; ++i) {
             tr_raft_cnet_channel_status_t status = {0};
@@ -618,6 +647,163 @@ static int setup_tls(quorum_fixture_t *f)
     return SALTS_ETIMEDOUT;
 }
 
+
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_PHYSICAL_LOSS
+/* Close the ACTUAL certified CNet Node3 connection, not only Core.step.
+ * Do not reuse a connection, observer or pending send-credit ledger before
+ * both physical owners report terminal and exact settlement. The listener,
+ * TLS config, authenticated identity policy and all three Cores remain. */
+static int physical_disconnect_node_three(quorum_fixture_t *f)
+{
+    tr_raft_cnet_channel_status_t in = {0}, out = {0};
+    size_t socket = PEERS, i, events = 0U;
+    uint64_t started_ms = cmeta_monotonic_ms();
+    unsigned polls;
+    int rc;
+#define CHECK_PHYSICAL(x) do { rc=(x); if(rc!=SALTS_OK) return rc; } while(0)
+    for (i = 0U; i < PEERS; ++i) {
+        CHECK_PHYSICAL(tr_raft_cnet_channel_get_status(f->inbound[i],&in));
+        if (in.authenticated_peer_node_id == 3U &&
+            in.phase == TR_RAFT_CNET_CHANNEL_ACTIVE) {
+            socket = i;
+            break;
+        }
+    }
+    if (socket == PEERS || f->outbound[1] == NULL) return SALTS_EPROTO;
+    f->node_three_socket_slot = (unsigned)socket;
+    CHECK_PHYSICAL(tr_raft_cnet_channel_capture_reply_origin(
+        f->inbound[socket],77U,&f->node_three_old_origin));
+    if (f->node_three_old_origin.authenticated_peer_node_id != 3U ||
+        f->node_three_old_origin.group_id != 77U ||
+        f->node_three_old_origin.connection_token == 0U)
+        return SALTS_EPROTO;
+    f->node_three_link_down = 1;
+    CHECK_PHYSICAL(tr_raft_cnet_channel_stop(f->inbound[socket]));
+    for (polls = 0U; polls < MAX_PROGRESS &&
+         cmeta_monotonic_ms() - started_ms < UINT64_C(6000); ++polls) {
+        CHECK_PHYSICAL(cnet_client_poll(&f->server,1U,&events));
+        CHECK_PHYSICAL(cnet_client_poll(&f->clients,1U,&events));
+        CHECK_PHYSICAL(tr_raft_cnet_channel_get_status(f->inbound[socket],&in));
+        CHECK_PHYSICAL(tr_raft_cnet_channel_get_status(f->outbound[1],&out));
+        if (in.terminal && out.terminal) break;
+    }
+    if (polls == MAX_PROGRESS || !in.terminal || !out.terminal ||
+        in.payload_writes_pending != 0U ||
+        out.payload_writes_pending != 0U ||
+        in.payloads_admitted != in.payloads_completed + in.payloads_canceled ||
+        out.payloads_admitted != out.payloads_completed + out.payloads_canceled)
+        return SALTS_EPROTO;
+    CHECK_PHYSICAL(tr_raft_cnet_channel_destroy(f->inbound[socket]));
+    f->inbound[socket] = NULL;
+    f->server_endpoint[socket].channel = NULL;
+    CHECK_PHYSICAL(tr_raft_cnet_channel_destroy(f->outbound[1]));
+    f->outbound[1] = NULL;
+    f->client_endpoint[1].channel = NULL;
+#undef CHECK_PHYSICAL
+    return SALTS_OK;
+}
+
+/* Explicit caller-driven physical N+1 TLS reconnect; preserve the single
+ * listener, CNet owners and exact certified identity. No network replay or
+ * settlement retry is attempted, and no CNet->FlowMQ fallback exists. */
+static int physical_reconnect_node_three(quorum_fixture_t *f)
+{
+    const size_t socket = (size_t)f->node_three_socket_slot;
+    tr_raft_cnet_channel_config_t client_cfg = {0}, server_cfg = {0};
+    tr_raft_cnet_channel_status_t in = {0}, out = {0};
+    cnet_connect_options connect = {0};
+    cnet_observer observer = {0};
+    uint16_t port = 0U;
+    char uri[128];
+    uint64_t started_ms = cmeta_monotonic_ms();
+    unsigned round;
+    size_t events = 0U;
+    int accepted = 0, rc;
+#define CHECK_PHYSICAL(x) do { rc=(x); if(rc!=SALTS_OK) return rc; } while(0)
+    if (!f->node_three_link_down || socket >= PEERS ||
+        f->inbound[socket] != NULL || f->outbound[1] != NULL)
+        return SALTS_EPROTO;
+    CHECK_PHYSICAL(cnet_listener_port(&f->listener,&port));
+    if (snprintf(uri,sizeof(uri),"tls://127.0.0.1:%u",
+                 (unsigned)port) <= 0) return SALTS_EINVAL;
+    client_cfg.client = &f->clients;
+    client_cfg.identity = &f->client_policy[1];
+    client_cfg.handshake = hello(3U);
+    client_cfg.first_outbound_message_id = 1U;
+    client_cfg.host_module_generation = UINT64_C(123007);
+    client_cfg.on_payload = client_receive;
+    client_cfg.payload_context = &f->client_endpoint[1];
+    CHECK_PHYSICAL(tr_raft_cnet_channel_create(
+        &client_cfg,&f->outbound[1]));
+    f->client_endpoint[1].channel = f->outbound[1];
+    connect.uri = uri;
+    connect.tls = &f->client_tls[1];
+    connect.observer = tr_raft_cnet_channel_observer(f->outbound[1]);
+    CHECK_PHYSICAL(cnet_connect(&f->clients,&connect,
+                                &f->outbound_connection[1]));
+    CHECK_PHYSICAL(tr_raft_cnet_channel_attach(f->outbound[1],
+                                               f->outbound_connection[1]));
+    server_cfg.client = &f->server;
+    server_cfg.identity = &f->server_policy;
+    server_cfg.handshake = hello(2U);
+    server_cfg.first_outbound_message_id = 1U;
+    server_cfg.host_module_generation = UINT64_C(123007);
+    server_cfg.on_payload = server_receive;
+    server_cfg.payload_context = &f->server_endpoint[socket];
+    for (round = 0U; round < MAX_PROGRESS &&
+         cmeta_monotonic_ms() - started_ms < UINT64_C(8000); ++round) {
+        CHECK_PHYSICAL(cnet_client_poll(&f->clients,1U,&events));
+        if (!accepted) {
+            int ready = 0;
+            CHECK_PHYSICAL(cnet_listener_wait(&f->listener,0U,&ready));
+            if (ready) {
+                CHECK_PHYSICAL(tr_raft_cnet_channel_create(
+                    &server_cfg,&f->inbound[socket]));
+                f->server_endpoint[socket].channel = f->inbound[socket];
+                observer = tr_raft_cnet_channel_observer(f->inbound[socket]);
+                CHECK_PHYSICAL(cnet_listener_accept_tls(
+                    &f->listener,&f->server,&f->server_tls,
+                    &observer,&f->inbound_connection[socket]));
+                CHECK_PHYSICAL(tr_raft_cnet_channel_attach(
+                    f->inbound[socket],f->inbound_connection[socket]));
+                accepted = 1;
+            }
+        }
+        CHECK_PHYSICAL(cnet_client_poll(&f->server,1U,&events));
+        if (accepted) {
+            CHECK_PHYSICAL(tr_raft_cnet_channel_get_status(
+                f->inbound[socket],&in));
+            CHECK_PHYSICAL(tr_raft_cnet_channel_get_status(
+                f->outbound[1],&out));
+            if (in.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
+                out.phase == TR_RAFT_CNET_CHANNEL_ACTIVE) break;
+        }
+    }
+    if (round == MAX_PROGRESS || !accepted ||
+        in.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+        out.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+        in.authenticated_peer_node_id != 3U ||
+        out.authenticated_peer_node_id != 2U ||
+        in.payloads_admitted != 0U || out.payloads_admitted != 0U)
+        return SALTS_EPROTO;
+    CHECK_PHYSICAL(tr_raft_cnet_channel_capture_reply_origin(
+        f->inbound[socket],77U,&f->node_three_new_origin));
+    if (f->node_three_old_origin.host_module_generation !=
+            f->node_three_new_origin.host_module_generation ||
+        f->node_three_new_origin.authenticated_peer_node_id != 3U ||
+        f->node_three_new_origin.group_id != 77U ||
+        f->node_three_old_origin.channel_instance ==
+            f->node_three_new_origin.channel_instance ||
+        f->node_three_old_origin.connection_token ==
+            f->node_three_new_origin.connection_token)
+        return SALTS_EPROTO;
+    f->node_three_link_down = 0;
+    ++f->node_three_reconnected;
+#undef CHECK_PHYSICAL
+    return SALTS_OK;
+}
+#endif
+
 static int cleanup(quorum_fixture_t *f)
 {
     size_t i;
@@ -709,8 +895,8 @@ static int run_quorum(void)
     }
 #ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
     {
-        const uint64_t start_ms = cmeta_monotonic_ms();
-        const size_t acknowledgements_before =
+        uint64_t start_ms = cmeta_monotonic_ms();
+        size_t acknowledgements_before =
             f->real_append_acks_from_three;
         unsigned attempts = 0U;
 #ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS
@@ -721,7 +907,15 @@ static int run_quorum(void)
          * TEST callbacks decline to hand packets to Core. A successful
          * local append is NOT a committed quorum entry, even if its bytes
          * traversed a certified TLS connection. */
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_PHYSICAL_LOSS
+        TRY(physical_disconnect_node_three(f));
+        /* Close can settle an older index3 ACK; only count NEW responses
+         * during the actual minority interval and N+1 recovery. */
+        acknowledgements_before = f->real_append_acks_from_three;
+        start_ms = cmeta_monotonic_ms();
+#else
         f->node_three_muted = 1;
+#endif
         TRY(core_propose(f,4U,"not-yet-majority-committed"));
 #ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS
         {
@@ -782,7 +976,18 @@ static int run_quorum(void)
                 f->lost_append_three > 0U &&
                 f->real_append_acks_from_three == acknowledgements_before,
                 "two silent certified peers cannot commit fourth Raft entry");
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_PHYSICAL_LOSS
+        REQUIRE(f->node_three_link_down &&
+                f->offline_raft_outputs > 0U,
+                "isolated real CNet socket must reject fresh Raft outputs");
+        TRY(physical_reconnect_node_three(f));
+        REQUIRE(f->node_three_reconnected == 1U &&
+                f->node_three_old_origin.connection_token !=
+                    f->node_three_new_origin.connection_token,
+                "rejoined Node3 must use new certified TLS generation");
+#else
         f->node_three_muted = 0;
+#endif
 #ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS
         /* CheckQuorum already demoted Node2. Recover by NEW authentic TLS
          * votes and a higher term. Never directly commit the index4 entry

@@ -522,7 +522,7 @@ into a false claim of automatic multi-node convergence.
 
 ### Certified CNet wire quorum: positive and fail-closed negative gates
 
-Three installed-full-profile executables now exercise **three independent
+Four installed-full-profile executables now exercise **three independent
 `RaftCore` instances** against **two actual mutual-TLS CNet connections**
 between Node2 and certified Node1/Node3. The test uses the installed Core and
 CNet SDKs, real Raft binary envelopes, reciprocal HELLO/ACK and certificate
@@ -561,13 +561,28 @@ through a simulated delivery function:
   may commit both entries. Node1 then catches up through index5. This is
   a real Raft minority-role transition but only simulates loss at callbacks:
   it does **not** exercise independent node election clocks or TCP faults.
+- `turboraft.flowmq13.cnet_core_quorum_physical_loss` strengthens the same
+  minority/CheckQuorum + current-term commit-barrier test with a **real CNet
+  TLS socket shutdown**, not receive-callback muting, on Node3's certified
+  N connection. Both CNet owners must report terminal with exact send
+  settlement before destroying N callbacks. While Node3 is disconnected,
+  emitted Raft Ready output to that offline peer is explicitly discarded
+  by the TEST transport (never admitted to CNet). Node2 must demote and
+  leave index4 uncommitted during eight elapsed-time ticks. The host then
+  explicitly establishes a NEW authenticated mTLS/HELLO N+1 with a
+  different Channel instance and CNet slot-generation token on the same
+  listener and owners; no accepted send is replayed. Only after fresh
+  higher-term votes and a current-term index5 majority ACK can index4
+  and index5 commit, after which Node1 rejoins and converges. This is
+  an actual socket teardown/re-establishment, not an involuntary network
+  partition, and all three Cores still run inside one test process.
 
 The CNet test harness has finite 15-second TLS read and 5-second write
 timeouts, an 8-second bounded Raft progress phase, and drives heartbeats
 using **monotonic elapsed time** (100-ms ticks), not arbitrary IOCP vs
 Kqueue/epoll poll counts. A failure reports only bounded non-secret
 counters (terms, commit indices, wire message and ACK counts, Channel
-phase/errors). These three CTests each run in **25 fresh OS processes per
+phase/errors). These four CTests each run in **25 fresh OS processes per
 host** under the exact released FlowMQ 1.3.0 full SDK conformance profile,
 in addition to the prior fixed Group Ownership and WAL crash suites.
 
