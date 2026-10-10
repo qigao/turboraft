@@ -75,6 +75,18 @@ int tr_raft_cnet_peer_directory_send(
     tr_raft_cnet_peer_directory_t *directory,
     const tr_raft_transport_payload_t *payload);
 
+/* Accepts a Group-owned receiver completion only if its saved ingress
+ * Channel is exactly the current authenticated ManagedPeer generation.
+ * Directory lookup by Node ID alone is never sufficient: reconnection
+ * changes the Channel instance and old ACKs fail ECANCELED. A direct
+ * incoming Channel not managed by this Directory must use the equivalent
+ * Channel fence on the original CNet Owner. Never silently reroute ACKs
+ * to another transport or retry on ENOSPC/ECANCELED.
+ */
+int tr_raft_cnet_peer_directory_send_chunk_completion(
+    tr_raft_cnet_peer_directory_t *directory,
+    const tr_raft_multicore_completion_t *completion);
+
 /*
  * Verified inbound callback adapter for a single CNet Owner. This may be
  * installed directly as tr_raft_cnet_channel_config.on_payload, after the
