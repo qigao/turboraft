@@ -35,8 +35,14 @@ enum peer_mode {
 typedef struct peer_dso_harness {
     cmeta_plugin_registry registry;
     cmeta_plugin_ref plugin;
-    cmeta_plugin_lease lease;
-    const cmeta_plugin_manifest *manifest; /* valid only while lease held */
+    /* The actual Plugin module lease is owned by generation.modules[0].
+     * No separately held test-lease grants DSO callback authority. */
+    const cmeta_plugin_manifest *manifest; /* borrowed under generation lease */
+    salts_component_deployment deployments[1];
+    salts_component_instance instances[1];
+    salts_component_dependency dependencies[1];
+    size_t activation_order[1];
+    salts_component_plugin_module modules[1];
     const tr_ace23_dso_callback_state *module; /* same borrowed lifetime */
     tr_raft_cnet_channel_t *verified_channel; /* same CNet progress Owner */
     tr_raft_transport_reply_origin_t captured_origin; /* value-only */
@@ -48,7 +54,7 @@ typedef struct peer_dso_harness {
     cmeta_plugin_status stop_result;
     cmeta_plugin_status unload_after_stop;
     int controller_result;
-    int registry_open, loaded, started, lease_live;
+    int registry_open, loaded, started;
     int host_open, published, scope_live, controller_live;
     unsigned network_callbacks;
 } peer_dso_harness;
@@ -82,8 +88,26 @@ static void peer_dso_controller(void *context)
 static int peer_dso_setup(peer_dso_harness *dso)
 {
     const cmeta_plugin_registry_config registry_config = {.capacity = 1U};
-    const salts_component_plugin_generation_storage empty_storage = {0};
+    const salts_component_plugin_generation_storage storage = {
+        .deployments = dso->deployments,
+        .deployment_capacity = 1U,
+        .instances = dso->instances,
+        .instance_capacity = 1U,
+        .dependencies = dso->dependencies,
+        .dependency_capacity = 1U,
+        .activation_order = dso->activation_order,
+        .activation_capacity = 1U,
+        .modules = dso->modules,
+        .module_capacity = 1U
+    };
+    const salts_component_plugin_source source = {
+        .export_id = "turboraft.ace23.dso-component"
+    };
+    salts_component_plugin_source bound_source = source;
     salts_component_plugin_generation *previous = NULL;
+    cmeta_plugin_lease temporary = {0};
+    cmeta_plugin_lifecycle_info info = {0};
+    const cmeta_plugin_manifest *manifest = NULL;
 
     if (cmeta_plugin_registry_init(&dso->registry, &registry_config) !=
         CMETA_PLUGIN_OK) return SALTS_EPROTO;
@@ -97,22 +121,21 @@ static int peer_dso_setup(peer_dso_harness *dso)
             &dso->registry, dso->plugin) != CMETA_PLUGIN_OK)
         return SALTS_EPROTO;
     dso->started = 1;
-    if (cmeta_plugin_registry_acquire(
-            &dso->registry, dso->plugin, &dso->lease,
-            &dso->manifest) != CMETA_PLUGIN_OK)
-        return SALTS_EPROTO;
-    dso->lease_live = 1;
-    dso->module = (const tr_ace23_dso_callback_state *)dso->manifest->self;
-    if (dso->module == NULL || dso->manifest->is_quiescent == NULL)
-        return SALTS_EPROTO;
 
     if (salts_component_plugin_runtime_init(&dso->host) !=
         SALTS_COMPONENT_PLUGIN_OK) return SALTS_EPROTO;
     dso->host_open = 1;
+    bound_source.plugin = dso->plugin;
+    /* ComponentPlugin itself resolves the DSO's ABI5 provider export,
+     * acquires the ONLY long-lived module lease, creates the Component,
+     * and publishes its exact host epoch. This is not an empty generation. */
     if (salts_component_plugin_generation_build(
-            &dso->generation, UINT64_C(90010001), NULL,
-            &empty_storage, NULL, 0U, NULL, 0U, NULL, 0U) !=
+            &dso->generation, UINT64_C(90010001), &dso->registry,
+            &storage, NULL, 0U, &bound_source, 1U, NULL, 0U) !=
         SALTS_COMPONENT_PLUGIN_OK) return SALTS_EPROTO;
+    if (dso->generation.module_count != 1U ||
+        dso->generation.deployment_count != 1U)
+        return SALTS_EPROTO;
     if (salts_component_plugin_runtime_publish(
             &dso->host, &dso->generation, &previous) !=
             SALTS_COMPONENT_PLUGIN_OK || previous != NULL)
@@ -122,6 +145,25 @@ static int peer_dso_setup(peer_dso_harness *dso)
             &dso->host, &dso->scope) != SALTS_COMPONENT_PLUGIN_OK)
         return SALTS_EPROTO;
     dso->scope_live = 1;
+
+    /* A transient, explicit Plugin borrow obtains the callback pointer.
+     * Release it immediately. All later CNet callbacks are protected
+     * exclusively by the published generation's own module lease. */
+    if (cmeta_plugin_registry_acquire(
+            &dso->registry, dso->plugin, &temporary,
+            &manifest) != CMETA_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->manifest = manifest;
+    dso->module = (const tr_ace23_dso_callback_state *)manifest->self;
+    if (cmeta_plugin_registry_release(
+            &dso->registry, &temporary) != CMETA_PLUGIN_OK)
+        return SALTS_EPROTO;
+    if (dso->manifest->is_quiescent == NULL || dso->module == NULL ||
+        cmeta_plugin_registry_get_lifecycle(
+            &dso->registry, dso->plugin, &info) != CMETA_PLUGIN_OK ||
+        info.active_leases != 1U ||
+        !cmeta_plugin_lease_valid(dso->modules[0].lease))
+        return SALTS_EPROTO;
     return SALTS_OK;
 }
 
@@ -174,12 +216,7 @@ static int peer_dso_finish(peer_dso_harness *dso)
                     result = SALTS_EPROTO;
             }
         }
-        if (dso->lease_live) {
-            DSO_CLEAN(cmeta_plugin_registry_release(
-                &dso->registry, &dso->lease), CMETA_PLUGIN_OK);
-            dso->lease_live = 0;
-        }
-        if (dso->started) {
+         if (dso->started) {
             DSO_CLEAN(cmeta_plugin_registry_poll_quiescent(
                 &dso->registry, dso->plugin, &quiet), CMETA_PLUGIN_OK);
             if (!quiet) result = SALTS_EPROTO;
@@ -207,7 +244,7 @@ typedef struct peer_sink {
     size_t data_count;
     size_t snapshot_count;
     int violation;
-    peer_dso_harness *dso; /* CNet Owner borrows DSO under host Plugin lease */
+    peer_dso_harness *dso; /* CNet Owner borrows DSO under ComponentPlugin lease */
 } peer_sink_t;
 
 typedef struct peer_fixture {
@@ -340,8 +377,8 @@ static int peer_record(void *context,
         sink->dso->captured_origin = origin;
 
         /* Executing DSO text INSIDE verified CNet progress owner callback.
-         * Host's Plugin lease and Component scope remain live until the
-         * CNet terminal callback; no Group Owner calls into this DSO. */
+         * The published ComponentPlugin generation owns the sole module
+         * lease until the CNet terminal barrier and Scope drain. */
         if (!sink->dso->manifest->is_quiescent(
                 sink->dso->manifest->self)) goto invalid;
         ++sink->dso->network_callbacks;
