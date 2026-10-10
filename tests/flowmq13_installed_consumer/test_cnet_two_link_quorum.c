@@ -9,6 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* A separately registered ticked-loss executable shares the negative
+ * majority fixture; never change the positive quorum executable. */
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS
+#define TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS 1
+#endif
+
 /*
  * REAL certified mTLS transport for three independent RaftCore instances.
  * Node2 is the candidate/leader. Node2<->Node1 and Node2<->Node3 each
@@ -74,6 +80,7 @@ typedef struct quorum_fixture {
 #ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
     size_t lost_node_three;
     size_t lost_append_three;
+    unsigned leader_ticks_without_quorum;
     int node_three_muted;
 #endif
     int node_one_muted;
@@ -711,10 +718,49 @@ static int run_quorum(void)
          * traversed a certified TLS connection. */
         f->node_three_muted = 1;
         TRY(core_propose(f,4U,"not-yet-majority-committed"));
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS
+        {
+            uint64_t next_tick_ms = start_ms + UINT64_C(100);
+            /* Network polling alone is insufficient: sustain the genuine
+             * minority through EIGHT time-driven Raft leader heartbeats.
+             * Assert after every I/O progress step, not only at the end.
+             * Timed tick budget is wall-clock bounded on epoll/IOCP/Kqueue;
+             * it is never based on an arbitrary count of socket polls. */
+            while (attempts++ < MAX_PROGRESS &&
+                   f->leader_ticks_without_quorum < 8U &&
+                   cmeta_monotonic_ms() - start_ms < UINT64_C(4500)) {
+                uint64_t now_ms;
+                TRY(network_progress(f));
+                now_ms = cmeta_monotonic_ms();
+                if (now_ms >= next_tick_ms) {
+                    TRY(core_tick(f,1U,1U));
+                    ++f->leader_ticks_without_quorum;
+                    next_tick_ms = now_ms + UINT64_C(100);
+                }
+                TRY(tr_raft_core_status(f->nodes[1].core,&node2));
+                REQUIRE(node2.role == TR_RAFT_LEADER &&
+                        node2.last_log_index == 4U &&
+                        node2.commit_index == 3U &&
+                        node2.applied_index == 3U &&
+                        f->nodes[1].durable.length == 4U &&
+                        f->nodes[1].durable.committed == 3U &&
+                        f->nodes[1].durable.applied == 3U &&
+                        f->nodes[2].durable.committed == 3U &&
+                        f->nodes[0].durable.committed == 0U &&
+                        f->real_append_acks_from_three ==
+                            acknowledgements_before,
+                        "minority leader must not commit/apply while ticking");
+            }
+            REQUIRE(f->leader_ticks_without_quorum == 8U &&
+                    f->lost_append_three > 0U,
+                    "ticked loss must exercise eight timed TLS heartbeats");
+        }
+#else
         while (attempts++ < 2000U &&
                cmeta_monotonic_ms() - start_ms < UINT64_C(400)) {
             TRY(network_progress(f));
         }
+#endif
         TRY(tr_raft_core_status(f->nodes[1].core,&node2));
         TRY(tr_raft_core_status(f->nodes[2].core,&node3));
         REQUIRE(node2.role == TR_RAFT_LEADER &&
@@ -812,7 +858,8 @@ static int run_quorum(void)
            "node3_votes=%zu,node3_appends=%zu,node3_append_acks=%zu,"
            "node1_muted=%zu,node1_rejoin_append=%zu,"
 #ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
-           "node3_muted=%zu,node3_append_misses=%zu,committed=4,applied=4\n",
+           "node3_muted=%zu,node3_append_misses=%zu,"
+           "leader_isolated_ticks=%u,committed=4,applied=4\n",
 #else
            "committed=3,applied=3\n",
 #endif
@@ -820,7 +867,8 @@ static int run_quorum(void)
            f->real_appends_to_three,f->real_append_acks_from_three,
            f->lost_node_one,f->caught_up_node_one
 #ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
-           , f->lost_node_three,f->lost_append_three
+           , f->lost_node_three,f->lost_append_three,
+           f->leader_ticks_without_quorum
 #endif
            );
 done:

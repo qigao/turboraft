@@ -522,7 +522,7 @@ into a false claim of automatic multi-node convergence.
 
 ### Certified CNet wire quorum: positive and fail-closed negative gates
 
-Two installed-full-profile executables now exercise **three independent
+Three installed-full-profile executables now exercise **three independent
 `RaftCore` instances** against **two actual mutual-TLS CNet connections**
 between Node2 and certified Node1/Node3. The test uses the installed Core and
 CNet SDKs, real Raft binary envelopes, reciprocal HELLO/ACK and certificate
@@ -549,13 +549,21 @@ through a simulated delivery function:
   entries, commit4 and applied4. There is **no host-level CNet message or
   storage-settlement retry**. Muting a test *Core callback* is NOT the
   same as a physical packet loss / OS link failure.
+- `turboraft.flowmq13.cnet_core_quorum_ticked_loss` extends that negative
+  gate by continuing **eight monotonic-time Raft leader heartbeats** with
+  both remote callbacks silent. The leader's in-memory persisted Ready,
+  `commit_index`, and `applied_index` are checked for safety on every
+  network progress iteration; no remote Append ACK is admitted. Restore
+  Node3's callback and require a fresh certified TLS response before
+  commit4, then converge Node1. The leader-only ticks do **not** exercise
+  independent election clocks, leader churn, or a real TCP partition.
 
 The CNet test harness has finite 15-second TLS read and 5-second write
 timeouts, an 8-second bounded Raft progress phase, and drives heartbeats
 using **monotonic elapsed time** (100-ms ticks), not arbitrary IOCP vs
 Kqueue/epoll poll counts. A failure reports only bounded non-secret
 counters (terms, commit indices, wire message and ACK counts, Channel
-phase/errors). These two CTests each run in **25 fresh OS processes per
+phase/errors). These three CTests each run in **25 fresh OS processes per
 host** under the exact released FlowMQ 1.3.0 full SDK conformance profile,
 in addition to the prior fixed Group Ownership and WAL crash suites.
 

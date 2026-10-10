@@ -388,3 +388,21 @@ add_test(NAME turboraft.flowmq13.cnet_core_quorum_loss
 set_tests_properties(turboraft.flowmq13.cnet_core_quorum_loss
                      PROPERTIES TIMEOUT 65
                                 LABELS "cnet-snapshot-lifecycle;cnet-raft-quorum-real-wire")
+
+# Separate negative gate: keep Node1 and Node3 unable to step their
+# authenticated TLS Raft frames while driving EIGHT actual monotonic-time
+# Node2 leader ticks. Commit/apply index4 MUST remain forbidden on every
+# poll and heartbeat; only a fresh certified Node3 response after unmuting
+# can advance the log. Callback muting is NOT a physical TCP partition.
+add_executable(turboraft_flowmq13_cnet_core_quorum_ticked_loss
+               test_cnet_two_link_quorum.c)
+target_compile_definitions(turboraft_flowmq13_cnet_core_quorum_ticked_loss PRIVATE
+    TURBORAFT_TEST_CERTIFIED_QUORUM_TICKED_LOSS=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_link_libraries(turboraft_flowmq13_cnet_core_quorum_ticked_loss PRIVATE
+    TurboRaft::CNet TurboRaft::Core Salts::Platform)
+add_test(NAME turboraft.flowmq13.cnet_core_quorum_ticked_loss
+         COMMAND turboraft_flowmq13_cnet_core_quorum_ticked_loss)
+set_tests_properties(turboraft.flowmq13.cnet_core_quorum_ticked_loss
+                     PROPERTIES TIMEOUT 65
+                                LABELS "cnet-snapshot-lifecycle;cnet-raft-quorum-real-wire;cnet-raft-quorum-ticked-minority")
