@@ -1,5 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <turboraft/raft_wal_storage.h>
+#include <cmeta_error.h>
+
 #include <errno.h>
 #include <limits.h>
 #include <signal.h>
@@ -31,6 +34,51 @@
  *
  * OS process-loss test, not power loss or automatic multi-node convergence.
  */
+/* The original WAL carries one fsynced committed Raft entry BEFORE either
+ * certified TLS worker starts. Both actual child processes must reopen it
+ * with create_if_missing=false, never infer progress from an empty WAL. */
+static int seed_committed_wal(const char *prefix)
+{
+    tr_raft_wal_storage_config_t config = {0};
+    tr_raft_wal_storage_t *wal = NULL;
+    tr_raft_storage_t adapter = {0};
+    tr_raft_entry_t entry = {0};
+    int result;
+
+    config.path_prefix = prefix;
+    config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
+    config.max_transaction_bytes = 8U * 1024U;
+    config.max_live_segments = 4U;
+    config.max_log_entries = 16U;
+    config.max_snapshot_bytes = 1024U;
+    config.create_if_missing = true;
+    result = tr_raft_wal_storage_open(&config, &wal);
+    if (result != SALTS_OK) return result;
+    entry.index = 1U;
+    entry.term = 1U;
+    entry.command_id = 1U;
+    entry.data_length = 3U;
+    memcpy(entry.data, "old", 3U);
+    result = tr_raft_wal_storage_bind(wal, &adapter);
+    if (result == SALTS_OK)
+        result = adapter.begin(adapter.context);
+    if (result == SALTS_OK)
+        result = adapter.write_hard_state(adapter.context, 1U, 1U);
+    if (result == SALTS_OK)
+        result = adapter.append_log(adapter.context, &entry, 1U);
+    if (result == SALTS_OK)
+        result = adapter.write_commit_index(adapter.context, 1U);
+    if (result == SALTS_OK)
+        result = adapter.commit(adapter.context);
+    else if (adapter.rollback != NULL)
+        (void)adapter.rollback(adapter.context);
+    {
+        int close_result = tr_raft_wal_storage_close(wal);
+        if (result == SALTS_OK) result = close_result;
+    }
+    return result;
+}
+
 static int check_worker(const char *worker, const char *prefix,
                         int expect_sigkill)
 {
@@ -97,7 +145,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    failed |= check_worker(argv[1], prefix, 1);
+    failed |= seed_committed_wal(prefix) != SALTS_OK;
+    if (failed) {
+        fprintf(stderr, "FAIL: cannot seed durable Raft term1/index1 WAL\n");
+    } else {
+        failed |= check_worker(argv[1], prefix, 1);
+    }
     if (!failed) {
         /* The second worker MUST open the exact old namespace. The initial
          * killed process is not allowed to create a new WAL for recovery. */
@@ -112,7 +165,7 @@ int main(int argc, char **argv)
                 prefix);
         return 1;
     }
-    printf("PASS: real certified Node3 TLS partial ACK; SIGKILL whole "
+    printf("PASS: durable index1 baseline; real certified Node3 TLS partial ACK; SIGKILL whole "
            "Group/WAL process; fresh TLS+Owner reopens old WAL, explicit "
            "offset0 recovery, one durable Snapshot and committed suffix\n");
     return 0;
