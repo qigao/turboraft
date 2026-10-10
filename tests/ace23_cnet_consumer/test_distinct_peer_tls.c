@@ -495,7 +495,15 @@ static int start_raft_group_owners(identity_fixture *f)
     }
     f->owner_config.version = TR_RAFT_MULTICORE_VERSION;
     f->owner_config.owner_count = LINK_COUNT;
+    /* Segmented TLS: heartbeat STEP and both ordered Snapshot chunks each
+     * reserve one completion credit before the test drains any of them.
+     * Keep the *same* bounded per-Group Owner ring, sized for 3 admissions.
+     * The baseline test still exercises capacity=2 without extra credits. */
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_SEGMENTED
+    f->owner_config.capacity = 3U;
+#else
     f->owner_config.capacity = 2U;
+#endif
     f->owner_config.owned_chunk_bytes_per_group = 512U;
     f->owner_config.work_budget = 1U;
     f->owner_config.tick_ms = 1000U;
@@ -1450,28 +1458,6 @@ static int run_two_distinct_peers(int forge_node_three)
                         chunk_completion.value.chunk.durable_or_installed ||
                         !chunk_completion.value.chunk.ack.snapshot.accepted ||
                         chunk_completion.value.chunk.ack.snapshot.next_offset != 12U) {
-                        fprintf(stderr,
-                            "segmented first chunk: take=%d bind=%u req=%llu prior=%llu current=%llu "
-                            "op=%d rc=%d kind=%d valid=%d durable=%d accepted=%d next=%llu "
-                            "gen=%llu/%llu inst=%llu/%llu token=%llu/%llu node=%llu group=%llu\\n",
-                            observed, binding != NULL,
-                            (unsigned long long)chunk_completion.request_id,
-                            (unsigned long long)(binding != NULL ? binding->prior_chunk_request_id : 0U),
-                            (unsigned long long)(binding != NULL ? binding->chunk_request_id : 0U),
-                            (int)chunk_completion.operation, chunk_completion.result,
-                            (int)chunk_completion.value.chunk.kind,
-                            (int)chunk_completion.value.chunk.ack_valid,
-                            (int)chunk_completion.value.chunk.durable_or_installed,
-                            (int)chunk_completion.value.chunk.ack.snapshot.accepted,
-                            (unsigned long long)chunk_completion.value.chunk.ack.snapshot.next_offset,
-                            (unsigned long long)chunk_completion.reply_origin.host_module_generation,
-                            (unsigned long long)(binding != NULL ? binding->prior_chunk_origin.host_module_generation : 0U),
-                            (unsigned long long)chunk_completion.reply_origin.channel_instance,
-                            (unsigned long long)(binding != NULL ? binding->prior_chunk_origin.channel_instance : 0U),
-                            (unsigned long long)chunk_completion.reply_origin.connection_token,
-                            (unsigned long long)(binding != NULL ? binding->prior_chunk_origin.connection_token : 0U),
-                            (unsigned long long)chunk_completion.reply_origin.authenticated_peer_node_id,
-                            (unsigned long long)chunk_completion.reply_origin.group_id);
                         failed_stage = "first TLS snapshot fragment falsely durable";
                         result = SALTS_EPROTO;
                         break;
