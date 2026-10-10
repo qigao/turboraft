@@ -113,6 +113,40 @@ neither test persists the receiver's raw ownership state or adds a public
 fault/retry API. These are **process-death** tests, not proof of hardware
 power-loss durability or end-to-end multi-node reconnect/consensus.
 
+### Certified CNet peer restart across a whole-process crash
+
+The new Linux-only `turboraft.flowmq13.cnet_process_restart` installed-SDK
+test uses an independent **controller** process and two `fork+exec` workers,
+not the same long-lived CNet owner after a socket reset. The first worker
+constructs actual Node3/Node2 mutual TLS and reciprocal Raft HELLO, dispatches
+the first 12 bytes of Snapshot19 through the certified Peer Directory and
+the real bounded Group103 Owner, and returns precisely one accepted but
+non-durable `SNAPSHOT_ACK.next_offset=12`. It then dies from actual
+`SIGKILL` with no orderly receiver, listener or WAL cleanup. The controller
+rejects any exit except `SIGKILL` for this phase.
+
+A **new OS process** is passed only the same WAL path. Its Group103 Owner
+must reopen that path with `create_if_missing=false` and verify no partially
+received Snapshot, committed prefix or speculative offset has become
+authoritative; it must not silently create a replacement WAL. The new process
+builds fresh CNet/TLS/HELLO/Group owner identities, explicitly sends the
+complete matching Snapshot again from offset 0, and requires one installed,
+WAL-durable final ACK. Reopening that WAL after the network lifecycle ends
+must recover the full Snapshot19 and a subsequently committed index20 log
+suffix. There is **no persisted receiver cursor, native CNet connection
+token, host-module generation, group mailbox, or automatic application
+retry**. This tests the safe **retransmit-from-zero** policy, not durable
+resume from an incomplete stream or remote exactly-once delivery.
+
+The dedicated `tests/flowmq13_installed_consumer/test_cnet_process_restart.c`
+controller cannot access the workers' CNet or WAL instances. It waits for
+the actual SIGKILL, requires success from the independently exec'ed recovery
+worker, and requires the isolated temporary namespace to be fully reclaimed
+before passing. All native transport/storage code under test is linked from
+the independently **installed** exact released SDK. The process-loss test
+does not simulate abrupt machine power loss, multi-node consensus, large
+streaming snapshots, or upstream fully source-instrumented TSan.
+
 ## Deterministic durability fault boundary
 
 Durability fault injection is test-only and remains outside the installed
