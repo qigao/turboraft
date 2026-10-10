@@ -1,5 +1,8 @@
 #include <turboraft/raft_cnet_channel.h>
 
+#include "raft_transport_internal.h"
+#include "raft_transport_payload_storage.h"
+
 #include <cmeta_error.h>
 #include <cmeta_buffer.h>
 
@@ -375,6 +378,83 @@ int tr_raft_cnet_channel_get_status(
     return SALTS_OK;
 }
 
+/* The maximum fixed Snapshot wire prefix (including ConfState) is bounded
+ * independently of the 64KiB chunk. Retain two canonical Core mem_buffer
+ * slices in CNet; do not flatten plaintext into a second packet copy. */
+#define TR_CHANNEL_SG_PREFIX_CAPACITY \
+    (TR_RAFT_TRANSPORT_LENGTH_PREFIX_SIZE + TR_RAFT_WIRE_HEADER_SIZE + \
+     TR_RAFT_WIRE_MAX_SNAPSHOT_PAYLOAD_SIZE - \
+     TR_RAFT_WIRE_MAX_SNAPSHOT_CHUNK_BYTES)
+
+static int tr_channel_send_chunk_sg(
+    tr_raft_cnet_channel_t *channel,
+    const tr_raft_transport_payload_t *borrowed)
+{
+    tr_raft_owned_transport_payload_t owned = {0};
+    mem_buffer_t *prefix = NULL;
+    mem_slice_t slices[2] = {{0}};
+    size_t prefix_size = 0U, frame_size = 0U, chunk_size = 0U;
+    int result;
+
+    /* A raw Raft callback borrows its payload until return. Materialize
+     * exactly one bounded Core-owned copy before CNet's retained SG call. */
+    result = tr_raft_owned_transport_payload_copy(&owned, borrowed);
+    if (result != SALTS_OK) goto done;
+    if (owned.payload.kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK)
+        chunk_size = owned.payload.data.data_chunk.data_length;
+    else
+        chunk_size = owned.payload.data.snapshot_chunk.data_length;
+    if (owned.payload_data == NULL || chunk_size == 0U ||
+        mem_buffer_used(owned.payload_data) != chunk_size) {
+        result = SALTS_EPROTO;
+        goto done;
+    }
+
+    prefix = mem_get_buffer(mem_global(), TR_CHANNEL_SG_PREFIX_CAPACITY);
+    if (prefix == NULL) {
+        result = SALTS_ENOMEM;
+        goto done;
+    }
+    if (borrowed->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK)
+        result = tr_raft_transport_encode_data_chunk_prefix(
+            channel->transport, &owned.payload,
+            (uint8_t *)mem_buffer_data(prefix),
+            mem_buffer_capacity(prefix), &prefix_size, &frame_size);
+    else
+        result = tr_raft_transport_encode_snapshot_chunk_prefix(
+            channel->transport, &owned.payload,
+            (uint8_t *)mem_buffer_data(prefix),
+            mem_buffer_capacity(prefix), &prefix_size, &frame_size);
+    if (result != SALTS_OK) goto done;
+    if (prefix_size == 0U ||
+        prefix_size > mem_buffer_capacity(prefix) ||
+        frame_size != prefix_size + chunk_size) {
+        result = SALTS_EPROTO;
+        goto done;
+    }
+
+    mem_set_used(prefix, prefix_size);
+    slices[0] = mem_slice(prefix, 0U, prefix_size);
+    slices[1] = mem_slice(owned.payload_data, 0U, chunk_size);
+    if (slices[0].buffer == NULL || slices[1].buffer == NULL ||
+        slices[0].length != prefix_size ||
+        slices[1].length != chunk_size) {
+        result = SALTS_EPROTO;
+        goto done;
+    }
+    result = cnet_send_slicev(
+        channel->client, channel->connection, slices, 2U);
+    /* On SALTS_OK, CNet now owns its own references through the single
+     * logical-send terminal. Rejection never leaves retained references. */
+
+done:
+    mem_slice_release(&slices[1]);
+    mem_slice_release(&slices[0]);
+    mem_buffer_release(prefix);
+    tr_raft_owned_transport_payload_release(&owned);
+    return result;
+}
+
 int tr_raft_cnet_channel_send(
     tr_raft_cnet_channel_t *channel,
     const tr_raft_transport_payload_t *payload)
@@ -391,6 +471,21 @@ int tr_raft_cnet_channel_send(
     if (channel->status.payloads_admitted == UINT64_MAX ||
         channel->status.payload_writes_pending == SIZE_MAX)
         return SALTS_ERANGE;
+
+    /* Nonempty borrowed DATA/SNAPSHOT chunks must use the retained CNet
+     * two-slice path; zero-length marker frames stay ordinary wire frames. */
+    if ((payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
+         payload->data.data_chunk.data_length != 0U) ||
+        (payload->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK &&
+         payload->data.snapshot_chunk.data_length != 0U)) {
+        result = tr_channel_send_chunk_sg(channel, payload);
+        if (result == SALTS_OK) {
+            ++channel->status.payloads_admitted;
+            ++channel->status.payload_writes_pending;
+            ++channel->status.sg_chunks_admitted;
+        }
+        return result;
+    }
 
     packet = mem_get_buffer(mem_global(), TR_RAFT_TRANSPORT_MAX_PACKET_SIZE);
     if (packet == NULL) return SALTS_ENOMEM;
