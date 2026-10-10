@@ -55,7 +55,8 @@ static void CMETA_PLUGIN_CALL tr_plugin_destroy(void *self)
  * Component instance borrows module-owned storage; the ComponentPlugin
  * generation's module lease, not a caller's ad-hoc Plugin lease, must keep
  * this code and storage alive through Component stop and callback drain. */
-cmeta_component_empty(TurboRaftDsoEpochProvider);
+cmeta_component(TurboRaftDsoEpochProvider,
+    cmeta_provides(tr_ace23_dso_callback));
 
 static int tr_component_value = 23;
 
@@ -75,11 +76,45 @@ static cmeta_status SALTS_COMPONENT_CALL tr_component_create(
         out, context, &cmeta_data_int, NULL);
 }
 
+static int tr_component_invoke(void *self)
+{
+    if (self != &tr_component_value) return 0;
+    return tr_plugin_is_quiescent(&tr_callback_state) ? 1 : 0;
+}
+
+CMETA_IMPLEMENTS(
+    tr_ace23_dso_callback, tr_component_callback_impl, 0u,
+    .invoke = tr_component_invoke);
+
+static cmeta_status tr_component_project(
+    void *context, const cmeta_object_ref *object,
+    const cmeta_interface_desc *expected,
+    cmeta_interface_projection *out)
+{
+    (void)context;
+    if (object == NULL || out == NULL) return CMETA_INVALID_ARGUMENT;
+    if (!cmeta_interface_desc_equal(
+            expected, tr_ace23_dso_callback_interface()))
+        return CMETA_TRAIT_MISSING;
+    out->size = sizeof(*out);
+    out->self = object->object;
+    out->interface = tr_ace23_dso_callback_interface();
+    out->dispatch = &tr_component_callback_impl_vtable;
+    return CMETA_OK;
+}
+
+static const cmeta_object_interface_provider tr_component_interfaces = {
+    sizeof(cmeta_object_interface_provider),
+    NULL,
+    tr_component_project
+};
+
 static const salts_component_provider_binding tr_component_binding = {
     .struct_size = sizeof(salts_component_provider_binding),
     .abi_version = SALTS_COMPONENT_PROVIDER_BINDING_ABI_VERSION,
     .component = cmeta_component_meta(TurboRaftDsoEpochProvider),
     .provider_context = &tr_component_value,
+    .interfaces = &tr_component_interfaces,
     .create = tr_component_create
 };
 
