@@ -3,6 +3,7 @@
 
 #include <turboraft/raft_cnet_identity.h>
 #include <turboraft/raft_transport.h>
+#include <turboraft/raft_multicore.h>
 #include <turboraft/raft_runtime.h>
 #include <cnet/cnet.h>
 
@@ -79,6 +80,29 @@ int tr_raft_cnet_channel_attach(tr_raft_cnet_channel_t *channel,
 int tr_raft_cnet_channel_get_status(
     const tr_raft_cnet_channel_t *channel,
     tr_raft_cnet_channel_status_t *out_status);
+
+/* Captures the exact TLS+HELLO authenticated Channel incarnation as
+ * an ephemeral VALUE while ACTIVE. This is an owner-only proof of *which*
+ * connection generation admitted an inbound Group chunk. It contains no
+ * pointer, native handle, certificate secret or persistent runtime state.
+ * Returns EBUSY before authentication/after stop; output always resets on
+ * rejection. The caller sends it with the chunk into the Group ring.
+ */
+int tr_raft_cnet_channel_capture_reply_origin(
+    tr_raft_cnet_channel_t *channel, tr_raft_group_id_t group_id,
+    tr_raft_transport_reply_origin_t *out_origin);
+
+/* Must run on this CNet progress Owner after taking a Group completion.
+ * Require a successful receiver-produced DATA_ACK/SNAPSHOT_ACK, a nonzero
+ * admission-time reply origin, and an exact still-ACTIVE Channel incarnation
+ * (including TLS-authorized peer, physical CNet slot+generation and Group).
+ * A stale origin returns ECANCELED without touching CNet send credits.
+ * Failed/canceled/ticketless chunks cannot generate a positive ACK. No
+ * queue, background retry, automatic settlement or fallback is introduced.
+ */
+int tr_raft_cnet_channel_send_chunk_completion(
+    tr_raft_cnet_channel_t *channel,
+    const tr_raft_multicore_completion_t *completion);
 
 /* Enqueue one wire payload directly into CNet's bounded owner-local send.
  * On success, exactly one pending logical write is owned by CNet; the matching
