@@ -38,6 +38,7 @@ typedef struct peer_dso_harness {
     /* The actual Plugin module lease is owned by generation.modules[0].
      * No separately held test-lease grants DSO callback authority. */
     const cmeta_plugin_manifest *manifest; /* borrowed under generation lease */
+    tr_ace23_dso_callback callback; /* scope-bound typed Component Interface */
     salts_component_deployment deployments[1];
     salts_component_instance instances[1];
     salts_component_dependency dependencies[1];
@@ -106,6 +107,7 @@ static int peer_dso_setup(peer_dso_harness *dso)
     salts_component_plugin_source bound_source = source;
     salts_component_plugin_generation *previous = NULL;
     cmeta_plugin_lease temporary = {0};
+    salts_component_service service = {0};
     cmeta_plugin_lifecycle_info info = {0};
     const cmeta_plugin_manifest *manifest = NULL;
 
@@ -146,7 +148,22 @@ static int peer_dso_setup(peer_dso_harness *dso)
         return SALTS_EPROTO;
     dso->scope_live = 1;
 
-    /* A transient, explicit Plugin borrow obtains the callback pointer.
+    /* The CNet Owner binds its callback through the actually published
+     * Component. The borrowed vtable and ObjectRef remain valid only
+     * while the address-stable original Scope pins generation and its
+     * Plugin module lease. No manifest callback is used for dispatch. */
+    if (salts_component_plugin_scope_find_service(
+            &dso->scope, tr_ace23_dso_callback_interface(),
+            &service) != SALTS_COMPONENT_PLUGIN_OK)
+        return SALTS_EPROTO;
+    dso->callback = tr_ace23_dso_callback_bind(NULL, NULL);
+    if (tr_ace23_dso_callback_borrow_from_object(
+            service.object, service.interfaces,
+            &dso->callback) != CMETA_OK ||
+        !tr_ace23_dso_callback_valid(&dso->callback))
+        return SALTS_EPROTO;
+
+    /* A transient, explicit Plugin borrow obtains test callback-state.
      * Release it immediately. All later CNet callbacks are protected
      * exclusively by the published generation's own module lease. */
     if (cmeta_plugin_registry_acquire(
@@ -379,8 +396,8 @@ static int peer_record(void *context,
         /* Executing DSO text INSIDE verified CNet progress owner callback.
          * The published ComponentPlugin generation owns the sole module
          * lease until the CNet terminal barrier and Scope drain. */
-        if (!sink->dso->manifest->is_quiescent(
-                sink->dso->manifest->self)) goto invalid;
+        if (tr_ace23_dso_callback_invoke(&sink->dso->callback) != 1)
+            goto invalid;
         ++sink->dso->network_callbacks;
     }
     return SALTS_OK;
