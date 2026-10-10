@@ -36,6 +36,13 @@ extern "C" {
  * remains outstanding until host take(); stop produces ECANCELED without
  * invoking the receiver callback, releasing the buffer exactly once.
  *
+ * An optional authenticated reply origin includes a host-issued, nonzero
+ * module-generation epoch. The host MUST issue it outside any reloadable
+ * provider and never recycle it while previous in-memory completions can
+ * exist. The Group Owner only copies the opaque value; the final CNet owner
+ * independently checks that exact epoch + Channel instance + connection
+ * token before a manual ACK send. A missing epoch fails closed.
+ *
  * The callback may populate a typed SNAPSHOT_ACK or DATA_ACK completion
  * only when its receiver has actually established those semantics.
  * In particular a transport copy or local callback return is NOT fsync,
