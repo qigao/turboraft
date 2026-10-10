@@ -85,6 +85,23 @@ int tr_raft_multicore_ingress_submit(
     const tr_raft_transport_payload_t *payload,
     uint64_t *out_request_id);
 
+/* Explicit authenticated reply-origin variant for DATA/SNAPSHOT only.
+ * The CNet final Owner must first verify the channel's TLS+HELLO identity,
+ * capture the exact immutable Channel generation and pass this ticket from
+ * its owner thread. The ticket is carried by VALUE through the same Group
+ * request/completion ring; no CNet pointer, raw native handle or additional
+ * routing queue is retained. A rejected request returns ID zero.
+ *
+ * A future ACK can be sent ONLY if the CNet owner checks this saved ticket
+ * against the same still-active Channel. Zero/ticketless completions must
+ * never automatically route a network ACK. This API does not send ACKs.
+ */
+int tr_raft_multicore_ingress_submit_with_origin(
+    tr_raft_multicore_ingress_t *ingress,
+    const tr_raft_transport_payload_t *payload,
+    const tr_raft_transport_reply_origin_t *origin,
+    uint64_t *out_request_id);
+
 /* Compatible with tr_raft_transport_payload_handler_fn and CNet Directory's
  * borrowed on_payload/context pair. Rejects exactly as submit() does.
  */
