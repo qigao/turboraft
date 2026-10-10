@@ -93,6 +93,9 @@ int tr_raft_cnet_channel_get_status(
  * pointer, native handle, certificate secret or persistent runtime state.
  * Returns EBUSY before authentication/after stop; output always resets on
  * rejection. The caller sends it with the chunk into the Group ring.
+ * A host-issued module epoch MUST remain distinct even if the same DSO is
+ * unloaded/reloaded at the same address. The caller cannot source it from
+ * the Channel's DSO-local static counter or a recycled CNet socket slot.
  */
 int tr_raft_cnet_channel_capture_reply_origin(
     tr_raft_cnet_channel_t *channel, tr_raft_group_id_t group_id,
