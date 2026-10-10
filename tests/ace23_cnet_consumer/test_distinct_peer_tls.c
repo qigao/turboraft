@@ -1278,6 +1278,201 @@ static int durable_snapshot_reconnect(
 }
 #endif
 
+#ifdef TURBORAFT_TEST_TLS_GROUP_PRESSURE
+/*
+ * Both Node1 and Node3 are genuinely TLS-authenticated and ACTIVE before this
+ * test begins. Group101 and Group103 EACH have precisely two reserved
+ * completion credits (a Raft STEP plus an SG owned chunk), deliberately left
+ * uncollected. A third legitimate Snapshot frame on Node3/Group103 must fail
+ * the real CNet receive -> Directory -> existing Multicore Owner admission
+ * with ENOSPC and close ONLY Node3's physical Channel. Node1/Group101 must
+ * retain its Raft owner credits, finish both previously admitted callbacks,
+ * and successfully send/complete a NEW real TLS heartbeat.
+ *
+ * No mock network, second mailbox, CNet fallback, or automatic replay.
+ */
+static int qualify_two_certified_peer_group_pressure(
+    identity_fixture *f, size_t *events)
+{
+    tr_raft_cnet_channel_t *healthy = NULL, *saturated = NULL;
+    tr_raft_cnet_channel_status_t status_one = {0}, status_three = {0};
+    tr_raft_multicore_group_status_t group_one = {0}, group_three = {0};
+    tr_raft_multicore_completion_t completion = {0};
+    tr_raft_transport_payload_t snapshot = {0}, heartbeat = {0};
+    uint8_t bytes[24];
+    size_t i;
+    unsigned round;
+    int result;
+#define PTRY(expr) do { result=(expr); if (result!=SALTS_OK) { \
+    fprintf(stderr, "TLS Group-pressure API %s failed: %d\n",#expr,result); \
+    goto done; } } while (0)
+#define PCHECK(expr, msg) do { if (!(expr)) { \
+    fprintf(stderr, "TLS Group-pressure invariant: %s\n",msg); \
+    result=SALTS_EPROTO; goto done; } } while (0)
+    PCHECK(f != NULL && events != NULL &&
+           f->server_received.received_from_one == 1U &&
+           f->server_received.received_from_three == 1U &&
+           f->server_received.received_snapshot == 1U &&
+           f->server_received.received_data == 1U &&
+           f->server_payload_completed == 4U &&
+           f->stop_from_payload_checks == 1U &&
+           f->stop_from_payload_result == SALTS_EBUSY &&
+           f->destroy_from_payload_result == SALTS_EBUSY,
+           "baseline had four certified Raft/DATA/Snapshot callbacks");
+    for (i = 0U; i < LINK_COUNT; ++i) {
+        tr_raft_cnet_channel_status_t channel = {0};
+        PTRY(tr_raft_cnet_channel_get_status(f->inbound[i], &channel));
+        PCHECK(channel.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
+               !channel.terminal, "both authenticated TLS links active");
+        if (channel.authenticated_peer_node_id == 1U) {
+            healthy = f->inbound[i];
+        } else if (channel.authenticated_peer_node_id == 3U) {
+            saturated = f->inbound[i];
+        } else {
+            PCHECK(0, "received unknown authenticated TLS Node ID");
+        }
+    }
+    PCHECK(healthy != NULL && saturated != NULL && healthy != saturated,
+           "two distinct certified Node1/Node3 physical peers");
+    PTRY(tr_raft_multicore_group_status(
+        f->raft_owners, 101U, &group_one));
+    PTRY(tr_raft_multicore_group_status(
+        f->raft_owners, 103U, &group_three));
+    PCHECK(group_one.outstanding == 2U && group_three.outstanding == 2U &&
+           group_one.rejected == 0U && group_three.rejected == 0U,
+           "separate 2-credit Raft Group rings saturated before TLS overload");
+
+    /* The second frame is valid and identical to the FIRST Snapshot at
+     * transport decode time; the only rejection is Group103's exhausted
+     * owned item/completion capacity, not malformed bytes or forged ID. */
+    memset(bytes, 0x7b, sizeof(bytes));
+    snapshot.group_id = 103U;
+    snapshot.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
+    snapshot.data.snapshot_chunk.from = 3U;
+    snapshot.data.snapshot_chunk.to = 2U;
+    snapshot.data.snapshot_chunk.term = 3U;
+    snapshot.data.snapshot_chunk.snapshot_index = 19U;
+    snapshot.data.snapshot_chunk.snapshot_term = 3U;
+    snapshot.data.snapshot_chunk.snapshot_size = sizeof(bytes);
+    snapshot.data.snapshot_chunk.data_length = sizeof(bytes);
+    snapshot.data.snapshot_chunk.data = bytes;
+    snapshot.data.snapshot_chunk.done = true;
+    snapshot.data.snapshot_chunk.has_configuration = true;
+    snapshot.data.snapshot_chunk.configuration.phase = TR_RAFT_CONF_FINAL;
+    snapshot.data.snapshot_chunk.configuration.member_count = 1U;
+    snapshot.data.snapshot_chunk.configuration.members[0].node_id = 2U;
+    snapshot.data.snapshot_chunk.configuration.members[0].roles =
+        TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+    PTRY(tr_raft_cnet_channel_send(f->outbound[1], &snapshot));
+    memset(bytes, 0x44, sizeof(bytes));
+    for (round = 0U; round < MAX_PROGRESS; ++round) {
+        PTRY(cnet_client_poll(&f->clients, 1U, events));
+        PTRY(cnet_client_poll(&f->server, 1U, events));
+        PTRY(tr_raft_cnet_channel_get_status(saturated, &status_three));
+        if (status_three.terminal &&
+            f->server_payload_completed == 5U) break;
+    }
+    PCHECK(round < MAX_PROGRESS &&
+           status_three.terminal &&
+           status_three.phase == TR_RAFT_CNET_CHANNEL_FAILED &&
+           status_three.last_error == SALTS_ENOSPC &&
+           f->server_received.received_snapshot == 2U &&
+           f->server_received.wrong_payloads == 0U &&
+           f->server_payload_inflight == 0U,
+           "valid Node3 Snapshot rejected only by Group103 capacity and TLS fenced");
+    PTRY(tr_raft_cnet_channel_get_status(healthy, &status_one));
+    PCHECK(!status_one.terminal &&
+           status_one.phase == TR_RAFT_CNET_CHANNEL_ACTIVE,
+           "full Node3 Group must not terminate certified Node1 Channel");
+    PTRY(tr_raft_multicore_group_status(
+        f->raft_owners, 101U, &group_one));
+    PTRY(tr_raft_multicore_group_status(
+        f->raft_owners, 103U, &group_three));
+    PCHECK(group_one.outstanding == 2U && group_one.rejected == 0U &&
+           group_three.outstanding == 2U && group_three.rejected == 1U,
+           "failed Group103 admission preserves both groups' prior credits");
+
+    for (i = 0U; i < LINK_COUNT; ++i) {
+        size_t action;
+        for (action = 0U; action < 2U; ++action) {
+            memset(&completion, 0, sizeof(completion));
+            PTRY(take_owner_completion(f, i, &completion));
+            PCHECK(completion.request_id != 0U &&
+                   completion.result == SALTS_OK &&
+                   completion.operation ==
+                       (action == 0U ? TR_RAFT_MULTICORE_STEP
+                                     : TR_RAFT_MULTICORE_RECEIVE_CHUNK),
+                   "each accepted Raft/SG request returned one ordered Group result");
+            if (action == 1U) {
+                PCHECK(!completion.value.chunk.ack_valid &&
+                       !completion.value.chunk.durable_or_installed &&
+                       completion.value.chunk.kind ==
+                           (i == 0U ? TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK
+                                    : TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK) &&
+                       completion.reply_origin.authenticated_peer_node_id ==
+                           NODE_IDS[i] &&
+                       completion.reply_origin.group_id == 100U + NODE_IDS[i],
+                       "exact original TLS/Group completion; no mock durability");
+            }
+        }
+    }
+    PTRY(tr_raft_multicore_group_status(
+        f->raft_owners, 101U, &group_one));
+    PTRY(tr_raft_multicore_group_status(
+        f->raft_owners, 103U, &group_three));
+    PCHECK(group_one.outstanding == 0U && group_three.outstanding == 0U &&
+           group_one.owned_chunk_bytes == 0U &&
+           group_three.owned_chunk_bytes == 0U &&
+           group_three.rejected == 1U &&
+           f->owner_groups[0].chunk_calls == 1U &&
+           f->owner_groups[1].chunk_calls == 1U &&
+           f->owner_groups[0].chunk_bytes == 16U &&
+           f->owner_groups[1].chunk_bytes == 24U,
+           "overflow had no Group callback, lease leak or missing completion");
+
+    /* After taking Group101's two completions, send a NEW real TLS Raft
+     * request over Node1: this proves sibling capacity and peer safety even
+     * while Node3's channel was failed closed by its own backpressure. */
+    heartbeat.kind = TR_RAFT_WIRE_PAYLOAD_RAFT;
+    heartbeat.group_id = 101U;
+    heartbeat.data.raft.type = TR_RAFT_MSG_HEARTBEAT_REQUEST;
+    heartbeat.data.raft.from = 1U;
+    heartbeat.data.raft.to = 2U;
+    heartbeat.data.raft.term = 3U;
+    PTRY(tr_raft_cnet_channel_send(f->outbound[0], &heartbeat));
+    for (round = 0U; round < MAX_PROGRESS; ++round) {
+        PTRY(cnet_client_poll(&f->clients, 1U, events));
+        PTRY(cnet_client_poll(&f->server, 1U, events));
+        if (f->server_received.received_from_one == 2U) break;
+    }
+    PCHECK(round < MAX_PROGRESS &&
+           f->server_received.received_from_one == 2U &&
+           f->server_received.received_from_three == 1U &&
+           f->server_payload_completed == 6U &&
+           f->server_received.wrong_payloads == 0U,
+           "sibling Node1 still admitted after Node3 capacity closure");
+    PTRY(take_owner_completion(f, 0U, &completion));
+    PCHECK(completion.operation == TR_RAFT_MULTICORE_STEP &&
+           completion.result == SALTS_OK && completion.request_id != 0U,
+           "healthy Node1 accepted and finished independent new heartbeat");
+    PTRY(tr_raft_multicore_group_status(
+        f->raft_owners, 101U, &group_one));
+    PTRY(tr_raft_multicore_group_status(
+        f->raft_owners, 103U, &group_three));
+    PCHECK(group_one.outstanding == 0U && group_one.rejected == 0U &&
+           group_three.outstanding == 0U && group_three.rejected == 1U,
+           "all credits reclaimed; rejected Node3 request never retried");
+    PTRY(tr_raft_cnet_channel_get_status(healthy, &status_one));
+    PCHECK(status_one.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
+           !status_one.terminal, "healthy certified TLS link remains ACTIVE");
+    result = SALTS_OK;
+done:
+#undef PTRY
+#undef PCHECK
+    return result;
+}
+#endif
+
 static int run_two_distinct_peers(int forge_node_three)
 {
     identity_fixture f = {0};
