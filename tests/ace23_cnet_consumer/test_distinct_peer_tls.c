@@ -1477,6 +1477,41 @@ static int run_two_distinct_peers(int forge_node_three)
                         result = SALTS_EPROTO;
                         break;
                     }
+                    /* Deliberately corrupt a genuine Owner receipt: a
+                     * forged final next_offset cannot use the first chunk's
+                     * valid progress ticket to claim a durable installation.
+                     * The reverse inconsistency (installed at offset 12)
+                     * must also fail before CNet reserves send credits. */
+                    {
+                        tr_raft_multicore_completion_t forged = chunk_completion;
+                        tr_raft_cnet_channel_status_t before = {0}, after = {0};
+                        TRY_STAGE(tr_raft_cnet_channel_get_status(
+                            binding->channel, &before));
+                        forged.value.chunk.ack.snapshot.next_offset = 24U;
+                        if (tr_raft_cnet_channel_send_chunk_completion(
+                                binding->channel, &forged) != SALTS_EPROTO) {
+                            failed_stage = "partial Snapshot forged a full-size ACK";
+                            result = SALTS_EPROTO;
+                            break;
+                        }
+                        forged = chunk_completion;
+                        forged.value.chunk.durable_or_installed = true;
+                        if (tr_raft_cnet_channel_send_chunk_completion(
+                                binding->channel, &forged) != SALTS_EPROTO) {
+                            failed_stage = "premature installed Snapshot ACK";
+                            result = SALTS_EPROTO;
+                            break;
+                        }
+                        TRY_STAGE(tr_raft_cnet_channel_get_status(
+                            binding->channel, &after));
+                        if (before.payloads_admitted != after.payloads_admitted ||
+                            before.payload_writes_pending !=
+                                after.payload_writes_pending) {
+                            failed_stage = "rejected Snapshot ACK consumed CNet credits";
+                            result = SALTS_EPROTO;
+                            break;
+                        }
+                    }
                     /* Deliver a real progress ACK over the certified CNet
                      * Channel. Its bounded offset advances to 12 only, and
                      * the Owner proved durable_or_installed=false.
