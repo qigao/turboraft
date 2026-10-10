@@ -232,6 +232,43 @@ spec("ACE 2.3 distinct Node ID CNet directory, strict fixed owner")
             &f.directory, 2U, &found), SALTS_EINVAL);
         check_null(found);
 
+        /* Directory ACK routing is the same strict Node+Group gate,
+         * followed by ManagedPeer's exact live TLS generation check. A
+         * long-lived Node ID route alone must NEVER authorize a delayed
+         * receiver ACK on an unready or recycled connection. */
+        {
+            tr_raft_multicore_completion_t ack = {0};
+            ack.request_id = 44U;
+            ack.operation = TR_RAFT_MULTICORE_RECEIVE_CHUNK;
+            ack.result = SALTS_OK;
+            ack.value.chunk.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+            ack.value.chunk.ack_valid = true;
+            ack.value.chunk.ack.data.from = 2U;
+            ack.value.chunk.ack.data.to = 1U;
+            ack.value.chunk.ack.data.term = 5U;
+            ack.value.chunk.ack.data.stream_id = 9U;
+            ack.value.chunk.ack.data.accepted = true;
+            ack.reply_origin = (tr_raft_transport_reply_origin_t){
+                .channel_instance = 7U,
+                .authenticated_peer_node_id = 1U,
+                .group_id = 43U,
+                .connection_slot = 1U,
+                .connection_generation = 4U
+            };
+            check_equal(tr_raft_cnet_peer_directory_send_chunk_completion(
+                &f.directory, &ack), SALTS_ECANCELED);
+            ack.reply_origin.group_id = 44U;
+            check_equal(tr_raft_cnet_peer_directory_send_chunk_completion(
+                &f.directory, &ack), SALTS_ENOENT);
+            ack.reply_origin.group_id = 43U;
+            ack.reply_origin.authenticated_peer_node_id = 9U;
+            check_equal(tr_raft_cnet_peer_directory_send_chunk_completion(
+                &f.directory, &ack), SALTS_ENOENT);
+            ack.reply_origin.channel_instance = 0U;
+            check_equal(tr_raft_cnet_peer_directory_send_chunk_completion(
+                &f.directory, &ack), SALTS_ENOTSUP);
+        }
+
         /* A future unknown Group cannot acquire an apparently valid
          * Service callback and only be rejected after WAL commit. */
         invalid_binding.directory = &f.directory;
