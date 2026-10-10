@@ -21,6 +21,7 @@ typedef struct managed_probe {
     size_t rejected;
     tr_raft_node_id_t from;
     tr_raft_node_id_t to;
+    size_t data_received;
 } managed_probe;
 
 typedef struct managed_fixture {
@@ -106,6 +107,24 @@ static int capture_payload(void *context,
                            const tr_raft_transport_payload_t *payload)
 {
     managed_probe *probe = (managed_probe *)context;
+    if (payload != NULL &&
+        payload->kind == TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK &&
+        payload->group_id == 43U &&
+        payload->data.data_chunk.from == probe->from &&
+        payload->data.data_chunk.to == probe->to &&
+        payload->data.data_chunk.stream_id == 99U &&
+        payload->data.data_chunk.data_length == 256U &&
+        payload->data.data_chunk.data != NULL &&
+        payload->data.data_chunk.done) {
+        const uint8_t *data = payload->data.data_chunk.data;
+        size_t i;
+        for (i = 0U; i < 256U; ++i)
+            if (data[i] != 0xa7U) break;
+        if (i == 256U) {
+            ++probe->data_received;
+            return SALTS_OK;
+        }
+    }
     if (payload == NULL ||
         payload->kind != TR_RAFT_WIRE_PAYLOAD_RAFT ||
         payload->group_id != 42U ||
@@ -205,7 +224,7 @@ static int make_managed_peer(managed_fixture *f, size_t index,
     cnet_reconnect_config recovery = {0};
 
     if (index >= PEER_COUNT) return SALTS_EINVAL;
-    f->client_probes[index] = (managed_probe){0U, 0U, 2U, 1U};
+    f->client_probes[index] = (managed_probe){.from = 2U, .to = 1U};
     recovery.size = sizeof(recovery);
     recovery.version = CNET_RECOVERY_POLICY_VERSION;
     recovery.max_attempts = 3U;
@@ -257,7 +276,7 @@ static int accept_server_peer(managed_fixture *f, size_t index)
 
     if (index >= PEER_COUNT || f->server_channels[index] != NULL)
         return SALTS_EALREADY;
-    f->server_probes[index] = (managed_probe){0U, 0U, 1U, 2U};
+    f->server_probes[index] = (managed_probe){.from = 1U, .to = 2U};
     config.payload_context = &f->server_probes[index];
     result = tr_raft_cnet_channel_create(
         &config, &f->server_channels[index]);
@@ -537,8 +556,40 @@ static int test_bounded_multi_link(void)
         goto done;
     }
 
-    /* Transport loss never replays an accepted Raft message. The application
-     * must explicitly decide whether an operation remains unsettled. */
+    /* Submit one SG DATA chunk to the *old* verified Channel and stop the
+     * server without another CNet progress turn. The borrowed stack bytes
+     * become a bounded Salts Core owned slice; this old-generation
+     * admission must never be automatically replayed after reconnect. */
+    {
+        tr_raft_transport_payload_t sg = {0};
+        uint8_t bytes[256];
+        memset(bytes, 0xa7, sizeof(bytes));
+        sg.group_id = 43U;
+        sg.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+        sg.data.data_chunk.from = 1U;
+        sg.data.data_chunk.to = 2U;
+        sg.data.data_chunk.term = 3U;
+        sg.data.data_chunk.stream_id = 99U;
+        sg.data.data_chunk.stream_size = sizeof(bytes);
+        sg.data.data_chunk.data_length = sizeof(bytes);
+        sg.data.data_chunk.data = bytes;
+        sg.data.data_chunk.done = true;
+        CHECK_TRY(tr_raft_cnet_managed_peer_send(f.peers[0], &sg));
+        memset(bytes, 0xff, sizeof(bytes));
+    }
+    CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
+    if (a.channel.sg_chunks_admitted != 1U ||
+        a.channel.payloads_admitted != 2U ||
+        a.channel.payloads_completed != 1U ||
+        a.channel.payloads_canceled != 0U ||
+        a.channel.payload_writes_pending != 1U) {
+        result = SALTS_EPROTO;
+        failed = "old TLS generation must own one outstanding SG write";
+        goto done;
+    }
+
+    /* Transport loss never replays an accepted Raft or SG message.
+     * The application alone decides whether an operation is unsettled. */
     CHECK_TRY(tr_raft_cnet_channel_stop(f.server_channels[0]));
     for (i = 0U; i < PROGRESS_BUDGET; ++i) {
         tr_raft_cnet_channel_status_t closed = {0};
@@ -550,6 +601,23 @@ static int test_bounded_multi_link(void)
     if (i == PROGRESS_BUDGET) {
         result = SALTS_ETIMEDOUT;
         failed = "terminal old server connection";
+        goto done;
+    }
+    /* Do not allow ManagedDial peer0 to create generation N+1 until
+     * generation N is terminal and has completely settled its SG write.
+     * CNet may finish it during shutdown or cancel it, but not both. */
+    for (i = 0U; i < PROGRESS_BUDGET; ++i) {
+        CHECK_TRY(managed_progress(&f, cmeta_monotonic_ms(), 0));
+        CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
+        if (a.channel.terminal) break;
+    }
+    if (i == PROGRESS_BUDGET ||
+        a.channel.payloads_admitted != 2U ||
+        a.channel.sg_chunks_admitted != 1U ||
+        a.channel.payload_writes_pending != 0U ||
+        a.channel.payloads_completed + a.channel.payloads_canceled != 2U) {
+        result = SALTS_EPROTO;
+        failed = "old SG generation must settle before Manager recycle";
         goto done;
     }
     CHECK_TRY(tr_raft_cnet_channel_destroy(f.server_channels[0]));
@@ -567,7 +635,13 @@ static int test_bounded_multi_link(void)
     if (a.protocol_ready_count < 2U || a.connections_started < 2U ||
         b.protocol_ready_count != 1U ||
         f.accept_count != 3 ||
-        f.server_probes[0].received != 0U) {
+        f.server_probes[0].received != 0U ||
+        f.server_probes[0].data_received != 0U ||
+        a.channel.payloads_admitted != 0U ||
+        a.channel.sg_chunks_admitted != 0U ||
+        a.channel.payloads_completed != 0U ||
+        a.channel.payloads_canceled != 0U ||
+        a.channel.payload_writes_pending != 0U) {
         result = SALTS_EPROTO;
         failed = "manual reconnect must not replay payload";
         goto done;
@@ -616,7 +690,7 @@ static int test_bounded_multi_link(void)
                 a.channel.payloads_completed + a.channel.payloads_canceled +
                 a.channel.payload_writes_pending) {
             result = SALTS_EPROTO;
-            failed = "new managed generation starts with only its own send ledger";
+            failed = "reconnected TLS generation must start with a fresh ledger";
         }
     }
 done:
