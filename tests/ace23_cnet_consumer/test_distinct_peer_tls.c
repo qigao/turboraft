@@ -1113,8 +1113,17 @@ static int durable_snapshot_reconnect(
         TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
     RTRY(cmeta_sha256(
         bytes, sizeof(bytes), snapshot.data.snapshot_chunk.snapshot_digest));
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+    /* The host explicitly chooses restart-from-zero, not an implicit
+     * replay of any unsettled CNet send. The same Owner/receiver retains
+     * its 12-byte memory staging across connection N -> N+1. */
+    snapshot.data.snapshot_chunk.data_length = 12U;
+    snapshot.data.snapshot_chunk.done = false;
+#endif
     RTRY(tr_raft_cnet_channel_send(f->outbound[1], &snapshot));
+#ifndef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
     memset(bytes, 0x44, sizeof(bytes));
+#endif
 
     for (round = 0U; round < MAX_PROGRESS; ++round) {
         RTRY(cnet_client_poll(&f->clients, 1U, events));
@@ -1122,6 +1131,55 @@ static int durable_snapshot_reconnect(
         if (f->server_received.received_snapshot == 2U) break;
     }
     RREQUIRE(round < MAX_PROGRESS, "one explicit N+1 TLS retransmission");
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+    RTRY(take_owner_completion(f, 1U, &completed));
+    RREQUIRE(completed.operation == TR_RAFT_MULTICORE_RECEIVE_CHUNK &&
+             completed.request_id != 0U &&
+             completed.request_id ==
+                 f->verified_payloads[socket].chunk_request_id &&
+             completed.result == SALTS_OK &&
+             completed.value.chunk.kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK &&
+             completed.value.chunk.ack_valid &&
+             completed.value.chunk.ack.snapshot.accepted &&
+             completed.value.chunk.ack.snapshot.next_offset == 12U &&
+             !completed.value.chunk.durable_or_installed &&
+             completed.reply_origin.channel_instance ==
+                 fresh_origin.channel_instance &&
+             completed.reply_origin.connection_token ==
+                 fresh_origin.connection_token &&
+             f->owner_groups[1].installed_snapshots == 0U &&
+             f->owner_groups[1].chunk_calls == 2U,
+             "explicit N+1 restart-from-zero accepted without premature fsync");
+    /* The new TLS generation has its OWN non-durable progress receipt.
+     * Do not conflate N's partial ACK with N+1's current request. */
+    RTRY(tr_raft_cnet_channel_send_chunk_completion(
+        f->inbound[socket], &completed));
+    for (round = 0U; round < MAX_PROGRESS &&
+         f->clients_received[1].snapshot_progress_acks < 2U; ++round) {
+        RTRY(cnet_client_poll(&f->server, 1U, events));
+        RTRY(cnet_client_poll(&f->clients, 1U, events));
+    }
+    RREQUIRE(round < MAX_PROGRESS &&
+             f->clients_received[1].snapshot_progress_acks == 2U &&
+             f->clients_received[1].snapshot_acks == 0U,
+             "N+1 returned only verified non-durable restart progress");
+    /* Explicitly supply the missing final half over the NEW physical
+     * certified TLS generation; WalStorage has not installed anything yet. */
+    snapshot.data.snapshot_chunk.snapshot_offset = 12U;
+    snapshot.data.snapshot_chunk.data_length = 12U;
+    snapshot.data.snapshot_chunk.data = bytes + 12U;
+    snapshot.data.snapshot_chunk.done = true;
+    snapshot.data.snapshot_chunk.has_configuration = false;
+    RTRY(tr_raft_cnet_channel_send(f->outbound[1], &snapshot));
+    memset(bytes, 0x44, sizeof(bytes));
+    for (round = 0U; round < MAX_PROGRESS; ++round) {
+        RTRY(cnet_client_poll(&f->clients, 1U, events));
+        RTRY(cnet_client_poll(&f->server, 1U, events));
+        if (f->server_received.received_snapshot == 3U) break;
+    }
+    RREQUIRE(round < MAX_PROGRESS,
+             "Node3 explicitly finished second N+1 TLS Snapshot fragment");
+#endif
     RTRY(take_owner_completion(f, 1U, &completed));
     RREQUIRE(completed.operation == TR_RAFT_MULTICORE_RECEIVE_CHUNK &&
              completed.result == SALTS_OK &&
@@ -1138,8 +1196,14 @@ static int durable_snapshot_reconnect(
              completed.reply_origin.connection_token ==
                  fresh_origin.connection_token &&
              f->owner_groups[1].installed_snapshots == 1U &&
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_MIDSTREAM_RECONNECT
+             f->owner_groups[1].chunk_calls == 3U &&
+             f->owner_groups[1].chunk_bytes == 36U &&
+             f->clients_received[1].snapshot_progress_acks == 2U,
+#else
              f->owner_groups[1].chunk_calls == 2U,
-             "duplicate verified Snapshot retains WAL truth, installs once");
+#endif
+             "certified N+1 receipt preserves exact once Snapshot install");
     RTRY(tr_raft_cnet_channel_send_chunk_completion(
         f->inbound[socket], &completed));
     for (round = 0U; round < MAX_PROGRESS; ++round) {
