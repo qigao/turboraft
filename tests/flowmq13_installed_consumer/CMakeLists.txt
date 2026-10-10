@@ -143,3 +143,15 @@ set_tests_properties(
     turboraft.flowmq13.cnet_segmented_snapshot
     turboraft.flowmq13.cnet_segmented_fault
     PROPERTIES LABELS "cnet-snapshot-lifecycle")
+
+# Exercise the *installed* SnapshotReceiver's durable duplicate semantics:
+# the repeated final chunk is accepted without a second install/commit, but
+# its full-size ACK still refers to a previously installed snapshot.
+add_executable(turboraft_flowmq13_snapshot_replay
+               ../core/test_raft_snapshot_receiver.c)
+target_link_libraries(turboraft_flowmq13_snapshot_replay PRIVATE
+    TurboRaft::SnapshotReceiver Salts::TinyTest)
+add_test(NAME turboraft.flowmq13.snapshot_replay
+         COMMAND turboraft_flowmq13_snapshot_replay)
+set_tests_properties(turboraft.flowmq13.snapshot_replay
+                     PROPERTIES TIMEOUT 25)
