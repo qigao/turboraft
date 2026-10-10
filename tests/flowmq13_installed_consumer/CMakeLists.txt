@@ -28,6 +28,7 @@ find_package(FlowMQ 1.3.0 EXACT CONFIG REQUIRED
              PATHS "${_flowmq13_flowmq_root}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_package(TurboRaft 0.3.1 EXACT CONFIG REQUIRED
              COMPONENTS FlowMQ SnapshotSender SnapshotReceiver CNet
+                        WalStorage ChunkReceivers Multicore
              PATHS "${_flowmq13_turboraft_root}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
@@ -55,3 +56,21 @@ add_test(NAME turboraft.flowmq13.c11 COMMAND turboraft_flowmq13_c11)
 add_executable(turboraft_flowmq13_cpp flowmq13_cpp.cpp)
 target_link_libraries(turboraft_flowmq13_cpp PRIVATE TurboRaft::FlowMQ)
 add_test(NAME turboraft.flowmq13.cpp17 COMMAND turboraft_flowmq13_cpp)
+
+# This uses the exact same two real mTLS identity + CNet/Multicore fixture as
+# the independent CNet qualification. In this separate full-SDK target only,
+# Group103's SnapshotReceiver installs into production WalStorage before
+# CNet may send a positive SNAPSHOT_ACK. Group101 still uses a mock DATA
+# consumer and is required NOT to emit a durable ACK.
+add_executable(turboraft_flowmq13_cnet_durable
+               ../ace23_cnet_consumer/test_distinct_peer_tls.c)
+target_compile_definitions(turboraft_flowmq13_cnet_durable PRIVATE
+    TURBORAFT_TEST_DURABLE_NET_SNAPSHOT=1
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_link_libraries(turboraft_flowmq13_cnet_durable PRIVATE
+    TurboRaft::CNet TurboRaft::Multicore TurboRaft::ChunkReceivers
+    TurboRaft::WalStorage Salts::Platform Salts::TinyTest)
+add_test(NAME turboraft.flowmq13.cnet_durable_snapshot
+         COMMAND turboraft_flowmq13_cnet_durable)
+set_tests_properties(turboraft.flowmq13.cnet_durable_snapshot
+                     PROPERTIES TIMEOUT 55)
