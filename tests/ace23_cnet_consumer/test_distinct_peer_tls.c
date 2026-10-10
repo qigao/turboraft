@@ -73,6 +73,12 @@ typedef struct identity_fixture {
     tr_raft_cnet_channel_config_t server_channel_config;
     remote_probe clients_received[LINK_COUNT];
     server_probe server_received;
+    /* CNet delivers callbacks inline from its one progress Owner. These
+     * counters are never accessed by another thread during progress. */
+    size_t server_payload_inflight;
+    size_t server_payload_completed;
+    unsigned stop_from_payload_checks;
+    int stop_from_payload_result;
     int clients_live, server_live, listener_live, server_tls_live;
     int directory_manager_live;
     int accepted;
@@ -283,12 +289,27 @@ static int on_server_payload_and_forward(
     void *context, const tr_raft_transport_payload_t *payload)
 {
     identity_fixture *fixture = (identity_fixture *)context;
-    int result = on_server_payload(&fixture->server_received, payload);
-    if (result != SALTS_OK) return result;
-    /* First TLS/Directory authenticated the borrowed CNet frame.
-     * Then Multicore copies it into the target Group's only bounded ring. */
-    return tr_raft_multicore_ingress_receive(
-        fixture->owner_ingress, payload);
+    int result;
+
+    ++fixture->server_payload_inflight;
+    result = on_server_payload(&fixture->server_received, payload);
+    if (result == SALTS_OK) {
+        /* First TLS/Directory authenticated the borrowed CNet frame.
+         * Then Multicore copies it into the target Group's only bounded ring. */
+        result = tr_raft_multicore_ingress_receive(
+            fixture->owner_ingress, payload);
+    }
+    if (result == SALTS_OK && fixture->stop_from_payload_checks == 0U) {
+        /* This is a *real* TLS receive callback, not a simulated producer.
+         * A stop attempt from inside progress must fail without tearing down
+         * this callback's borrowed Directory/ingress context. */
+        fixture->stop_from_payload_result =
+            cnet_client_stop(&fixture->server, 0U);
+        ++fixture->stop_from_payload_checks;
+    }
+    --fixture->server_payload_inflight;
+    ++fixture->server_payload_completed;
+    return result;
 }
 
 static int take_owner_completion(
@@ -336,11 +357,35 @@ static int fixture_cleanup(identity_fixture *f)
         if (f->inbound[i] != NULL)
             (void)tr_raft_cnet_channel_stop(f->inbound[i]);
     }
-    /* Each CNet owner drains terminal callbacks before Channel teardown. */
-    if (f->clients_live)
-        CLEAN_STEP(cnet_client_stop(&f->clients, 2000U));
-    if (f->server_live)
-        CLEAN_STEP(cnet_client_stop(&f->server, 2000U));
+    /* A close request is not a terminal callback barrier. The two
+     * caller-driven CNet owners must finish their entire callback drain
+     * before any borrowed Directory/ingress context can be freed. */
+    if (f->clients_live) {
+        result = cnet_client_stop(&f->clients, 2000U);
+        if (result != SALTS_OK && result != SALTS_EALREADY)
+            return result; /* fail closed: borrowed observers stay alive */
+    }
+    if (f->server_live) {
+        result = cnet_client_stop(&f->server, 2000U);
+        if (result != SALTS_OK && result != SALTS_EALREADY)
+            return result; /* never free in-flight on_payload context */
+    }
+    if (f->server_payload_inflight != 0U)
+        return SALTS_EBUSY;
+    for (i = 0U; i < LINK_COUNT; ++i) {
+        tr_raft_cnet_channel_status_t status = {0};
+        if (f->outbound[i] != NULL) {
+            CLEAN_STEP(tr_raft_cnet_channel_get_status(
+                f->outbound[i], &status));
+            if (!status.terminal) return SALTS_EBUSY;
+        }
+        if (f->inbound[i] != NULL) {
+            status = (tr_raft_cnet_channel_status_t){0};
+            CLEAN_STEP(tr_raft_cnet_channel_get_status(
+                f->inbound[i], &status));
+            if (!status.terminal) return SALTS_EBUSY;
+        }
+    }
     for (i = 0U; i < LINK_COUNT; ++i) {
         if (f->outbound[i] != NULL)
             CLEAN_STEP(tr_raft_cnet_channel_destroy(f->outbound[i]));
@@ -800,6 +845,18 @@ static int run_two_distinct_peers(int forge_node_three)
                f.server_received.wrong_payloads != 0U) {
         result = SALTS_EPROTO;
         failed_stage = "forgery must have no delivered payload";
+    }
+
+    /* The first actual verified-TLS on_payload attempted to stop its own
+     * CNet progress Owner. It must have been rejected *inside* the callback,
+     * while normal delivery and independent Raft Owner completion continue. */
+    if (result == SALTS_OK &&
+        (f.stop_from_payload_checks != 1U ||
+         f.stop_from_payload_result != SALTS_EBUSY ||
+         f.server_payload_inflight != 0U ||
+         f.server_payload_completed != (forge_node_three ? 1U : LINK_COUNT))) {
+        result = SALTS_EPROTO;
+        failed_stage = "real CNet callback must reject reentrant stop";
     }
 
     /* A successful TLS receive has one Multicore completion on the exact
