@@ -536,6 +536,25 @@ static int take_owner_completion(
 static int on_client_payload(void *user, const tr_raft_transport_payload_t *msg)
 {
     remote_probe *sink = (remote_probe *)user;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    if (msg != NULL && msg->kind == TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_ACK) {
+        uint8_t bytes[24], digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE];
+        const tr_raft_snapshot_ack_t *ack = &msg->data.snapshot_ack;
+        memset(bytes, 0x7b, sizeof(bytes));
+        if (cmeta_sha256(bytes, sizeof(bytes), digest) != SALTS_OK ||
+            sink->node_id != 3U || msg->group_id != 103U ||
+            ack->from != 2U || ack->to != 3U || ack->term != 3U ||
+            ack->snapshot_index != 19U ||
+            ack->snapshot_size != sizeof(bytes) ||
+            ack->next_offset != sizeof(bytes) || !ack->accepted ||
+            memcmp(ack->snapshot_digest, digest, sizeof(digest)) != 0) {
+            ++sink->wrong_payload;
+            return SALTS_EPROTO;
+        }
+        ++sink->snapshot_acks;
+        return SALTS_OK;
+    }
+#endif
     if (msg == NULL || msg->kind != TR_RAFT_WIRE_PAYLOAD_RAFT ||
         msg->group_id != 100U + sink->node_id ||
         msg->data.raft.from != 2U ||
@@ -644,6 +663,116 @@ static int fixture_cleanup(identity_fixture *f)
 #undef CLEAN_STEP
     return first;
 }
+
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+/* Verify durable disk state only AFTER the CNet and Multicore Owner threads
+ * have terminated, closed their writer lock and released their borrows. */
+static int durable_snapshot_verify_and_catch_up(const char *prefix)
+{
+    tr_raft_wal_storage_t *storage = NULL;
+    tr_raft_wal_recovery_t recovery = {0};
+    tr_raft_wal_storage_config_t config = {0};
+    tr_raft_storage_t adapter = {0};
+    tr_raft_entry_t next = {0};
+    uint8_t bytes[24] = {0};
+    size_t actual = 0U;
+    int result;
+
+#define REQUIRE(expr) do { if (!(expr)) { result = SALTS_EPROTO; goto done; } } while (0)
+    config.path_prefix = prefix;
+    config.segment_bytes = TR_RAFT_WAL_MIN_SEGMENT_BYTES;
+    config.max_transaction_bytes = 8U * 1024U;
+    config.max_live_segments = 4U;
+    config.max_log_entries = 16U;
+    config.max_snapshot_bytes = 1024U;
+    config.create_if_missing = false;
+    result = tr_raft_wal_storage_open(&config, &storage);
+    if (result != SALTS_OK) return result;
+    result = tr_raft_wal_storage_load(storage, &recovery);
+    if (result != SALTS_OK) goto done;
+    REQUIRE(recovery.term == 3U && recovery.commit_index == 19U &&
+            recovery.snapshot_index == 19U && recovery.snapshot_term == 3U &&
+            recovery.snapshot_size == sizeof(bytes) &&
+            recovery.has_snapshot_configuration &&
+            recovery.snapshot_configuration.member_count == 1U &&
+            recovery.snapshot_configuration.members[0].node_id == 2U &&
+            recovery.entry_count == 0U &&
+            recovery.snapshot_source.read_at != NULL);
+    result = recovery.snapshot_source.read_at(
+        recovery.snapshot_source.context, 0U,
+        bytes, sizeof(bytes), &actual);
+    if (result != SALTS_OK) goto done;
+    REQUIRE(actual == sizeof(bytes));
+    for (size_t i = 0U; i < sizeof(bytes); ++i)
+        REQUIRE(bytes[i] == 0x7bU);
+    tr_raft_wal_recovery_destroy(&recovery);
+
+    result = tr_raft_wal_storage_bind(storage, &adapter);
+    if (result != SALTS_OK) goto done;
+    next.index = 20U;
+    next.term = 3U;
+    next.command_id = 20U;
+    next.data_length = 3U;
+    memcpy(next.data, "new", 3U);
+    result = adapter.begin(adapter.context);
+    if (result != SALTS_OK) goto done;
+    result = adapter.append_log(adapter.context, &next, 1U);
+    if (result == SALTS_OK)
+        result = adapter.write_commit_index(adapter.context, 20U);
+    if (result == SALTS_OK)
+        result = adapter.commit(adapter.context);
+    else (void)adapter.rollback(adapter.context);
+    if (result != SALTS_OK) goto done;
+    result = tr_raft_wal_storage_close(storage);
+    storage = NULL;
+    if (result != SALTS_OK) return result;
+
+    result = tr_raft_wal_storage_open(&config, &storage);
+    if (result != SALTS_OK) return result;
+    result = tr_raft_wal_storage_load(storage, &recovery);
+    if (result != SALTS_OK) goto done;
+    REQUIRE(recovery.snapshot_index == 19U &&
+            recovery.snapshot_term == 3U &&
+            recovery.commit_index == 20U &&
+            recovery.entry_count == 1U &&
+            recovery.entries[0].index == 20U &&
+            recovery.entries[0].term == 3U &&
+            recovery.entries[0].command_id == 20U &&
+            recovery.entries[0].data_length == 3U &&
+            memcmp(recovery.entries[0].data, "new", 3U) == 0);
+done:
+    tr_raft_wal_recovery_destroy(&recovery);
+    if (storage != NULL) {
+        int close_result = tr_raft_wal_storage_close(storage);
+        if (result == SALTS_OK) result = close_result;
+    }
+#undef REQUIRE
+    return result;
+}
+
+static void durable_snapshot_cleanup_files(const char *prefix)
+{
+    char path[SALTS_FS_MAX_PATH];
+    if (prefix == NULL) return;
+    for (size_t i = 1U; i <= 4U; ++i) {
+        (void)snprintf(path, sizeof(path), "%s.%08zu.wal", prefix, i);
+        (void)cmeta_fs_unlink(path);
+        (void)snprintf(path, sizeof(path), "%s.%08zu.wal.tmp", prefix, i);
+        (void)cmeta_fs_unlink(path);
+    }
+    (void)snprintf(path, sizeof(path), "%s.snapshot.19.3", prefix);
+    (void)cmeta_fs_unlink(path);
+    (void)snprintf(path, sizeof(path), "%s.snapshot.19.3.tmp", prefix);
+    (void)cmeta_fs_unlink(path);
+    (void)snprintf(path, sizeof(path), "%s.manifest", prefix);
+    (void)cmeta_fs_unlink(path);
+    (void)snprintf(path, sizeof(path), "%s.manifest.tmp", prefix);
+    (void)cmeta_fs_unlink(path);
+    (void)snprintf(path, sizeof(path), "%s.lock", prefix);
+    (void)cmeta_fs_unlink(path);
+    (void)tt_remove_file(prefix);
+}
+#endif
 
 static int run_two_distinct_peers(int forge_node_three)
 {
@@ -774,6 +903,14 @@ static int run_two_distinct_peers(int forge_node_three)
             &f.directory, &directory_config));
     }
 
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+    f.snapshot_prefix = tt_make_temp_file("turboraft-cnet-snapshot", ".data");
+    if (f.snapshot_prefix == NULL) {
+        result = SALTS_ENOMEM;
+        failed_stage = "create isolated Snapshot WAL prefix";
+        goto cleanup;
+    }
+#endif
     TRY_STAGE(start_raft_group_owners(&f));
 
     f.server_channel_config.client = &f.server;
@@ -1052,6 +1189,11 @@ static int run_two_distinct_peers(int forge_node_three)
                     snapshot.data.snapshot_chunk.configuration.members[0].node_id = 2U;
                     snapshot.data.snapshot_chunk.configuration.members[0].roles =
                         TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT
+                    TRY_STAGE(cmeta_sha256(
+                        s, sizeof(s),
+                        snapshot.data.snapshot_chunk.snapshot_digest));
+#endif
                     TRY_STAGE(tr_raft_cnet_channel_send(f.outbound[0], &data));
                     TRY_STAGE(tr_raft_cnet_channel_send(f.outbound[1], &snapshot));
                     /* This memory is borrowed until send returns, NOT held
