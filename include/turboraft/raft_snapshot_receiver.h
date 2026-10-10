@@ -38,6 +38,9 @@ typedef struct tr_raft_snapshot_receiver_config {
 
 typedef struct tr_raft_snapshot_receive_result {
     tr_raft_snapshot_ack_t ack;
+    /* True only after the snapshot is installed, including an accepted
+     * duplicate of an already installed transfer. A duplicate must not
+     * repeat the original install side effect or storage commit. */
     bool installed;
 } tr_raft_snapshot_receive_result_t;
 

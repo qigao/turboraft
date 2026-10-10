@@ -9,6 +9,24 @@ on:
       source_sha:
         required: true
         type: string
+      salts_native_candidate_version:
+        required: true
+        type: string
+      salts_utils_native_version:
+        required: true
+        type: string
+      flowmq_native_version:
+        required: true
+        type: string
+      chttp_native_version:
+        required: true
+        type: string
+
+env:
+  SaltsNativeCandidateVersion: ${{ inputs.salts_native_candidate_version }}
+  SaltsUtilsNativeVersion: ${{ inputs.salts_utils_native_version }}
+  FlowMQNativeVersion: ${{ inputs.flowmq_native_version }}
+  CHttpNativeVersion: ${{ inputs.chttp_native_version }}
 
 jobs:
   metadata:
@@ -57,60 +75,55 @@ jobs:
           echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
           echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - name: Verify unpinned first-party package inputs
+      - name: Verify exact ACE 2.3 native SDK contracts
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          import os
           import pathlib
           import re
           import xml.etree.ElementTree as ET
 
-          project = ET.parse("packaging/nuget/TurboRaft.Native.csproj").getroot()
-          expected = {
-              "Salts.Native",
-              "SaltsUtils.Native",
-              "FlowMQ.Native",
-              "CHttp.Native",
+          properties = {
+              "Salts.Native": "SaltsNativeCandidateVersion",
+              "SaltsUtils.Native": "SaltsUtilsNativeVersion",
+              "FlowMQ.Native": "FlowMQNativeVersion",
+              "CHttp.Native": "CHttpNativeVersion",
           }
-          refs = {}
-          for node in project.iter():
-              if not node.tag.endswith("PackageReference"):
-                  continue
-              package_id = node.attrib.get("Include")
-              if package_id in expected:
-                  refs.setdefault(package_id, []).append(node.attrib)
+          for package_id, key in properties.items():
+              value = os.environ.get(key, "")
+              if not value or "*" in value or "[" in value or "]" in value:
+                  raise SystemExit(f"{package_id}: exact candidate version {key} is required")
+          if os.environ["FlowMQNativeVersion"] != "1.3.0":
+              raise SystemExit("FlowMQ.Native must use exactly published version 1.3.0; no moving or older package")
+          candidate = os.environ["SaltsNativeCandidateVersion"]
+          if not re.fullmatch(r"2[.]3[.]0-ace[.]sha[0-9a-f]{40}", candidate):
+              raise SystemExit("Salts.Native must use one full-SHA 2.3.0-ace candidate, no stable 2.2 fallback")
 
-          for package_id in sorted(expected):
-              entries = refs.get(package_id, [])
+          project = ET.parse("packaging/nuget/TurboRaft.Native.csproj").getroot()
+          references = {}
+          for node in project.iter():
+              if node.tag.endswith("PackageReference") and node.attrib.get("Include") in properties:
+                  references.setdefault(node.attrib["Include"], []).append(node.attrib)
+          for package_id, key in properties.items():
+              entries = references.get(package_id, [])
               if len(entries) != 1:
-                  raise SystemExit(
-                      f"{package_id}: expected exactly one PackageReference, found {len(entries)}"
-                  )
-              entry = entries[0]
-              if entry.get("Version") != "*":
-                  raise SystemExit(
-                      f"{package_id}: producer package must use Version='*', got {entry.get('Version')!r}"
-                  )
-              if entry.get("PrivateAssets") != "all":
-                  raise SystemExit(
-                      f"{package_id}: producer package must remain build-only with PrivateAssets='all'"
-                  )
+                  raise SystemExit(f"{package_id}: exactly one PackageReference is required")
+              expected = f"[$({key})]"
+              if entries[0].get("Version") != expected or entries[0].get("PrivateAssets") != "all":
+                  raise SystemExit(f"{package_id}: must be an exact, build-private native package reference")
 
           cmake = pathlib.Path("CMakeLists.txt").read_text(encoding="utf-8")
-          for package in ("Salts", "SaltsUtils", "FlowMQ"):
-              match = re.search(
-                  rf"find_package\s*\(\s*{re.escape(package)}\b([^)]*)\)",
-                  cmake,
-                  re.IGNORECASE | re.DOTALL,
-              )
-              if match is None:
-                  raise SystemExit(f"{package}: find_package call not found")
-              tail = match.group(1)
-              if re.search(r"\bEXACT\b", tail, re.IGNORECASE):
-                  raise SystemExit(
-                      f"{package}: consumer CMake discovery must not pin an exact version: {match.group(0)!r}"
-                  )
+          config = pathlib.Path("cmake/TurboRaftConfig.cmake.in").read_text(encoding="utf-8")
+          if not re.search(r"find_package\s*\(\s*Salts\s+2[.]3[.]0\s+EXACT\b", cmake):
+              raise SystemExit("TurboRaft source must demand Salts 2.3.0 EXACT")
+          if not re.search(r"find_dependency\s*\(\s*Salts\s+2[.]3[.]0\s+EXACT\b", config):
+              raise SystemExit("TurboRaft installed consumer must demand Salts 2.3.0 EXACT")
+          if not re.search(r"find_package\s*\(\s*FlowMQ\s+1[.]3[.]0\s+EXACT\b", cmake):
+              raise SystemExit("TurboRaft full profile must demand FlowMQ 1.3.0 EXACT")
+          if not re.search(r"find_dependency\s*\(\s*FlowMQ\s+1[.]3[.]0\s+EXACT\b", config):
+              raise SystemExit("TurboRaft installed FlowMQ consumer must demand FlowMQ 1.3.0 EXACT")
           PY
 
   linux:
@@ -432,10 +445,10 @@ jobs:
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
               <PackageReference Include="TurboRaft.Native" Version="[${{ needs.metadata.outputs.package_version }}]" />
-              <PackageReference Include="Salts.Native" Version="*" />
-              <PackageReference Include="SaltsUtils.Native" Version="*" />
-              <PackageReference Include="FlowMQ.Native" Version="*" />
-              <PackageReference Include="CHttp.Native" Version="*" />
+              <PackageReference Include="Salts.Native" Version="[${{ inputs.salts_native_candidate_version }}]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[${{ inputs.salts_utils_native_version }}]" />
+              <PackageReference Include="FlowMQ.Native" Version="[${{ inputs.flowmq_native_version }}]" />
+              <PackageReference Include="CHttp.Native" Version="[${{ inputs.chttp_native_version }}]" />
             </ItemGroup>
           </Project>
           EOF
@@ -459,10 +472,10 @@ jobs:
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
               <PackageReference Include="TurboRaft.Native" Version="[${{ needs.metadata.outputs.package_version }}]" />
-              <PackageReference Include="Salts.Native" Version="*" />
-              <PackageReference Include="SaltsUtils.Native" Version="*" />
-              <PackageReference Include="FlowMQ.Native" Version="*" />
-              <PackageReference Include="CHttp.Native" Version="*" />
+              <PackageReference Include="Salts.Native" Version="[${{ inputs.salts_native_candidate_version }}]" />
+              <PackageReference Include="SaltsUtils.Native" Version="[${{ inputs.salts_utils_native_version }}]" />
+              <PackageReference Include="FlowMQ.Native" Version="[${{ inputs.flowmq_native_version }}]" />
+              <PackageReference Include="CHttp.Native" Version="[${{ inputs.chttp_native_version }}]" />
             </ItemGroup>
           </Project>
           "@ | Set-Content -LiteralPath $project

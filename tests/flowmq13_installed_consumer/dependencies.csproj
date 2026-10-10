@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Exact released SDKs used to qualify FlowMQ 1.3.0. This separate
+         compatibility lane never satisfies or replaces the immutable
+         Salts.Native 2.3.0-ace.sha<40hex> FULL SDK release gate. -->
+    <PackageReference Include="Salts.Native" Version="[2.3.0-rc.4]" />
+    <PackageReference Include="SaltsUtils.Native" Version="[4.3.0-rc.2]" />
+    <PackageReference Include="FlowMQ.Native" Version="[1.3.0]" />
+  </ItemGroup>
+</Project>

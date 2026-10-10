@@ -26,7 +26,7 @@ permissions:
 env:
   VCPKG_BASELINE: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
-  FLOWMQ_REF: main
+  FLOWMQ_REF: d532a27b30b7078b3a7575f8e5a2d370573fd145 # v1.3.0 qualified source SHA
   CHTTP_REF: master
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed
 
@@ -55,14 +55,25 @@ jobs:
         with:
           rid: linux-x64
           token: ${{ secrets.GITHUB_TOKEN }}
+          salts_native_candidate_version: ${{ vars.TURBORAFT_SALTS_ACE_CANDIDATE_VERSION }}
+          salts_utils_native_version: ${{ vars.TURBORAFT_SALTS_UTILS_NATIVE_VERSION }}
+          flowmq_native_version: '1.3.0'
+          chttp_native_version: ${{ vars.TURBORAFT_CHTTP_NATIVE_VERSION }}
 
-      - name: Checkout FlowMQ main
+      - name: Checkout exact FlowMQ v1.3.0 source
         uses: actions/checkout@v4
         with:
           repository: qigao/flowmq
           ref: ${{ env.FLOWMQ_REF }}
           path: .ci/src/flowmq
           persist-credentials: false
+
+      - name: Verify FlowMQ v1.3.0 release source pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C .ci/src/flowmq rev-parse HEAD)" = "$FLOWMQ_REF"
+          grep -F "VERSION 1.3.0" .ci/src/flowmq/CMakeLists.txt
 
       - name: Checkout CHttp master
         uses: actions/checkout@v4
@@ -164,7 +175,7 @@ jobs:
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
           cmake --build .ci/build/chttp --target install --parallel 2
 
-      - name: Build and install FlowMQ main
+      - name: Build and install FlowMQ v1.3.0
         shell: bash
         run: |
           set -euo pipefail

@@ -217,7 +217,9 @@ spec("raft snapshot receiver")
         check_equal(tr_raft_snapshot_receiver_handle(receiver, &chunk,
                                                        &result),
                      SALTS_OK);
-        check(!result.installed);
+        /* Repeated terminal chunk does not re-install but must preserve
+         * the already-durable truth of its full-size positive ACK. */
+        check(result.installed);
         check(result.ack.accepted);
         check_equal(result.ack.next_offset, 3U);
         check_equal(capture.calls, 1);

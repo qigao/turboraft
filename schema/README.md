@@ -15,8 +15,10 @@ tbe_compiler schema/turboraft_wire.schema --lang c `
   --source-output src/wire/generated/turboraft_wire_tbe.c
 ```
 
-Any schema change must increment the affected wire version, regenerate both files, and
-add old/new compatibility tests before release.
+Any schema change must increment the affected wire version and regenerate both
+files. Test current-version round trips, cross-node same-version framing,
+malformed/unknown-version rejection before mutation, and fault recovery.
+Historical v0.2.0 peer interoperation or downgrade coverage is not required.
 
 V3 sends at most `TR_RAFT_MAX_APPEND_ENTRIES` explicit entry slots. The public
 `tr_raft_wire_encode_version` is the capability-negotiated v2 encoder; there is
