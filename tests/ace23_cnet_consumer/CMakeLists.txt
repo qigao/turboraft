@@ -41,7 +41,8 @@ set_tests_properties(turboraft.ace23_cnet_identity_tls PROPERTIES TIMEOUT 35)
 
 add_executable(turboraft_ace23_peer_channel test_peer_channel.c)
 target_link_libraries(turboraft_ace23_peer_channel
-                      PRIVATE TurboRaft::CNet Salts::TinyTest)
+                      PRIVATE TurboRaft::CNet Salts::ComponentPlugin
+                              Salts::Plugin Salts::Platform Salts::TinyTest)
 target_compile_definitions(turboraft_ace23_peer_channel PRIVATE
     TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
 add_test(NAME turboraft.ace23_peer_channel
@@ -97,6 +98,12 @@ target_link_libraries(turboraft_ace23_dso_epoch
 target_compile_definitions(turboraft_ace23_dso_epoch PRIVATE
     TURBORAFT_ACE23_EPOCH_DSO_PATH="$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture>")
 add_dependencies(turboraft_ace23_dso_epoch
+                 turboraft_ace23_dso_epoch_fixture)
+# Reuse the same actual Salts::Plugin DSO in the real mTLS on_payload case:
+# NO alternate loader and NO duplicate callback/executor fixture.
+target_compile_definitions(turboraft_ace23_peer_channel PRIVATE
+    TURBORAFT_ACE23_EPOCH_DSO_PATH="$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture>")
+add_dependencies(turboraft_ace23_peer_channel
                  turboraft_ace23_dso_epoch_fixture)
 add_test(NAME turboraft.ace23_dso_epoch
          COMMAND turboraft_ace23_dso_epoch)
