@@ -252,8 +252,7 @@ spec("ACE 2.3 distinct Node ID CNet directory, strict fixed owner")
                 .channel_instance = 7U,
                 .authenticated_peer_node_id = 1U,
                 .group_id = 43U,
-                .connection_slot = 1U,
-                .connection_generation = 4U
+                .connection_token = UINT64_C(4294967300)
             };
             check_equal(tr_raft_cnet_peer_directory_send_chunk_completion(
                 &f.directory, &ack), SALTS_ECANCELED);
