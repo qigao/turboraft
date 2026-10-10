@@ -2,6 +2,7 @@
 #include <turboraft/raft_cnet_channel.h>
 #include <cmeta_error.h>
 #include <cmeta_fs.h>
+#include <salts/clock.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -112,8 +113,12 @@ static cnet_client_config net_config(void)
         .max_send_bytes = 4096U,
         .receive_buffer_bytes = 4096U,
         .connect_timeout_ms = 2000U,
-        .read_timeout_ms = 2000U,
-        .write_timeout_ms = 2000U,
+        /* Node1 deliberately acknowledges no Raft messages for several
+         * elections while its TLS connection stays live. This is a FINITE
+         * fixture lifetime bound, not an implicit reconnect or retry.
+         * Heartbeats to Node3 are driven by real elapsed time below. */
+        .read_timeout_ms = 15000U,
+        .write_timeout_ms = 5000U,
         .tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES,
         .tls_handshake_timeout_ms = 2000U
     };
@@ -384,22 +389,32 @@ static void report_drive_state(quorum_fixture_t *f,
 static int drive_until(quorum_fixture_t *f, tr_raft_index_t index,
                        int include_one)
 {
-    unsigned attempts;
+    const uint64_t started_ms = cmeta_monotonic_ms();
+    uint64_t next_heartbeat_ms = started_ms + UINT64_C(100);
+    unsigned attempts = 0U;
     int rc;
+    /* An IOCP poll iteration and a Kqueue/epoll poll iteration do NOT take
+     * the same wall-clock duration. Logical Raft ticks must be driven by
+     * elapsed monotonic time, not 120 arbitrary loop iterations.
+     * 8-s wall-clock + 11000-poll bounds stay fail-closed on every OS. */
     for (attempts = 0U; attempts < MAX_PROGRESS; ++attempts) {
+        uint64_t now_ms;
         rc = network_progress(f);
         if (rc != SALTS_OK) {
             report_drive_state(f,index,include_one,attempts,rc);
             return rc;
         }
         if (status_is(f,index,include_one)) return SALTS_OK;
-        /* Explicit Raft protocol heartbeat, not an application replay. */
-        if (attempts % 120U == 119U) {
+        now_ms = cmeta_monotonic_ms();
+        if (now_ms - started_ms >= UINT64_C(8000))
+            break;
+        if (now_ms >= next_heartbeat_ms) {
             rc = core_tick(f,1U,1U);
             if (rc != SALTS_OK) {
                 report_drive_state(f,index,include_one,attempts,rc);
                 return rc;
             }
+            next_heartbeat_ms = now_ms + UINT64_C(100);
         }
     }
     report_drive_state(f,index,include_one,attempts,SALTS_ETIMEDOUT);
