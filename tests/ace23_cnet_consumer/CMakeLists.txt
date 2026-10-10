@@ -114,9 +114,11 @@ add_dependencies(turboraft_ace23_dso_epoch
 # Reuse the same actual Salts::Plugin DSO in the real mTLS on_payload case:
 # NO alternate loader and NO duplicate callback/executor fixture.
 target_compile_definitions(turboraft_ace23_peer_channel PRIVATE
-    TURBORAFT_ACE23_EPOCH_DSO_PATH="$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture>")
+    TURBORAFT_ACE23_EPOCH_DSO_PATH="$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture>"
+    TURBORAFT_ACE23_EPOCH_DSO_B_PATH="$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture_b>")
 add_dependencies(turboraft_ace23_peer_channel
-                 turboraft_ace23_dso_epoch_fixture)
+                 turboraft_ace23_dso_epoch_fixture
+                 turboraft_ace23_dso_epoch_fixture_b)
 add_test(NAME turboraft.ace23_dso_epoch
          COMMAND turboraft_ace23_dso_epoch)
 set_tests_properties(turboraft.ace23_dso_epoch PROPERTIES TIMEOUT 30)
