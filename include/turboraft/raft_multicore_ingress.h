@@ -38,6 +38,22 @@ extern "C" {
  * It borrows Runtime and must outlive all callback invocations, then be
  * destroyed only AFTER CNet producers are quiesced and BEFORE Runtime
  * is destroyed. Destroy never implicitly stops/drains the Runtime.
+ *
+ * REQUIRED terminal host protocol (not an ingress-owned synchronization
+ * mechanism):
+ *  1. Prevent any new Channel/Directory callback from borrowing context.
+ *  2. Drive each CNet Channel through its terminal owner callback and
+ *     complete/join the CNet progress Owner(s). A mere stop request or
+ *     socket close is not proof that on_payload has returned.
+ *  3. Only after every in-flight on_payload has returned, request Multicore
+ *     stop; settle/take every already accepted Group completion and join the
+ *     Raft Group Owners.
+ *  4. Destroy ingress before destroying the borrowed Multicore Runtime.
+ * Callback context, directory and TLS identities must remain alive until
+ * the end of step 2. Concurrent destroy/receive is undefined and must NOT
+ * be tested by invoking use-after-free; establish a producer join barrier.
+ * Future generation fencing/terminal ack must be a separately verified
+ * host-level protocol, not a second ingress scheduler or queue.
  */
 typedef struct tr_raft_multicore_ingress tr_raft_multicore_ingress_t;
 
