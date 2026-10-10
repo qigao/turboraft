@@ -7,6 +7,20 @@
 
 #include <threads.h>
 
+/* This source is built into two *different* installed consumer DSOs.
+ * The variant changes the native image's Component data and Plugin ID;
+ * each image owns separate callback atomics and query-local BSS. */
+#ifndef TURBORAFT_ACE23_DSO_VARIANT
+#define TURBORAFT_ACE23_DSO_VARIANT 1
+#endif
+#if TURBORAFT_ACE23_DSO_VARIANT == 1
+#define TR_DSO_PLUGIN_ID "turboraft.ace23.host-epoch-fixture.a"
+#elif TURBORAFT_ACE23_DSO_VARIANT == 2
+#define TR_DSO_PLUGIN_ID "turboraft.ace23.host-epoch-fixture.b"
+#else
+#error "Only two explicit ABI5 provider images A and B are admitted"
+#endif
+
 /* This entire image is *actually unloaded and reloaded* by Salts::Plugin.
  * Its query-time serial intentionally resets after every successful dlclose.
  * The host-owned ComponentPlugin generation does NOT live in this image. */
@@ -58,7 +72,7 @@ static void CMETA_PLUGIN_CALL tr_plugin_destroy(void *self)
 cmeta_component(TurboRaftDsoEpochProvider,
     cmeta_provides(tr_ace23_dso_callback));
 
-static int tr_component_value = 23;
+static int tr_component_value = 23 + TURBORAFT_ACE23_DSO_VARIANT;
 
 static cmeta_status SALTS_COMPONENT_CALL tr_component_create(
     void *context,
@@ -147,8 +161,8 @@ static const cmeta_plugin_export tr_provider_exports[] = {{
 static cmeta_plugin_manifest tr_manifest = {
     .struct_size = CMETA_PLUGIN_MANIFEST_SIZE,
     .abi_version = CMETA_PLUGIN_ABI_VERSION,
-    .plugin_id = "turboraft.ace23.host-epoch-fixture",
-    .version = {1u, 0u, 0u},
+    .plugin_id = TR_DSO_PLUGIN_ID,
+    .version = {1u, (uint32_t)TURBORAFT_ACE23_DSO_VARIANT, 0u},
     .exports = tr_provider_exports,
     .export_count = sizeof(tr_provider_exports) / sizeof(tr_provider_exports[0]),
     .self = &tr_callback_state,
