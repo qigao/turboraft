@@ -98,9 +98,18 @@ and SaltsUtils.Native 4.3.0-rc.1 are an explicit, exact **testing**
 baseline. This does not certify the long-lived Draft ACE pattern branch
 or make a final stable SDK available. Native package restores require explicit exact
 first-party version properties; CI must verify all package ABI/SONAME
-provenance rather than assuming exact version numbers alone prove linkage. FlowMQ must be built against the same
-Salts/SaltsUtils generation; an older SDK that imports `Salts::TbeSchema` is
-incompatible with SaltsUtils 4.2.
+provenance rather than assuming exact version numbers alone prove linkage. **The full profile and the installed `TurboRaft::FlowMQ` consumer now
+require FlowMQ 1.3.0 EXACT**; the transitional private NuGet build reference
+is pinned to `FlowMQ.Native [1.3.0]`, and the full-stack source checkout
+uses the release-qualified commit
+`d532a27b30b7078b3a7575f8e5a2d370573fd145` (not floating `main`).
+[FlowMQ v1.3.0](https://github.com/qigao/flowmq/releases/tag/v1.3.0)
+was qualified with Salts.Native 2.3.0-rc.4 and SaltsUtils.Native 4.3.0-rc.2.
+Those resolved producer versions are release provenance, **not** permission
+to replace TurboRaft's separately required full-SHA Salts 2.3 ACE candidate
+or skip whole-stack ABI/SONAME qualification. No FlowMQ fallback or removal
+is permitted until the replacement passes the existing parity gates. An
+older SDK that imports `Salts::TbeSchema` is incompatible with SaltsUtils 4.2.
 
 Third-party dependencies use the manifest and the shared
 `qigao/vcpkg-cache` toolchain. The registry reference and baseline are pinned

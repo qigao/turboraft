@@ -129,7 +129,7 @@ if(TURBORAFT_PROFILE_FULL)
   file(TO_CMAKE_PATH "$ENV{FLOWMQ_ROOT}" TURBORAFT_FLOWMQ_ROOT_PATH)
   unset(FlowMQ_DIR CACHE)
   unset(FlowMQ_DIR)
-  find_package(FlowMQ 1.2.1 CONFIG REQUIRED
+  find_package(FlowMQ 1.3.0 EXACT CONFIG REQUIRED
                PATHS "${TURBORAFT_FLOWMQ_ROOT_PATH}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
   if(NOT TARGET Salts::CNet)
     message(FATAL_ERROR "TurboRaft full profile requires Salts::CNet")

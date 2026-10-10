@@ -95,6 +95,8 @@ jobs:
               value = os.environ.get(key, "")
               if not value or "*" in value or "[" in value or "]" in value:
                   raise SystemExit(f"{package_id}: exact candidate version {key} is required")
+          if os.environ["FlowMQNativeVersion"] != "1.3.0":
+              raise SystemExit("FlowMQ.Native must use exactly published version 1.3.0; no moving or older package")
           candidate = os.environ["SaltsNativeCandidateVersion"]
           if not re.fullmatch(r"2[.]3[.]0-ace[.]sha[0-9a-f]{40}", candidate):
               raise SystemExit("Salts.Native must use one full-SHA 2.3.0-ace candidate, no stable 2.2 fallback")
@@ -118,6 +120,10 @@ jobs:
               raise SystemExit("TurboRaft source must demand Salts 2.3.0 EXACT")
           if not re.search(r"find_dependency\s*\(\s*Salts\s+2[.]3[.]0\s+EXACT\b", config):
               raise SystemExit("TurboRaft installed consumer must demand Salts 2.3.0 EXACT")
+          if not re.search(r"find_package\s*\(\s*FlowMQ\s+1[.]3[.]0\s+EXACT\b", cmake):
+              raise SystemExit("TurboRaft full profile must demand FlowMQ 1.3.0 EXACT")
+          if not re.search(r"find_dependency\s*\(\s*FlowMQ\s+1[.]3[.]0\s+EXACT\b", config):
+              raise SystemExit("TurboRaft installed FlowMQ consumer must demand FlowMQ 1.3.0 EXACT")
           PY
 
   linux:

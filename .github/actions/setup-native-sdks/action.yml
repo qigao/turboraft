@@ -50,6 +50,9 @@ runs:
             throw "Exact first-party native SDK version required: $key"
           }
         }
+        if ($env:FlowMQNativeVersion -cne '1.3.0') {
+          throw "FlowMQ.Native must be exactly 1.3.0; no fallback or moving main"
+        }
         $pins = @(
           "-p:SaltsNativeCandidateVersion=$env:SaltsNativeCandidateVersion"
           "-p:SaltsUtilsNativeVersion=$env:SaltsUtilsNativeVersion"

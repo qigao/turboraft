@@ -36,6 +36,6 @@ jobs:
       source_sha: ${{ github.event.pull_request.head.sha }}
       salts_native_candidate_version: ${{ vars.TURBORAFT_SALTS_ACE_CANDIDATE_VERSION }}
       salts_utils_native_version: ${{ vars.TURBORAFT_SALTS_UTILS_NATIVE_VERSION }}
-      flowmq_native_version: ${{ vars.TURBORAFT_FLOWMQ_NATIVE_VERSION }}
+      flowmq_native_version: '1.3.0'
       chttp_native_version: ${{ vars.TURBORAFT_CHTTP_NATIVE_VERSION }}
     secrets: inherit

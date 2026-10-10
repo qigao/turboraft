@@ -19,8 +19,8 @@
            Text="An immutable Salts.Native 2.3.0 ACE SHA candidate version is required." />
     <Error Condition="'$(SaltsUtilsNativeVersion)' == ''"
            Text="Exact SaltsUtils.Native version is required." />
-    <Error Condition="'$(FlowMQNativeVersion)' == ''"
-           Text="Exact FlowMQ.Native version is required until CNet replacement passes." />
+    <Error Condition="'$(FlowMQNativeVersion)' != '1.3.0'"
+           Text="FlowMQ.Native 1.3.0 is required exactly until CNet replacement passes; no older or wildcard version." />
     <Error Condition="'$(CHttpNativeVersion)' == ''"
            Text="Exact CHttp.Native version is required." />
   </Target>
