@@ -89,16 +89,28 @@ set_tests_properties(turboraft.ace23_owner_ingress PROPERTIES TIMEOUT 20)
 # The host-side published ComponentPlugin runtime survives DSO reload.
 add_library(turboraft_ace23_dso_epoch_fixture MODULE
             test_dso_epoch_fixture.c)
+target_compile_definitions(turboraft_ace23_dso_epoch_fixture
+                           PRIVATE TURBORAFT_ACE23_DSO_VARIANT=1)
 target_link_libraries(turboraft_ace23_dso_epoch_fixture
+                      PRIVATE Salts::Plugin Salts::ComponentPlugin)
+# Second physically distinct DSO image/manifest, not an in-memory fake
+# generation of the first loaded module. Plugin owns both native handles.
+add_library(turboraft_ace23_dso_epoch_fixture_b MODULE
+            test_dso_epoch_fixture.c)
+target_compile_definitions(turboraft_ace23_dso_epoch_fixture_b
+                           PRIVATE TURBORAFT_ACE23_DSO_VARIANT=2)
+target_link_libraries(turboraft_ace23_dso_epoch_fixture_b
                       PRIVATE Salts::Plugin Salts::ComponentPlugin)
 add_executable(turboraft_ace23_dso_epoch test_dso_epoch.c)
 target_link_libraries(turboraft_ace23_dso_epoch
                       PRIVATE TurboRaft::CNet Salts::ComponentPlugin
                               Salts::Plugin Salts::Platform Salts::TinyTest)
 target_compile_definitions(turboraft_ace23_dso_epoch PRIVATE
-    TURBORAFT_ACE23_EPOCH_DSO_PATH="$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture>")
+    TURBORAFT_ACE23_EPOCH_DSO_PATH="$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture>"
+    TURBORAFT_ACE23_EPOCH_DSO_B_PATH="$<TARGET_FILE:turboraft_ace23_dso_epoch_fixture_b>")
 add_dependencies(turboraft_ace23_dso_epoch
-                 turboraft_ace23_dso_epoch_fixture)
+                 turboraft_ace23_dso_epoch_fixture
+                 turboraft_ace23_dso_epoch_fixture_b)
 # Reuse the same actual Salts::Plugin DSO in the real mTLS on_payload case:
 # NO alternate loader and NO duplicate callback/executor fixture.
 target_compile_definitions(turboraft_ace23_peer_channel PRIVATE
