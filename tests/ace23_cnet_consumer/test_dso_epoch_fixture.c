@@ -14,7 +14,7 @@ static cmeta_plugin_status CMETA_PLUGIN_CALL tr_plugin_start(void *self)
 {
     tr_ace23_dso_callback_state *state = self;
     atomic_store_explicit(&state->stop_requested, false, memory_order_release);
-    atomic_store_explicit(&state->callback_entered, false, memory_order_release);
+    atomic_store_explicit(&state->callback_entered, 0U, memory_order_release);
     atomic_store_explicit(&state->callback_completed, 0U, memory_order_release);
     return CMETA_PLUGIN_OK;
 }
@@ -28,18 +28,18 @@ static cmeta_plugin_status CMETA_PLUGIN_CALL tr_plugin_request_stop(void *self)
 
 static bool CMETA_PLUGIN_CALL tr_plugin_is_quiescent(const void *self)
 {
-    const tr_ace23_dso_callback_state *state = self;
+    tr_ace23_dso_callback_state *state = (tr_ace23_dso_callback_state *)(void *)self;
 
     /* Direct DSO callback invoked under the caller's real Plugin lease.
      * The host request_stop races this callback without racing dlclose:
      * unload must return BUSY until this callback returns and lease drops. */
-    atomic_store_explicit(
-        (atomic_bool *)&state->callback_entered, true, memory_order_release);
+    atomic_fetch_add_explicit(
+        &state->callback_entered, 1U, memory_order_release);
     while (!atomic_load_explicit(
                &state->stop_requested, memory_order_acquire))
         thrd_yield();
     atomic_fetch_add_explicit(
-        (atomic_uint *)&state->callback_completed, 1U, memory_order_release);
+        &state->callback_completed, 1U, memory_order_release);
     return true;
 }
 
