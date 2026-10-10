@@ -344,3 +344,26 @@ foreach(pressure IN ITEMS item byte)
 endforeach()
 target_compile_definitions(turboraft_flowmq13_cnet_byte_rejoin PRIVATE
     TURBORAFT_TEST_TLS_BYTE_PRESSURE=1)
+
+
+# A distinct, real-wire middle gate between 3-Core deterministic simulation
+# and three independent running Raft server processes. Three genuinely
+# separate RaftCore objects exchange votes/Append requests through two
+# independently authenticated CNet TLS channels (Node1<->Node2,
+# Node3<->Node2). Node2+Node3 form a true 2-of-3 Core voting/commit quorum
+# while Node1's test receive callback is muted; Node1's Core is destroyed,
+# recreated from the bounded persisted Ready-value fixture, then catches
+# up *over actual Node2->Node1 TLS packets* with exact log equality.
+# The 3 Cores run in ONE test process with TEST-IN-MEMORY durable values:
+# not real 3-machine WAL/IO isolation or full meshed CNet peer service.
+add_executable(turboraft_flowmq13_cnet_core_quorum
+               test_cnet_two_link_quorum.c)
+target_compile_definitions(turboraft_flowmq13_cnet_core_quorum PRIVATE
+    TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+target_link_libraries(turboraft_flowmq13_cnet_core_quorum PRIVATE
+    TurboRaft::CNet TurboRaft::Core Salts::Platform)
+add_test(NAME turboraft.flowmq13.cnet_core_quorum
+         COMMAND turboraft_flowmq13_cnet_core_quorum)
+set_tests_properties(turboraft.flowmq13.cnet_core_quorum
+                     PROPERTIES TIMEOUT 65
+                                LABELS "cnet-raft-quorum-real-wire")
