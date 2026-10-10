@@ -520,6 +520,54 @@ not real CNet connections or multi-host quorum. The real certified TLS,
 WAL and process-SIGKILL tests remain distinct and must not be combined
 into a false claim of automatic multi-node convergence.
 
+### Certified CNet wire quorum: positive and fail-closed negative gates
+
+Two installed-full-profile executables now exercise **three independent
+`RaftCore` instances** against **two actual mutual-TLS CNet connections**
+between Node2 and certified Node1/Node3. The test uses the installed Core and
+CNet SDKs, real Raft binary envelopes, reciprocal HELLO/ACK and certificate
+identities, instead of routing voted/replicated Ready messages directly
+through a simulated delivery function:
+
+- `turboraft.flowmq13.cnet_core_quorum`: the Node1 Core is deliberately
+  prevented from *processing* its genuine TLS messages in its test callback,
+  while Node2 receives Node3's real wire vote and authentic Append ACK.
+  Node2+Node3 must elect a 2-of-3 Leader/majority and commit three commands.
+  The Node1 Core is destroyed and recreated from its persisted **TEST
+  in-memory Ready values**, resumes handling certified TLS frames and
+  must converge exactly on three ordered log entries plus applied/commit
+  indices. CNet sends and ACKs are real; there is no direct
+  `RaftCore.step` forwarding for remote messages.
+- `turboraft.flowmq13.cnet_core_quorum_loss`: after that successful
+  2-of-3 replication, the test also temporarily prevents Node3's
+  application callback from stepping otherwise-valid certified TLS
+  AppendEntries while Node1 remains silent. Node2 may **append index4
+  locally**, but **must not advance `commit_index` or `applied_index`
+  from 3 without a second voter**. Restoring Node3 allows Core-protocol
+  tick/reprobe and a new **actual TLS Append ACK** to commit index4.
+  Node1 subsequently rejoins and must converge byte-for-byte on four
+  entries, commit4 and applied4. There is **no host-level CNet message or
+  storage-settlement retry**. Muting a test *Core callback* is NOT the
+  same as a physical packet loss / OS link failure.
+
+The CNet test harness has finite 15-second TLS read and 5-second write
+timeouts, an 8-second bounded Raft progress phase, and drives heartbeats
+using **monotonic elapsed time** (100-ms ticks), not arbitrary IOCP vs
+Kqueue/epoll poll counts. A failure reports only bounded non-secret
+counters (terms, commit indices, wire message and ACK counts, Channel
+phase/errors). These two CTests each run in **25 fresh OS processes per
+host** under the exact released FlowMQ 1.3.0 full SDK conformance profile,
+in addition to the prior fixed Group Ownership and WAL crash suites.
+
+**Evidence boundary:** all three Core objects still share **one process**
+and a bounded test-only in-memory Ready store; there are only two
+bidirectional TLS links centered on Node2. It is stronger than
+`three_node_core`'s simulated transport, but it does **not** prove three
+isolated server processes / separate on-disk WAL writers, a full mesh,
+real physical network partition healing, automatic membership migration,
+or replacement parity for FlowMQ. All those remain hard gates before
+deleting FlowMQ.Native 1.3.0 or merging PR #148.
+
 ## 6. New-only packaging and gates
 
 - Single exact `Salts.Native 2.3.0-ace.sha<FULL_SHA>` candidate only after
