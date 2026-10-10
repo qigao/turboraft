@@ -17,6 +17,9 @@
 #include <cmeta_crypto.h>
 #include <cmeta_fs.h>
 #include <stdlib.h>
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+#include "raft_wal_storage_internal.h" /* only test, never installed ABI */
+#endif
 #endif
 
 #ifndef TURBORAFT_ACE23_FIXTURE_DIR
@@ -60,6 +63,9 @@ typedef struct owner_raft_probe {
     tr_raft_wal_storage_t *snapshot_wal; /* owned by Group 103 thread */
     tr_raft_snapshot_receiver_t *snapshot_receiver;
     size_t installed_snapshots;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+    size_t snapshot_write_faults;
+#endif
 #endif
 } owner_raft_probe;
 
@@ -279,6 +285,23 @@ static int durable_snapshot_install(
     if (result == SALTS_OK) ++probe->installed_snapshots;
     return result;
 }
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+/* Inject one real WalStorage snapshot staging write failure. The production
+ * provider is otherwise unchanged; no public API or environment switches. */
+static int durable_snapshot_fail_write(
+    void *context, tr_raft_wal_io_phase_t phase,
+    uint64_t ordinal, size_t *inout_size)
+{
+    owner_raft_probe *probe = (owner_raft_probe *)context;
+    (void)inout_size;
+    if (probe != NULL && phase == TR_RAFT_WAL_IO_SNAPSHOT_WRITE &&
+        ordinal == 1U) {
+        ++probe->snapshot_write_faults;
+        return SALTS_EIO;
+    }
+    return SALTS_OK;
+}
+#endif
 #endif
 
 static int owner_group_open(void *context, tr_raft_owner_t *owner,
@@ -309,6 +332,20 @@ static int owner_group_open(void *context, tr_raft_owner_t *owner,
         wal.create_if_missing = true;
         rc = tr_raft_wal_storage_open(&wal, &probe->snapshot_wal);
         if (rc != SALTS_OK) return rc;
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_FAILURE
+        {
+            tr_raft_wal_io_fault_provider_t faults = {0};
+            faults.before_io = durable_snapshot_fail_write;
+            faults.context = probe;
+            rc = tr_raft_wal_storage_set_io_fault_provider_for_test(
+                probe->snapshot_wal, &faults);
+            if (rc != SALTS_OK) {
+                (void)tr_raft_wal_storage_close(probe->snapshot_wal);
+                probe->snapshot_wal = NULL;
+                return rc;
+            }
+        }
+#endif
         receiver.self_id = 2U;
         receiver.max_snapshot_bytes = 1024U;
         receiver.max_buffered_snapshot_bytes = 1024U;
@@ -405,11 +442,9 @@ static int owner_receive_chunk(
         receivers.snapshot = probe->snapshot_receiver;
         result = tr_raft_multicore_chunk_receivers_handle(
             &receivers, payload, out);
+        ++probe->chunk_calls;
+        probe->chunk_bytes += payload->data.snapshot_chunk.data_length;
         if (result != SALTS_OK) probe->chunk_error = 1;
-        else {
-            probe->chunk_bytes += payload->data.snapshot_chunk.data_length;
-            ++probe->chunk_calls;
-        }
         return result;
     }
 #endif
