@@ -128,6 +128,7 @@ static int fixture_init(directory_fixture *f)
         cfg.channel.identity = &f->identity_policy;
         cfg.channel.handshake = test_hello();
         cfg.channel.first_outbound_message_id = 1U;
+        cfg.channel.host_module_generation = UINT64_C(90010001);
         cfg.channel.on_payload = reject_unexpected_data;
         cfg.expected_peer_node_id = node_id;
         cfg.uri = "tls://127.0.0.1:38921";
@@ -249,6 +250,7 @@ spec("ACE 2.3 distinct Node ID CNet directory, strict fixed owner")
             ack.value.chunk.ack.data.stream_id = 9U;
             ack.value.chunk.ack.data.accepted = true;
             ack.reply_origin = (tr_raft_transport_reply_origin_t){
+                .host_module_generation = UINT64_C(90010001),
                 .channel_instance = 7U,
                 .authenticated_peer_node_id = 1U,
                 .group_id = 43U,
