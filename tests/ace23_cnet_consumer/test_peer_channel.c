@@ -1275,18 +1275,88 @@ static int peer_case_run(int mode)
             }
         }
         if (result == SALTS_OK && mode == PEER_DSO_AB_PUBLICATION) {
-            /* Provider B is active in its own native image while old
-             * CNet Channel A remains ACTIVE/borrowed until terminal. */
-            if (!atomic_load_explicit(
+            /* B has a physically distinct certified TLS connection and
+             * Component provider, not only a Plugin callback on another
+             * worker. A's old Channel/scope still exist until terminal. */
+            if (!connected_b || !accepted_b || !sent_b ||
+                f.client_channel_b == NULL || f.server_channel_b == NULL ||
+                !atomic_load_explicit(
                     &dso.b_ready, memory_order_acquire) ||
                 dso.generation.state !=
                     SALTS_COMPONENT_PLUGIN_GENERATION_DRAINING ||
+                dso.network_callbacks_b != 1U ||
+                dso.captured_origin_b.host_module_generation !=
+                    salts_component_plugin_scope_generation_id(&dso.scope_b) ||
+                dso.captured_origin_b.host_module_generation !=
+                    UINT64_C(90010002) ||
+                dso.captured_origin_b.channel_instance == 0U ||
+                dso.captured_origin_b.authenticated_peer_node_id != 1U ||
+                dso.captured_origin_b.group_id != 42U ||
+                dso.captured_origin_b.connection_token == 0U ||
+                dso.captured_origin_b.channel_instance ==
+                    dso.captured_origin.channel_instance ||
                 atomic_load_explicit(
                     &dso.module_b->callback_entered, memory_order_acquire) != 1U ||
                 atomic_load_explicit(
-                    &dso.module_b->callback_completed, memory_order_acquire) != 0U) {
+                    &dso.module_b->callback_completed, memory_order_acquire) != 1U ||
+                f.client_sink_b.violation || f.server_sink_b.violation ||
+                f.client_sink_b.count != 1U || f.server_sink_b.count != 1U) {
                 result = SALTS_EPROTO;
-                error_stage = "distinct provider B did not publish under live CNet A";
+                error_stage = "distinct Provider B TLS callback/generation not qualified";
+                goto cleanup;
+            }
+            for (iteration = 0U; iteration < 1000U; ++iteration) {
+                PEER_TRY(cnet_client_poll(&f.client, 1U, &events));
+                PEER_TRY(cnet_client_poll(&f.server, 1U, &events));
+                PEER_TRY(tr_raft_cnet_channel_get_status(
+                    f.client_channel_b, &cs_b));
+                PEER_TRY(tr_raft_cnet_channel_get_status(
+                    f.server_channel_b, &ss_b));
+                if (cs_b.payloads_completed == 1U &&
+                    ss_b.payloads_completed == 1U)
+                    break;
+            }
+            if (iteration == 1000U ||
+                cs_b.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+                ss_b.phase != TR_RAFT_CNET_CHANNEL_ACTIVE ||
+                cs_b.payloads_received != 1U ||
+                ss_b.payloads_received != 1U ||
+                cs_b.payloads_admitted != 1U ||
+                ss_b.payloads_admitted != 1U ||
+                cs_b.payloads_canceled != 0U ||
+                ss_b.payloads_canceled != 0U) {
+                result = SALTS_EPROTO;
+                error_stage = "Provider B authenticated TLS send/receive incomplete";
+                goto cleanup;
+            }
+            {
+                tr_raft_multicore_completion_t old_ack = {0};
+                const size_t admitted_before = ss_b.payloads_admitted;
+                old_ack.request_id = UINT64_C(99);
+                old_ack.operation = TR_RAFT_MULTICORE_RECEIVE_CHUNK;
+                old_ack.result = SALTS_OK;
+                old_ack.reply_origin = dso.captured_origin;
+                old_ack.value.chunk.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK;
+                old_ack.value.chunk.ack_valid = true;
+                old_ack.value.chunk.ack.data.accepted = true;
+                if (tr_raft_cnet_channel_send_chunk_completion(
+                        f.server_channel_b, &old_ack) != SALTS_ECANCELED ||
+                    tr_raft_cnet_channel_send_chunk_completion(
+                        f.server_channel, &(tr_raft_multicore_completion_t){
+                            .request_id = UINT64_C(100),
+                            .operation = TR_RAFT_MULTICORE_RECEIVE_CHUNK,
+                            .result = SALTS_OK,
+                            .reply_origin = dso.captured_origin_b,
+                            .value.chunk.kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK,
+                            .value.chunk.ack_valid = true
+                        }) != SALTS_ECANCELED ||
+                    tr_raft_cnet_channel_get_status(
+                        f.server_channel_b, &ss_b) != SALTS_OK ||
+                    ss_b.payloads_admitted != admitted_before) {
+                    result = SALTS_EPROTO;
+                    error_stage = "stale A/B cross-generation TLS ACK consumed credits";
+                    goto cleanup;
+                }
             }
         }
         if (result == SALTS_OK &&
