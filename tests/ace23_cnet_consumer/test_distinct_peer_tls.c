@@ -1057,10 +1057,8 @@ static int run_two_distinct_peers(int forge_node_three)
                     chunk_completion.request_id != binding->chunk_request_id ||
                     chunk_completion.reply_origin.channel_instance !=
                         binding->chunk_origin.channel_instance ||
-                    chunk_completion.reply_origin.connection_slot !=
-                        binding->chunk_origin.connection_slot ||
-                    chunk_completion.reply_origin.connection_generation !=
-                        binding->chunk_origin.connection_generation ||
+                    chunk_completion.reply_origin.connection_token !=
+                        binding->chunk_origin.connection_token ||
                     chunk_completion.reply_origin.group_id != 100U + NODE_IDS[i] ||
                     chunk_completion.reply_origin.authenticated_peer_node_id !=
                         NODE_IDS[i] ||
