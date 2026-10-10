@@ -41,6 +41,14 @@ typedef struct owner_raft_probe {
     size_t egress_replies;
 } owner_raft_probe;
 
+/* CNet's verified inbound callback borrows one exact Channel generation.
+ * Preserve that pointer until the enclosing CNet Owner has quiesced. */
+struct identity_fixture;
+typedef struct verified_payload_context {
+    struct identity_fixture *fixture;
+    tr_raft_cnet_channel_t *channel;
+} verified_payload_context;
+
 typedef struct identity_fixture {
     tr_raft_multicore_t *raft_owners;
     tr_raft_multicore_ingress_t *owner_ingress;
@@ -58,6 +66,7 @@ typedef struct identity_fixture {
     tr_raft_cnet_peer_directory_t directory;
     tr_raft_group_id_t admitted_groups[LINK_COUNT];
     tr_raft_cnet_directory_ingress_t ingress[LINK_COUNT];
+    verified_payload_context verified_payloads[LINK_COUNT];
     cnet_tls_client_config directory_profiles[LINK_COUNT];
     tr_raft_cnet_channel_t *outbound[LINK_COUNT];
     tr_raft_cnet_channel_t *inbound[LINK_COUNT];
@@ -79,6 +88,7 @@ typedef struct identity_fixture {
     size_t server_payload_completed;
     unsigned stop_from_payload_checks;
     int stop_from_payload_result;
+    int destroy_from_payload_result;
     int clients_live, server_live, listener_live, server_tls_live;
     int directory_manager_live;
     int accepted;
@@ -288,7 +298,8 @@ static int start_raft_group_owners(identity_fixture *f)
 static int on_server_payload_and_forward(
     void *context, const tr_raft_transport_payload_t *payload)
 {
-    identity_fixture *fixture = (identity_fixture *)context;
+    verified_payload_context *binding = (verified_payload_context *)context;
+    identity_fixture *fixture = binding->fixture;
     int result;
 
     ++fixture->server_payload_inflight;
@@ -305,6 +316,11 @@ static int on_server_payload_and_forward(
          * this callback's borrowed Directory/ingress context. */
         fixture->stop_from_payload_result =
             cnet_client_stop(&fixture->server, 0U);
+        /* The callback owns this exact Channel generation. Even though
+         * transport is ACTIVE, its destruction must fail while the CNet
+         * receive callback still borrows its context and transport. */
+        fixture->destroy_from_payload_result =
+            tr_raft_cnet_channel_destroy(binding->channel);
         ++fixture->stop_from_payload_checks;
     }
     --fixture->server_payload_inflight;
@@ -625,12 +641,14 @@ static int run_two_distinct_peers(int forge_node_three)
                 f.ingress[position].directory = &f.directory;
                 f.ingress[position].on_payload =
                     on_server_payload_and_forward;
-                f.ingress[position].context = &f;
+                f.verified_payloads[position].fixture = &f;
+                f.ingress[position].context = &f.verified_payloads[position];
                 verified.on_payload = tr_raft_cnet_peer_directory_receive;
                 verified.payload_context = &f.ingress[position];
                 TRY_STAGE(tr_raft_cnet_channel_create(
                     &verified, &f.inbound[position]));
                 f.ingress[position].channel = f.inbound[position];
+                f.verified_payloads[position].channel = f.inbound[position];
 
                 /* Even a known Node/Group cannot enter before this exact
                  * TLS Channel has successfully negotiated reciprocal ACK. */
@@ -853,10 +871,11 @@ static int run_two_distinct_peers(int forge_node_three)
     if (result == SALTS_OK &&
         (f.stop_from_payload_checks != 1U ||
          f.stop_from_payload_result != SALTS_EBUSY ||
+         f.destroy_from_payload_result != SALTS_EBUSY ||
          f.server_payload_inflight != 0U ||
          f.server_payload_completed != (forge_node_three ? 1U : LINK_COUNT))) {
         result = SALTS_EPROTO;
-        failed_stage = "real CNet callback must reject reentrant stop";
+        failed_stage = "real CNet callback must reject stop and Channel destroy";
     }
 
     /* A successful TLS receive has one Multicore completion on the exact
