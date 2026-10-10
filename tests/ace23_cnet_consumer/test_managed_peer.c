@@ -506,6 +506,24 @@ static int test_bounded_multi_link(void)
         goto done;
     }
 
+    /* ManagedDial must forward CNet's send callback to this exact TLS
+     * Channel generation. One local admitted write is either completed or
+     * pending here; it must never be credited twice or lost on reconnect. */
+    CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
+    CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[1], &b));
+    if (a.channel.payloads_admitted != 1U ||
+        b.channel.payloads_admitted != 1U ||
+        a.channel.payloads_admitted !=
+            a.channel.payloads_completed + a.channel.payloads_canceled +
+            a.channel.payload_writes_pending ||
+        b.channel.payloads_admitted !=
+            b.channel.payloads_completed + b.channel.payloads_canceled +
+            b.channel.payload_writes_pending) {
+        result = SALTS_EPROTO;
+        failed = "managed send callback must conserve per-generation credits";
+        goto done;
+    }
+
     /* Transport loss never replays an accepted Raft message. The application
      * must explicitly decide whether an operation remains unsettled. */
     CHECK_TRY(tr_raft_cnet_channel_stop(f.server_channels[0]));
@@ -565,6 +583,16 @@ static int test_bounded_multi_link(void)
     if (f.server_probes[0].received != 1U) {
         result = SALTS_EPROTO;
         failed = "explicit send after authorized reconnect";
+    }
+    if (result == SALTS_OK) {
+        CHECK_TRY(tr_raft_cnet_managed_peer_get_status(f.peers[0], &a));
+        if (a.channel.payloads_admitted != 1U ||
+            a.channel.payloads_admitted !=
+                a.channel.payloads_completed + a.channel.payloads_canceled +
+                a.channel.payload_writes_pending) {
+            result = SALTS_EPROTO;
+            failed = "new managed generation starts with only its own send ledger";
+        }
     }
 done:
     if (result != SALTS_OK)
