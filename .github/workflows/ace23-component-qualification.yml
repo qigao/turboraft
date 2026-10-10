@@ -224,22 +224,7 @@ jobs:
             --target turboraft_ace23_owner_ingress turboraft_ace23_distinct_peer_tls
           ctest --test-dir .ci/build-ace23-cnet-asan-consumer \
             --output-on-failure --output-junit asan-ubsan-results.xml \
-            -R '^turboraft\\.ace23_(owner_ingress|distinct_peer_tls)        if: always()
-        run: ccache --show-stats
-
-      - name: Upload independent consumer diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: turboraft-ace23-component-consumers
-          path: |
-            .ci/build-ace23-consumer/Testing/Temporary
-            .ci/build-ace23-consumer/component-results.xml
-            .ci/build-ace23-cnet-consumer/Testing/Temporary
-            .ci/build-ace23-cnet-consumer/cnet-results.xml
-            .ci/build-ace23-cnet-asan-consumer/Testing/Temporary
-            .ci/build-ace23-cnet-asan-consumer/asan-ubsan-results.xml
-          if-no-files-found: ignore
+            -R '^turboraft[.]ace23_(owner_ingress|distinct_peer_tls)' --no-tests=error
 
 
       - name: Report ccache statistics
@@ -256,4 +241,6 @@ jobs:
             .ci/build-ace23-consumer/component-results.xml
             .ci/build-ace23-cnet-consumer/Testing/Temporary
             .ci/build-ace23-cnet-consumer/cnet-results.xml
+            .ci/build-ace23-cnet-asan-consumer/Testing/Temporary
+            .ci/build-ace23-cnet-asan-consumer/asan-ubsan-results.xml
           if-no-files-found: ignore
