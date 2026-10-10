@@ -285,6 +285,31 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                                   LABELS "raft-three-process-real-tls;wal-process-isolation")
 endif()
 
+# #149 P2.1/P2.2 (Linux only): actual Node2->Node3 certified CNet/TLS
+# Channel stop on THREE separately exec'ed Core/WAL owners. After the
+# existing 2/3 commit3, Node2 may fsync local index4, but minority must
+# retain commit/applied3 through eight timed ticks and CheckQuorum demotion.
+# Both physical Channel ends reach terminal with exact write settlement;
+# Node1's separate certified TLS Channel remains active but Core-muted.
+# This is a controlled socket teardown, not an OS network blackhole,
+# SIGKILL/re-election/rejoin or any hidden network/storage retry.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(turboraft_flowmq13_three_process_cnet_quorum_partition
+                 test_three_process_cnet_quorum.c)
+  target_compile_definitions(
+      turboraft_flowmq13_three_process_cnet_quorum_partition PRIVATE
+      TURBORAFT_TEST_THREE_PROCESS_PARTITION=1
+      TURBORAFT_ACE23_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures")
+  target_link_libraries(
+      turboraft_flowmq13_three_process_cnet_quorum_partition PRIVATE
+      TurboRaft::CNet TurboRaft::Core TurboRaft::WalStorage Salts::Platform)
+  add_test(NAME turboraft.flowmq13.three_process_cnet_quorum_partition
+           COMMAND turboraft_flowmq13_three_process_cnet_quorum_partition)
+  set_tests_properties(turboraft.flowmq13.three_process_cnet_quorum_partition
+                       PROPERTIES TIMEOUT 70
+                                  LABELS "raft-three-process-partition;wal-process-isolation")
+endif()
+
 # Independent installed-SDK 64 MiB end-to-end SnapshotSender -> Raft wire
 # codec -> SnapshotReceiver/stream sink. No 64 MiB heap allocation or socket
 # simulation: sender uses a deterministic read_at source, fixed 64-KiB chunks,

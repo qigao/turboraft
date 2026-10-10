@@ -33,8 +33,14 @@
  * to their OWN fsynced WAL writers. Each WAL is reopened independently
  * by the controller after all workers release their exclusive locks.
  *
- * This is NOT yet real partition recovery, SIGKILL of an authentic Raft
- * proposal, or full three-process distributed catch-up (#149 subsequent).
+ * This is NOT yet SIGKILL of an authentic Raft proposal or full
+ * distributed catch-up (#149 subsequent).
+ *
+ * Separate TURBORAFT_TEST_THREE_PROCESS_PARTITION variant closes the
+ * physical Node2<->Node3 CNet/TLS connection and proves that a locally
+ * fsynced index4 cannot be committed/applied by a minority after
+ * CheckQuorum demotes the old leader. All other nodes remain live,
+ * and there is NO automatic reconnect or controller Raft proxy.
  */
 enum {
     NODES = 3, LINKS = 2, MAX_LOG = 32, READY_MESSAGES = TR_RAFT_MAX_MEMBERS * 2,
@@ -75,6 +81,16 @@ typedef struct control_status {
     uint64_t certified_votes_from_3;
     uint64_t certified_append_acks_from_3;
     uint64_t node1_ignored;
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+    uint64_t leader_id;
+    uint64_t partition_active;
+    uint64_t node3_terminal;
+    uint64_t terminal_ledger_conserved;
+    uint64_t isolated_ticks_after_terminal;
+    uint64_t check_quorum_demoted;
+    uint64_t discarded_index4_appends;
+    uint64_t certified_acks_covering_four;
+#endif
     int64_t error;
 } control_status_t;
 
@@ -101,6 +117,14 @@ typedef struct node_worker {
     uint64_t applied;
     uint64_t wire_sent, wire_received;
     uint64_t votes_from_3, append_acks_from_3, node1_ignored;
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+    int partition_active;
+    unsigned node3_socket_index;
+    uint64_t ticks_after_node3_terminal;
+    uint64_t observed_demotion;
+    uint64_t discarded_index4_appends;
+    uint64_t acks_cover_four;
+#endif
     tr_raft_core_t *core;
     tr_raft_wal_storage_t *wal;
     tr_raft_storage_t storage;
@@ -344,6 +368,12 @@ static int on_payload(void *context,const tr_raft_transport_payload_t *payload)
     if (w->id==2U && m->from==3U &&
         m->type==TR_RAFT_MSG_APPEND_RESPONSE)
         ++w->append_acks_from_3;
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+    if (w->id==2U && m->from==3U &&
+        m->type==TR_RAFT_MSG_APPEND_RESPONSE &&
+        m->match_index>=4U)
+        ++w->acks_cover_four;
+#endif
     if (w->id==1U) {
         ++w->node1_ignored; /* intentionally silent Core1, REAL TLS */
         return SALTS_OK;
@@ -364,6 +394,32 @@ static int send_pending(node_worker_t *w)
     message=w->pending[0];
     if (message.from!=w->id || message.to==w->id)
         return SALTS_EPROTO;
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+    if ((w->id==2U && w->partition_active && message.to==3U) ||
+        (w->id==3U && message.to==2U && w->channels[0]!=NULL)) {
+        int reject= w->id==2U && w->partition_active && message.to==3U;
+        if (!reject) {
+            tr_raft_cnet_channel_status_t status={0};
+            rc=tr_raft_cnet_channel_get_status(w->channels[0],&status);
+            if (rc!=SALTS_OK) return rc;
+            reject=status.phase!=TR_RAFT_CNET_CHANNEL_ACTIVE;
+        }
+        if (reject) {
+            /* This particular Ready output was NEVER admitted by CNet.
+             * Do not carry its old connection generation into N+1. No
+             * retry of accepted CNet send or storage settlement. */
+            if (w->id==2U && message.type==TR_RAFT_MSG_APPEND_REQUEST &&
+                message.entry_count!=0U &&
+                message.entries[message.entry_count-1U].index>=4U)
+                ++w->discarded_index4_appends;
+            if (w->pending_count>1U)
+                memmove(&w->pending[0],&w->pending[1],
+                        (w->pending_count-1U)*sizeof(w->pending[0]));
+            --w->pending_count;
+            return SALTS_OK;
+        }
+    }
+#endif
     if (w->id==2U) {
         if (message.to!=1U && message.to!=3U) return SALTS_EPROTO;
         for (i=0U;i<w->accepted;++i) {
@@ -539,6 +595,65 @@ static unsigned count_active(node_worker_t *w)
     return count;
 }
 
+
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+/* Only the Node2 CNet Owner can close its authenticated Node3 socket.
+ * Node1's separate certified Channel is NEVER stopped by this command.
+ * No simulated packet filtering or synthetic Raft ACK is involved. */
+static int cut_node3_physical_link(node_worker_t *w)
+{
+    tr_raft_status_t leader={0};
+    size_t i;
+    int rc;
+    if (w->id!=2U || w->partition_active ||
+        count_active(w)!=LINKS || w->accepted!=LINKS)
+        return SALTS_EPROTO;
+    rc=tr_raft_core_status(w->core,&leader);
+    if (rc!=SALTS_OK) return rc;
+    if (leader.role!=TR_RAFT_LEADER || leader.last_log_index!=3U ||
+        leader.commit_index!=3U || leader.applied_index!=3U)
+        return SALTS_EPROTO;
+    for (i=0U;i<w->accepted;++i) {
+        tr_raft_cnet_channel_status_t status={0};
+        rc=tr_raft_cnet_channel_get_status(w->channels[i],&status);
+        if (rc!=SALTS_OK) return rc;
+        if (status.phase==TR_RAFT_CNET_CHANNEL_ACTIVE &&
+            status.authenticated_peer_node_id==3U) {
+            rc=tr_raft_cnet_channel_stop(w->channels[i]);
+            if (rc!=SALTS_OK) return rc;
+            w->node3_socket_index=(unsigned)i;
+            w->partition_active=1;
+            return SALTS_OK;
+        }
+    }
+    return SALTS_EPROTO;
+}
+
+static int partition_channel_state(node_worker_t *w,
+                                   uint64_t *terminal,
+                                   uint64_t *settled)
+{
+    const size_t slot=w->id==2U ?
+        (size_t)w->node3_socket_index : 0U;
+    tr_raft_cnet_channel_status_t status={0};
+    int rc;
+    *terminal=0U;
+    *settled=0U;
+    if ((w->id!=2U && w->id!=3U) || slot>=LINKS ||
+        (w->id==2U && !w->partition_active) ||
+        w->channels[slot]==NULL)
+        return SALTS_OK;
+    rc=tr_raft_cnet_channel_get_status(w->channels[slot],&status);
+    if (rc!=SALTS_OK) return rc;
+    *terminal=status.terminal ? 1U : 0U;
+    *settled=status.terminal &&
+        status.payload_writes_pending==0U &&
+        status.payloads_admitted==
+            status.payloads_completed+status.payloads_canceled;
+    return SALTS_OK;
+}
+#endif
+
 static int worker_cleanup(node_worker_t *w)
 {
     size_t i;
@@ -646,6 +761,23 @@ static int snapshot(node_worker_t *w,uint32_t op,control_status_t *out)
     out->certified_votes_from_3=w->votes_from_3;
     out->certified_append_acks_from_3=w->append_acks_from_3;
     out->node1_ignored=w->node1_ignored;
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+    out->leader_id=core.leader_id;
+    out->partition_active=w->partition_active ? 1U : 0U;
+    out->isolated_ticks_after_terminal=w->ticks_after_node3_terminal;
+    out->discarded_index4_appends=w->discarded_index4_appends;
+    out->certified_acks_covering_four=w->acks_cover_four;
+    if (w->partition_active && core.role!=TR_RAFT_LEADER &&
+        core.leader_id==0U)
+        w->observed_demotion=1U;
+    out->check_quorum_demoted=w->observed_demotion;
+    rc=partition_channel_state(
+        w,&out->node3_terminal,&out->terminal_ledger_conserved);
+    if (rc!=SALTS_OK) {
+        tr_raft_wal_recovery_destroy(&disk);
+        return rc;
+    }
+#endif
     out->error=w->error;
     tr_raft_wal_recovery_destroy(&disk);
     if (out->wal_term!=out->term || out->wal_vote!=out->vote ||
@@ -671,9 +803,19 @@ static int handle_command(node_worker_t *w,const control_command_t *cmd,
             rc=core_tick(w,4U);
         }
     } else if (cmd->op=='P') {
-        if (w->id!=2U || cmd->arg<1U || cmd->arg>3U)
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+        const uint64_t max_index=4U;
+#else
+        const uint64_t max_index=3U;
+#endif
+        if (w->id!=2U || cmd->arg<1U || cmd->arg>max_index)
             rc=SALTS_EINVAL;
         else rc=core_propose(w,(unsigned)cmd->arg);
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+    } else if (cmd->op=='D') {
+        if (cmd->arg!=0U) rc=SALTS_EINVAL;
+        else rc=cut_node3_physical_link(w);
+#endif
     } else if (cmd->op!='S' && cmd->op!='Q')
         rc=SALTS_EINVAL;
     if (rc!=SALTS_OK) return rc;
@@ -718,7 +860,18 @@ static int worker_main(unsigned id,const char *prefix,int control)
         if (rc==SALTS_OK) rc=send_pending(w);
         if (rc==SALTS_OK && w->campaign_started &&
             cmeta_monotonic_ms()>=w->next_tick_ms) {
-            rc=core_tick(w,1U);
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+            uint64_t terminal=0U,settled=0U;
+            if (w->id==2U && w->partition_active)
+                rc=partition_channel_state(w,&terminal,&settled);
+            if (rc==SALTS_OK) {
+#endif
+                rc=core_tick(w,1U);
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+                if (rc==SALTS_OK && terminal && settled)
+                    ++w->ticks_after_node3_terminal;
+            }
+#endif
             w->next_tick_ms=cmeta_monotonic_ms()+UINT64_C(100);
         }
         if (rc==SALTS_OK && w->error!=SALTS_OK) rc=w->error;
@@ -818,6 +971,42 @@ static int wait_for_state(child_t *children,int target)
                 states[1].active_tls==2U &&
                 states[2].active_tls==1U)
                 return 0;
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+        } else if (target==-2) {
+            if (states[0].active_tls==1U &&
+                states[1].active_tls==1U &&
+                states[2].active_tls==0U &&
+                states[1].partition_active==1U &&
+                states[1].node3_terminal==1U &&
+                states[2].node3_terminal==1U &&
+                states[1].terminal_ledger_conserved==1U &&
+                states[2].terminal_ledger_conserved==1U &&
+                states[1].committed==3U && states[2].committed==3U &&
+                states[0].committed==0U)
+                return 0;
+        } else if (target==-3) {
+            if (states[0].active_tls==1U &&
+                states[1].active_tls==1U &&
+                states[2].active_tls==0U &&
+                states[1].node3_terminal==1U &&
+                states[2].node3_terminal==1U &&
+                states[1].terminal_ledger_conserved==1U &&
+                states[2].terminal_ledger_conserved==1U &&
+                states[1].last==4U && states[1].wal_last==4U &&
+                states[1].committed==3U && states[1].applied==3U &&
+                states[1].wal_commit==3U &&
+                states[1].role!=TR_RAFT_LEADER &&
+                states[1].leader_id==0U &&
+                states[1].check_quorum_demoted!=0U &&
+                states[1].isolated_ticks_after_terminal>=8U &&
+                states[1].discarded_index4_appends!=0U &&
+                states[1].certified_acks_covering_four==0U &&
+                states[2].last==3U && states[2].wal_last==3U &&
+                states[2].committed==3U && states[2].applied==3U &&
+                states[0].last==0U && states[0].committed==0U &&
+                states[0].node1_ignored!=0U)
+                return 0;
+#endif
         } else if (states[1].role==TR_RAFT_LEADER &&
                    states[1].committed>=(uint64_t)target &&
                    states[1].applied>=(uint64_t)target &&
@@ -853,17 +1042,23 @@ static int reopen_wal(const char *prefix,unsigned id,
     int rc=tr_raft_wal_storage_open(&cfg,&wal);
     if (rc!=SALTS_OK) return -1;
     rc=tr_raft_wal_storage_load(wal,&recovered);
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+    const size_t expected_count=
+        id==1U ? 0U : (id==2U ? 4U : 3U);
+#else
+    const size_t expected_count=id==1U ? 0U : 3U;
+#endif
     if (rc==SALTS_OK &&
         (recovered.term!=expected->wal_term ||
          recovered.voted_for!=expected->wal_vote ||
          recovered.commit_index!=expected->wal_commit ||
-         recovered.entry_count!=(id==1U?0U:3U) ||
+         recovered.entry_count!=expected_count ||
          recovered.snapshot_index!=0U ||
          entries_hash(&recovered)!=expected->wal_hash))
         rc=SALTS_EPROTO;
     if (rc==SALTS_OK && id!=1U) {
         size_t i;
-        for (i=0U;i<3U;++i) {
+        for (i=0U;i<expected_count;++i) {
             const tr_raft_entry_t *e=&recovered.entries[i];
             char buffer[24];
             (void)snprintf(buffer,sizeof(buffer),"command-%zu",i+1U);
@@ -964,6 +1159,30 @@ static int controller_main(const char *program)
         statuses[1].wal_hash!=statuses[2].wal_hash) {
         failed=1;goto done;
     }
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+    {
+        const uint64_t elected_term=statuses[1].term;
+        /* D closes the ACTUAL Node2->Node3 certified TLS Channel in
+         * Node2's CNet Owner. P is admitted locally only AFTER D has
+         * stopped the socket; no index4 frame may reach Node3. */
+        if (child_command(&children[1],2U,'D',0U,&statuses[1])!=0 ||
+            child_command(&children[1],2U,'P',4U,&statuses[1])!=0 ||
+            wait_for_state(children,-2)!=0 ||
+            wait_for_state(children,-3)!=0 ||
+            snapshot_three(children,statuses)!=0 ||
+            statuses[1].term!=elected_term ||
+            statuses[1].last!=4U || statuses[1].committed!=3U ||
+            statuses[1].applied!=3U || statuses[1].wal_commit!=3U ||
+            statuses[1].wal_last!=4U ||
+            statuses[1].role==TR_RAFT_LEADER ||
+            statuses[1].check_quorum_demoted==0U ||
+            statuses[1].certified_acks_covering_four!=0U ||
+            statuses[2].last!=3U || statuses[2].committed!=3U ||
+            statuses[0].last!=0U || statuses[0].committed!=0U) {
+            failed=1;goto done;
+        }
+    }
+#endif
     /* Close all three REAL owners before independent controller WAL opens.
      * No staged Core memory or runtime handles survive the process boundary. */
     for (i=0U;i<NODES;++i) {
@@ -993,7 +1212,11 @@ done:
         fputs("FAIL #149 three distinct live Core/WAL owners with authentic TLS 2/3 majority\n",stderr);
         return 1;
     }
+#ifdef TURBORAFT_TEST_THREE_PROCESS_PARTITION
+    puts("PASS #149 real three-process CNet/TLS Node3 socket close; Node2 WAL fsynced uncommitted index4 but commit/applied3; eight physical-minority ticks, CheckQuorum demotion, no index4 ACK; independent WAL reopen unchanged (NOT crash/re-election recovery)");
+#else
     puts("PASS #149 three separately exec'ed Core/WAL owners; real certified TLS Node2+Node3 votes/Append ACKs; three WAL independently reopened; 3/3 majority-committed commands on Node2+3 while Node1 remains silent (NOT partition/crash recovery)");
+#endif
     return 0;
 }
 

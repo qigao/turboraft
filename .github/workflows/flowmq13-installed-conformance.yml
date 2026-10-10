@@ -165,6 +165,14 @@ jobs:
             --output-on-failure --no-tests=error \
             --output-junit flowmq13-three-process-tls-repeat.xml
 
+          # #149 P2.1/P2.2 real cross-process physical CNet socket
+          # loss. Distinct fresh 3-process and 3-WAL fault per repetition;
+          # no synthetic remote ACK or implicit recovery/replay is allowed.
+          ctest --test-dir .ci/build-flowmq13-consumer \
+            -L raft-three-process-partition --repeat until-fail:25 \
+            --output-on-failure --no-tests=error \
+            --output-junit flowmq13-three-process-partition-repeat.xml
+
           # Independent 64-MiB wire stream: print high-water RSS and
           # bounded chunk/ACK counters without changing the test gates.
           # Not an actual CNet socket bandwidth measurement.
@@ -187,5 +195,6 @@ jobs:
             .ci/build-flowmq13-consumer/flowmq13-snapshot-repeat.xml
             .ci/build-flowmq13-consumer/flowmq13-three-process-wal-repeat.xml
             .ci/build-flowmq13-consumer/flowmq13-three-process-tls-repeat.xml
+            .ci/build-flowmq13-consumer/flowmq13-three-process-partition-repeat.xml
             .ci/build-flowmq13-full/CMakeCache.txt
           if-no-files-found: warn

@@ -663,6 +663,48 @@ This is a genuine three-process positive Raft quorum, NOT completion of
 to remove FlowMQ/fallback constraints. Exact full-SHA native candidate
 release gates remain separate and intentionally fail closed.
 
+### #149 P2.1/P2.2: real link-loss minority safety across THREE processes
+
+A further **Linux-only**, separately labelled full installed SDK CTest
+`turboraft.flowmq13.three_process_cnet_quorum_partition` shares the
+already-qualified three independently exec'ed Core+CNet+WalStorage workers.
+First, certified Node2+Node3 mTLS Votes/Append ACKs commit three commands
+to two physically distinct authoritative WALs, while a separately certified
+Node1 Channel stays live but its test Core callback is silent.
+
+The controller then asks **Node2's own CNet progress owner** to
+`tr_raft_cnet_channel_stop` exactly the authenticated Node3 Channel.
+Both genuine TLS endpoints must become **terminal** with zero pending
+logical writes and exact `admitted=completed+canceled`; Node1's
+unrelated TLS connection must remain ACTIVE. The only test transport
+behavior is discarding *unadmitted* old-generation Core Ready outputs
+destined for the closed peer: it does NOT acknowledge, requeue or retry
+successful CNet admissions, introduce a second Owner, or change
+production settlement. Only AFTER requesting the actual close does
+Node2 propose index4; its own WAL must fsync that entry without
+advancing `commit_index` or `applied_index` above3. Node3's
+independent WAL remains exactly committed through index3.
+
+Continue true elapsed-monotonic-time Core ticks while Node2 no longer
+has a majority. Require eight ticks **after both CNet terminal and
+send-ledger settlement** and production `CheckQuorum` to clear Leader
+authority. At every queried point, verify Node2 has no successful
+certified Append ACK covering index4, persists log4 but commit3/applied3;
+Node1's WAL stays empty. All three worker processes then terminate
+normally and the parent reopens **each** locked WAL independently from
+disk: index4 remains durable but uncommitted only on Node2, Node3
+remains at committed3, Node1 at commit0. Linux CI repeats this separate
+negative gate 25 times with a standalone JUnit artifact.
+
+**Evidence boundary:** this is controlled physical CNet/TLS socket
+teardown (not a network emulator, packet blackhole, machine crash or
+hard network partition), and the third Node1 Core is intentionally
+callback-muted although its real TLS connection remains authenticated.
+There is no SIGKILL after a real Raft proposal, no higher-term
+barrier/re-election recovery, no Node1 catch-up, and no cross-platform
+process harness for this variant yet. Those remain separate #149
+gates, not implicit achievements of this real minority-safety test.
+
 ## 6. New-only packaging and gates
 
 - Single exact `Salts.Native 2.3.0-ace.sha<FULL_SHA>` candidate only after
