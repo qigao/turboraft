@@ -71,6 +71,11 @@ typedef struct quorum_fixture {
     size_t real_append_acks_from_three;
     size_t lost_node_one;
     size_t caught_up_node_one;
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
+    size_t lost_node_three;
+    size_t lost_append_three;
+    int node_three_muted;
+#endif
     int node_one_muted;
     int callback_error;
     cnet_client clients, server;
@@ -270,6 +275,18 @@ static int client_receive(void *context,
     ++f->wire_recv;
     if (m->to == 3U && m->type == TR_RAFT_MSG_APPEND_REQUEST)
         ++f->real_appends_to_three;
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
+    if (m->to == 3U && f->node_three_muted) {
+        /* The complete certified TLS frame has been decoded, but this
+         * ONE test receiver explicitly discards it BEFORE Core.step.
+         * This is not a second network owner, a real TCP partition, or a
+         * replay/settlement retry. All actual ACKs from Node3 must stop. */
+        ++f->lost_node_three;
+        if (m->type == TR_RAFT_MSG_APPEND_REQUEST)
+            ++f->lost_append_three;
+        return SALTS_OK;
+    }
+#endif
     if (m->to == 1U && f->node_one_muted) {
         ++f->lost_node_one; /* test-only receive mute, NOT a real link fault */
         return SALTS_OK;
@@ -682,6 +699,46 @@ static int run_quorum(void)
                 f->nodes[0].durable.committed == 0U,
                 "real Node2+Node3 Append ACK quorum while Node1 silent");
     }
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
+    {
+        const uint64_t start_ms = cmeta_monotonic_ms();
+        const size_t acknowledgements_before =
+            f->real_append_acks_from_three;
+        unsigned attempts = 0U;
+        /* Both Node1 and Node3 are REAL authenticated CNet peers, but their
+         * TEST callbacks decline to hand packets to Core. A successful
+         * local append is NOT a committed quorum entry, even if its bytes
+         * traversed a certified TLS connection. */
+        f->node_three_muted = 1;
+        TRY(core_propose(f,4U,"not-yet-majority-committed"));
+        while (attempts++ < 2000U &&
+               cmeta_monotonic_ms() - start_ms < UINT64_C(400)) {
+            TRY(network_progress(f));
+        }
+        TRY(tr_raft_core_status(f->nodes[1].core,&node2));
+        TRY(tr_raft_core_status(f->nodes[2].core,&node3));
+        REQUIRE(node2.role == TR_RAFT_LEADER &&
+                node2.last_log_index == 4U &&
+                node2.commit_index == 3U && node2.applied_index == 3U &&
+                f->nodes[1].durable.length == 4U &&
+                f->nodes[1].durable.committed == 3U &&
+                f->nodes[2].durable.committed == 3U &&
+                f->nodes[0].durable.committed == 0U &&
+                f->lost_append_three > 0U &&
+                f->real_append_acks_from_three == acknowledgements_before,
+                "two silent certified peers cannot commit fourth Raft entry");
+        f->node_three_muted = 0;
+        /* Only the RAFT protocol may re-probe a timed-out Append. There
+         * is no host-level retry of an admitted TLS or storage settlement. */
+        TRY(core_tick(f,1U,1U));
+        TRY(drive_until(f,4U,0));
+        REQUIRE(f->nodes[1].durable.committed == 4U &&
+                f->nodes[2].durable.committed == 4U &&
+                f->nodes[0].durable.committed == 0U &&
+                f->real_append_acks_from_three > acknowledgements_before,
+                "Node3 restored real-TLS ACK advances exact 2/3 commit");
+    }
+#endif
     /* Destroy and reconstruct lagging independent Core1 from its persisted
      * (in-memory TEST) Ready values, while certified TLS links remain ACTIVE. */
     tr_raft_core_destroy(f->nodes[0].core);
@@ -706,19 +763,33 @@ static int run_quorum(void)
         TRY(tr_raft_core_create(&cfg,&f->nodes[0].core));
     }
     f->node_one_muted = 0;
-    TRY(drive_until(f,3U,1));
+    {
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
+        const tr_raft_index_t target_commit = 4U;
+#else
+        const tr_raft_index_t target_commit = 3U;
+#endif
+        TRY(drive_until(f,target_commit,1));
+    }
     for (i = 0U; i < NODES; ++i) {
         const durable_values_t *d = &f->nodes[i].durable;
         size_t entry;
         tr_raft_status_t status = {0};
         TRY(tr_raft_core_status(f->nodes[i].core,&status));
-        REQUIRE(d->committed == 3U && d->applied == 3U &&
-                d->length == 3U &&
-                status.commit_index == 3U && status.applied_index == 3U &&
-                status.last_log_index == 3U &&
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
+        const tr_raft_index_t expected_final = 4U;
+#else
+        const tr_raft_index_t expected_final = 3U;
+#endif
+        REQUIRE(d->committed == expected_final &&
+                d->applied == expected_final &&
+                d->length == expected_final &&
+                status.commit_index == expected_final &&
+                status.applied_index == expected_final &&
+                status.last_log_index == expected_final &&
                 status.leader_id == 2U,
                 "all three Cores converged exact committed/applied indexes");
-        for (entry = 0U; entry < 3U; ++entry) {
+        for (entry = 0U; entry < (size_t)expected_final; ++entry) {
             const tr_raft_entry_t *actual = &d->entries[entry];
             const tr_raft_entry_t *leader = &f->nodes[1].durable.entries[entry];
             REQUIRE(actual->index == leader->index &&
@@ -740,10 +811,18 @@ static int run_quorum(void)
     printf("certified_tls_raft_majority,wire_sent=%zu,wire_received=%zu,"
            "node3_votes=%zu,node3_appends=%zu,node3_append_acks=%zu,"
            "node1_muted=%zu,node1_rejoin_append=%zu,"
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
+           "node3_muted=%zu,node3_append_misses=%zu,committed=4,applied=4\n",
+#else
            "committed=3,applied=3\n",
+#endif
            f->wire_sent,f->wire_recv,f->real_votes_to_leader,
            f->real_appends_to_three,f->real_append_acks_from_three,
-           f->lost_node_one,f->caught_up_node_one);
+           f->lost_node_one,f->caught_up_node_one
+#ifdef TURBORAFT_TEST_CERTIFIED_QUORUM_LOSS
+           , f->lost_node_three,f->lost_append_three
+#endif
+           );
 done:
     clean = cleanup(f);
     if (rc == SALTS_OK && clean != SALTS_OK) rc = clean;
