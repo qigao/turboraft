@@ -261,3 +261,19 @@ add_test(NAME turboraft.flowmq13.large_snapshot_stream
 set_tests_properties(turboraft.flowmq13.large_snapshot_stream
                      PROPERTIES TIMEOUT 90
                                 LABELS "snapshot-stream-bounded")
+
+# Three actual independent Raft Core instances exchange Ready messages via
+# deterministic bounded SIMULATED links (NOT actual CNet or inter-host TCP).
+# Qualify that 2-of-3 majority commits survive an isolated former leader,
+# its Core destruction/restart from durable Ready and exact eight-entry log
+# convergence after healing. Explicitly named simulation prevents a false
+# claim of real distributed quorum or automatic network catch-up.
+add_executable(turboraft_flowmq13_three_node_core
+               ../core/test_raft_cluster_simulation.c)
+target_link_libraries(turboraft_flowmq13_three_node_core PRIVATE
+    TurboRaft::Core Salts::TinyTest)
+add_test(NAME turboraft.flowmq13.three_node_core
+         COMMAND turboraft_flowmq13_three_node_core)
+set_tests_properties(turboraft.flowmq13.three_node_core
+                     PROPERTIES TIMEOUT 65
+                                LABELS "raft-3node-simulation")
