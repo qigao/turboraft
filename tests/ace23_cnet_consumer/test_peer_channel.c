@@ -38,6 +38,8 @@ typedef struct peer_dso_harness {
     cmeta_plugin_lease lease;
     const cmeta_plugin_manifest *manifest; /* valid only while lease held */
     const tr_ace23_dso_callback_state *module; /* same borrowed lifetime */
+    tr_raft_cnet_channel_t *verified_channel; /* same CNet progress Owner */
+    tr_raft_transport_reply_origin_t captured_origin; /* value-only */
     salts_component_plugin_runtime host;
     salts_component_plugin_generation generation;
     salts_component_plugin_scope scope;
@@ -319,6 +321,24 @@ static int peer_record(void *context,
 
     ++sink->count;
     if (sink->dso != NULL) {
+        /* CNet TLS and reciprocal HELLO must be ACTIVE on this Owner;
+         * the admission ticket takes its epoch from the stable host scope,
+         * never from a DSO-local static, pointer or recycled socket slot. */
+        tr_raft_transport_reply_origin_t origin = {0};
+        if (sink->dso->verified_channel == NULL ||
+            tr_raft_cnet_channel_capture_reply_origin(
+                sink->dso->verified_channel, payload->group_id,
+                &origin) != SALTS_OK ||
+            origin.host_module_generation !=
+                salts_component_plugin_scope_generation_id(
+                    &sink->dso->scope) ||
+            origin.authenticated_peer_node_id != sink->expected_from ||
+            origin.group_id != payload->group_id ||
+            origin.channel_instance == 0U ||
+            origin.connection_token == 0U)
+            goto invalid;
+        sink->dso->captured_origin = origin;
+
         /* Executing DSO text INSIDE verified CNet progress owner callback.
          * Host's Plugin lease and Component scope remain live until the
          * CNet terminal callback; no Group Owner calls into this DSO. */
@@ -476,6 +496,8 @@ static int peer_case_run(int mode)
         &client_channel, &f.client_channel));
     PEER_TRY(tr_raft_cnet_channel_create(
         &server_channel, &f.server_channel));
+    if (mode == PEER_DSO_CALLBACK)
+        dso.verified_channel = f.server_channel;
 
     /* Compose the existing Service/Runtime Transport SPI without creating a
      * second queue or moving the network connection across owners. */
@@ -808,6 +830,12 @@ static int peer_case_run(int mode)
         }
         if (result == SALTS_OK && mode == PEER_DSO_CALLBACK) {
             if (dso.network_callbacks != 1U ||
+                dso.captured_origin.host_module_generation !=
+                    salts_component_plugin_scope_generation_id(&dso.scope) ||
+                dso.captured_origin.channel_instance == 0U ||
+                dso.captured_origin.authenticated_peer_node_id != 1U ||
+                dso.captured_origin.group_id != 42U ||
+                dso.captured_origin.connection_token == 0U ||
                 atomic_load_explicit(
                     &dso.module->callback_entered, memory_order_acquire) != 1U ||
                 atomic_load_explicit(
