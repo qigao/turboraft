@@ -123,6 +123,73 @@ static int peer_dso_setup(peer_dso_harness *dso)
     return SALTS_OK;
 }
 
+/* Called ONLY after BOTH CNet clients have drained terminal callbacks
+ * and both Channels were destroyed. Plugin is the sole dlclose authority;
+ * this test does not copy a Scope or create an alternative DSO lease. */
+static int peer_dso_finish(peer_dso_harness *dso)
+{
+    salts_component_plugin_generation *retired = NULL;
+    bool quiet = false;
+    int result = SALTS_OK;
+
+#define DSO_CLEAN(expr, wanted) do { \
+    if ((expr) != (wanted)) result = SALTS_EPROTO; \
+} while (0)
+    if (dso->published) {
+        DSO_CLEAN(salts_component_plugin_runtime_close(
+            &dso->host, &retired), SALTS_COMPONENT_PLUGIN_OK);
+        if (retired != &dso->generation) result = SALTS_EPROTO;
+        if (dso->scope_live) {
+            DSO_CLEAN(salts_component_plugin_generation_drain(
+                &dso->host, &dso->generation), SALTS_COMPONENT_PLUGIN_BUSY);
+            DSO_CLEAN(salts_component_plugin_scope_release(
+                &dso->scope), SALTS_COMPONENT_PLUGIN_OK);
+            dso->scope_live = 0;
+        }
+        DSO_CLEAN(salts_component_plugin_generation_drain(
+            &dso->host, &dso->generation), SALTS_COMPONENT_PLUGIN_OK);
+        dso->published = 0;
+    } else if (dso->generation.state == SALTS_COMPONENT_PLUGIN_GENERATION_BUILT) {
+        DSO_CLEAN(salts_component_plugin_generation_discard(
+            &dso->generation), SALTS_COMPONENT_PLUGIN_OK);
+    }
+    if (dso->host_open) {
+        DSO_CLEAN(salts_component_plugin_runtime_destroy(
+            &dso->host), SALTS_COMPONENT_PLUGIN_OK);
+        dso->host_open = 0;
+    }
+    if (dso->loaded) {
+        if (dso->started && dso->controller_result != SALTS_OK) {
+            cmeta_plugin_status stopped =
+                cmeta_plugin_registry_request_stop(&dso->registry, dso->plugin);
+            if (stopped != CMETA_PLUGIN_OK && stopped != CMETA_PLUGIN_ALREADY)
+                result = SALTS_EPROTO;
+        }
+        if (dso->lease_live) {
+            DSO_CLEAN(cmeta_plugin_registry_release(
+                &dso->registry, &dso->lease), CMETA_PLUGIN_OK);
+            dso->lease_live = 0;
+        }
+        if (dso->started) {
+            DSO_CLEAN(cmeta_plugin_registry_poll_quiescent(
+                &dso->registry, dso->plugin, &quiet), CMETA_PLUGIN_OK);
+            if (!quiet) result = SALTS_EPROTO;
+        }
+        if (quiet || !dso->started) {
+            DSO_CLEAN(cmeta_plugin_registry_unload(
+                &dso->registry, dso->plugin), CMETA_PLUGIN_OK);
+            dso->loaded = 0;
+        }
+    }
+    if (dso->registry_open && !dso->loaded) {
+        DSO_CLEAN(cmeta_plugin_registry_destroy(
+            &dso->registry), CMETA_PLUGIN_OK);
+        dso->registry_open = 0;
+    }
+#undef DSO_CLEAN
+    return result;
+}
+
 typedef struct peer_sink {
     tr_raft_node_id_t expected_from;
     tr_raft_node_id_t expected_to;
@@ -278,6 +345,8 @@ static int peer_fixture_path(char *output, size_t capacity,
 static int peer_case_run(int mode)
 {
     peer_fixture_t f = {0};
+    peer_dso_harness dso = {0};
+    int safe_to_unload = 1;
     cnet_client_config client_config = peer_client_config();
     cnet_listener_config listen = {
         .backend = client_config.backend,
@@ -313,6 +382,10 @@ static int peer_case_run(int mode)
         /* Only this terminal-race fixture enlarges CNet's explicit maximum
          * logical write. All ordinary small-message tests keep their limit. */
         client_config.max_send_bytes = TR_RAFT_TRANSPORT_MAX_PACKET_SIZE;
+    }
+    if (mode == PEER_DSO_CALLBACK) {
+        PEER_TRY(peer_dso_setup(&dso));
+        f.server_sink.dso = &dso;
     }
     f.client_sink.expected_from = 2U;
     f.client_sink.expected_to = mode == PEER_FORGED_NODE ? 3U : 1U;
@@ -374,7 +447,9 @@ static int peer_case_run(int mode)
     server_channel.identity = &f.server_policy;
     server_channel.handshake = peer_handshake(2U, 0);
     server_channel.first_outbound_message_id = 1U;
-    server_channel.host_module_generation = UINT64_C(90010001);
+    server_channel.host_module_generation = mode == PEER_DSO_CALLBACK
+        ? salts_component_plugin_scope_generation_id(&dso.scope)
+        : UINT64_C(90010001);
     server_channel.on_payload = peer_record;
     server_channel.payload_context = &f.server_sink;
     /* A DSO-local static serial is insufficient: the loader/host must
@@ -458,7 +533,7 @@ static int peer_case_run(int mode)
         PEER_TRY(tr_raft_cnet_channel_get_status(f.server_channel, &ss));
 
         if (mode != PEER_VALID && mode != PEER_STREAMS &&
-            mode != PEER_ABORT_SG) {
+            mode != PEER_ABORT_SG && mode != PEER_DSO_CALLBACK) {
             if (ss.phase == TR_RAFT_CNET_CHANNEL_FAILED)
                 break;
             continue;
@@ -474,6 +549,13 @@ static int peer_case_run(int mode)
         if (!sent &&
             cs.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
             ss.phase == TR_RAFT_CNET_CHANNEL_ACTIVE) {
+            if (mode == PEER_DSO_CALLBACK) {
+                /* The secondary OS thread only requests Plugin stop. It
+                 * MUST NOT call CNet poll/stop or own a network callback. */
+                PEER_TRY(cmeta_thread_create(
+                    &dso.controller, peer_dso_controller, &dso));
+                dso.controller_live = 1;
+            }
             if (mode == PEER_ABORT_SG) {
                 tr_raft_transport_payload_t data = {0};
                 tr_raft_transport_payload_t snapshot = {0};
@@ -669,7 +751,8 @@ static int peer_case_run(int mode)
             result = SALTS_EPROTO;
             error_stage = "pending SG send must retain both logical credits";
         }
-    } else if (mode == PEER_VALID || mode == PEER_STREAMS) {
+    } else if (mode == PEER_VALID || mode == PEER_STREAMS ||
+               mode == PEER_DSO_CALLBACK) {
         const size_t expected_server = mode == PEER_STREAMS ? 3U : 1U;
         /* Prove actual CNet logical write completions, not merely terminal
          * cancellation balancing the ledger after a successful receive. */
@@ -716,6 +799,16 @@ static int peer_case_run(int mode)
             result = SALTS_EPROTO;
             error_stage = "bidirectional verified handshakes and Raft";
         }
+        if (result == SALTS_OK && mode == PEER_DSO_CALLBACK) {
+            if (dso.network_callbacks != 1U ||
+                atomic_load_explicit(
+                    &dso.module->callback_entered, memory_order_acquire) != 1U ||
+                atomic_load_explicit(
+                    &dso.module->callback_completed, memory_order_acquire) != 1U) {
+                result = SALTS_EPROTO;
+                error_stage = "verified CNet callback did not enter DSO once";
+            }
+        }
         if (result == SALTS_OK &&
             tr_raft_cnet_channel_destroy(f.client_channel) != SALTS_EBUSY) {
             result = SALTS_EPROTO;
@@ -730,12 +823,27 @@ static int peer_case_run(int mode)
     }
 
 cleanup:
+    if (dso.controller_live) {
+        const int joined = cmeta_thread_join(&dso.controller);
+        cmeta_thread_destroy(&dso.controller);
+        dso.controller_live = 0;
+        if (result == SALTS_OK &&
+            (joined != SALTS_OK ||
+             dso.controller_result != SALTS_OK ||
+             dso.unload_while_callback != CMETA_PLUGIN_BUSY ||
+             dso.stop_result != CMETA_PLUGIN_OK ||
+             dso.unload_after_stop != CMETA_PLUGIN_BUSY)) {
+            result = SALTS_EPROTO;
+            error_stage = "in-flight CNet on_payload let Salts Plugin unload";
+        }
+    }
     if (f.client_channel != NULL)
         (void)tr_raft_cnet_channel_stop(f.client_channel);
     if (f.server_channel != NULL)
         (void)tr_raft_cnet_channel_stop(f.server_channel);
     if (f.client_open) {
         int close_result = cnet_client_stop(&f.client, 2000U);
+        if (close_result != SALTS_OK) safe_to_unload = 0;
         if (result == SALTS_OK && close_result != SALTS_OK) {
             result = close_result;
             error_stage = "client stop";
@@ -743,6 +851,7 @@ cleanup:
     }
     if (f.server_open) {
         int close_result = cnet_client_stop(&f.server, 2000U);
+        if (close_result != SALTS_OK) safe_to_unload = 0;
         if (result == SALTS_OK && close_result != SALTS_OK) {
             result = close_result;
             error_stage = "server stop";
@@ -794,13 +903,21 @@ cleanup:
     }
     if (f.client_channel != NULL) {
         int close_result = tr_raft_cnet_channel_destroy(f.client_channel);
+        if (close_result != SALTS_OK) safe_to_unload = 0;
         if (result == SALTS_OK && close_result != SALTS_OK)
             result = close_result;
     }
     if (f.server_channel != NULL) {
         int close_result = tr_raft_cnet_channel_destroy(f.server_channel);
+        if (close_result != SALTS_OK) safe_to_unload = 0;
         if (result == SALTS_OK && close_result != SALTS_OK)
             result = close_result;
+    }
+    if (mode == PEER_DSO_CALLBACK && !safe_to_unload) {
+        /* A live on_payload might still execute code in the DSO. Fail
+         * closed without unloading or dropping the active Plugin lease. */
+        fprintf(stderr, "CNet terminal barrier incomplete: DSO remains leased\n");
+        return SALTS_EBUSY;
     }
     if (f.client_open) (void)cnet_client_destroy(&f.client);
     if (f.server_open) (void)cnet_client_destroy(&f.server);
@@ -809,6 +926,13 @@ cleanup:
         (void)cnet_listener_destroy(&f.listener);
     }
     if (f.tls_open) (void)cnet_tls_server_destroy(&f.tls_server);
+    if (mode == PEER_DSO_CALLBACK) {
+        const int cleanup_status = peer_dso_finish(&dso);
+        if (result == SALTS_OK && cleanup_status != SALTS_OK) {
+            result = cleanup_status;
+            error_stage = "post-CNet-terminal Plugin lease/scope drain";
+        }
+    }
 #undef PEER_TRY
 
     if (result != SALTS_OK)
@@ -836,6 +960,11 @@ spec("ACE 2.3 CNet owner-bound authenticated Raft channel")
     it("settles two pending 64KiB TLS SG chunks exactly once on terminal close")
     {
         check_equal(peer_case_run(PEER_ABORT_SG), SALTS_OK);
+    }
+
+    it("drains a real mTLS on_payload DSO callback before Plugin unload")
+    {
+        check_equal(peer_case_run(PEER_DSO_CALLBACK), SALTS_OK);
     }
 
     it("rejects a different cluster before delivering any Raft payload")
