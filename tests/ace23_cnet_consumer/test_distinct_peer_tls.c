@@ -896,6 +896,237 @@ static void durable_snapshot_cleanup_files(const char *prefix)
 }
 #endif
 
+#ifdef TURBORAFT_TEST_DURABLE_NET_SNAPSHOT_RECONNECT
+/*
+ * A production-shaped reconnect is deliberately host-driven. Node3's old
+ * certified Channel N already received and durably installed Snapshot19 on
+ * Group103, but its *final ACK is held as an immutable Owner completion*
+ * (never sent). Close N, drain every terminal, create a NEW physical
+ * certified CNet Channel N+1, and prove:
+ *  - old durable reply origin cannot send or consume new credits;
+ *  - the new TLS session performs NO application replay of its own;
+ *  - explicit caller retransmission is verified against already installed
+ *    WAL state without a second snapshot application/install;
+ *  - a fresh N+1 origin alone may send the final ACK to Node3.
+ */
+static int durable_snapshot_reconnect(
+    identity_fixture *f, const char *uri, size_t *events)
+{
+    size_t socket = LINK_COUNT, n;
+    tr_raft_cnet_channel_status_t inbound = {0}, outbound = {0};
+    tr_raft_cnet_channel_status_t before = {0}, after = {0};
+    tr_raft_cnet_channel_config_t config = {0};
+    cnet_connect_options connect = {0};
+    cnet_observer observer = {0};
+    tr_raft_transport_reply_origin_t fresh_origin = {0};
+    tr_raft_multicore_completion_t completed = {0};
+    tr_raft_transport_payload_t snapshot = {0};
+    uint8_t bytes[24];
+    unsigned round;
+    int accepted = 0, result;
+#define RTRY(expr) do { result = (expr); \
+    if (result != SALTS_OK) { \
+        fprintf(stderr, "snapshot reconnect %s: %d\n", #expr, result); \
+        return result; \
+    } \
+} while (0)
+#define RREQUIRE(expr, name) do { if (!(expr)) { \
+    fprintf(stderr, "snapshot reconnect invariant: %s\n", name); \
+    return SALTS_EPROTO; \
+} } while (0)
+
+    RREQUIRE(f != NULL && uri != NULL && events != NULL &&
+             f->delayed_snapshot_ready &&
+             f->owner_groups[1].installed_snapshots == 1U &&
+             f->clients_received[1].snapshot_acks == 0U,
+             "durable N receipt was held rather than sent");
+    for (n = 0U; n < LINK_COUNT; ++n) {
+        RTRY(tr_raft_cnet_channel_get_status(f->inbound[n], &inbound));
+        if (inbound.authenticated_peer_node_id == 3U) {
+            socket = n;
+            break;
+        }
+    }
+    RREQUIRE(socket < LINK_COUNT && f->outbound[1] != NULL &&
+             f->inbound[socket] != NULL, "original certified Node3 socket");
+
+    RTRY(tr_raft_cnet_channel_stop(f->inbound[socket]));
+    for (round = 0U; round < MAX_PROGRESS; ++round) {
+        RTRY(cnet_client_poll(&f->server, 1U, events));
+        RTRY(cnet_client_poll(&f->clients, 1U, events));
+        RTRY(tr_raft_cnet_channel_get_status(f->inbound[socket], &inbound));
+        RTRY(tr_raft_cnet_channel_get_status(f->outbound[1], &outbound));
+        if (inbound.terminal && outbound.terminal) break;
+    }
+    RREQUIRE(round < MAX_PROGRESS && inbound.terminal && outbound.terminal &&
+             inbound.payload_writes_pending == 0U &&
+             outbound.payload_writes_pending == 0U &&
+             inbound.payloads_admitted ==
+                 inbound.payloads_completed + inbound.payloads_canceled &&
+             outbound.payloads_admitted ==
+                 outbound.payloads_completed + outbound.payloads_canceled,
+             "N transport terminal and exactly-once send settlement");
+    RTRY(tr_raft_cnet_channel_destroy(f->inbound[socket]));
+    f->inbound[socket] = NULL;
+    RTRY(tr_raft_cnet_channel_destroy(f->outbound[1]));
+    f->outbound[1] = NULL;
+    f->ingress[socket].channel = NULL;
+    f->verified_payloads[socket].channel = NULL;
+
+    config.client = &f->clients;
+    config.identity = &f->client_policy[1];
+    config.handshake = hello_config(3U);
+    config.first_outbound_message_id = 1U;
+    config.host_module_generation = UINT64_C(90010001);
+    config.on_payload = on_client_payload;
+    config.payload_context = &f->clients_received[1];
+    RTRY(tr_raft_cnet_channel_create(&config, &f->outbound[1]));
+    connect.uri = uri;
+    connect.tls = &f->client_tls[1];
+    connect.observer = tr_raft_cnet_channel_observer(f->outbound[1]);
+    RTRY(cnet_connect(&f->clients, &connect, &f->outbound_handles[1]));
+    RTRY(tr_raft_cnet_channel_attach(
+        f->outbound[1], f->outbound_handles[1]));
+
+    /* Listener remains the unique CNet authority. No new listener, Owner
+     * queue, Manager or request callback is created during reconnection. */
+    for (round = 0U; round < MAX_PROGRESS; ++round) {
+        RTRY(cnet_client_poll(&f->clients, 1U, events));
+        if (!accepted) {
+            int ready = 0;
+            RTRY(cnet_listener_wait(&f->listener, 0U, &ready));
+            if (ready) {
+                tr_raft_cnet_channel_config_t server_config =
+                    f->server_channel_config;
+                server_config.on_payload = tr_raft_cnet_peer_directory_receive;
+                server_config.payload_context = &f->ingress[socket];
+                f->ingress[socket].directory = &f->directory;
+                f->ingress[socket].on_payload =
+                    on_server_payload_and_forward;
+                f->ingress[socket].context = &f->verified_payloads[socket];
+                f->verified_payloads[socket].fixture = f;
+                f->verified_payloads[socket].chunk_origin =
+                    (tr_raft_transport_reply_origin_t){0};
+                f->verified_payloads[socket].chunk_request_id = 0U;
+                RTRY(tr_raft_cnet_channel_create(
+                    &server_config, &f->inbound[socket]));
+                f->ingress[socket].channel = f->inbound[socket];
+                f->verified_payloads[socket].channel = f->inbound[socket];
+                observer = tr_raft_cnet_channel_observer(f->inbound[socket]);
+                RTRY(cnet_listener_accept_tls(
+                    &f->listener, &f->server, &f->server_tls,
+                    &observer, &f->inbound_handles[socket]));
+                RTRY(tr_raft_cnet_channel_attach(
+                    f->inbound[socket], f->inbound_handles[socket]));
+                ++f->accepted;
+                accepted = 1;
+            }
+        }
+        RTRY(cnet_client_poll(&f->server, 1U, events));
+        if (accepted) {
+            RTRY(tr_raft_cnet_channel_get_status(f->inbound[socket], &inbound));
+            RTRY(tr_raft_cnet_channel_get_status(f->outbound[1], &outbound));
+            if (inbound.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
+                outbound.phase == TR_RAFT_CNET_CHANNEL_ACTIVE)
+                break;
+        }
+    }
+    RREQUIRE(round < MAX_PROGRESS && accepted &&
+             inbound.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
+             outbound.phase == TR_RAFT_CNET_CHANNEL_ACTIVE &&
+             inbound.authenticated_peer_node_id == 3U &&
+             outbound.authenticated_peer_node_id == 2U,
+             "N+1 reciprocal TLS and Raft HELLO identity");
+    RTRY(tr_raft_cnet_channel_capture_reply_origin(
+        f->inbound[socket], 103U, &fresh_origin));
+    RREQUIRE(fresh_origin.host_module_generation ==
+                 f->delayed_snapshot_completion.reply_origin.host_module_generation &&
+             fresh_origin.channel_instance !=
+                 f->delayed_snapshot_completion.reply_origin.channel_instance &&
+             fresh_origin.connection_token !=
+                 f->delayed_snapshot_completion.reply_origin.connection_token,
+             "new TLS connection incarnation independently fenced");
+
+    RTRY(tr_raft_cnet_channel_get_status(f->inbound[socket], &before));
+    RREQUIRE(tr_raft_cnet_channel_send_chunk_completion(
+                 f->inbound[socket],
+                 &f->delayed_snapshot_completion) == SALTS_ECANCELED,
+             "old WAL-durable ACK cannot be sent by new TLS Channel");
+    RTRY(tr_raft_cnet_channel_get_status(f->inbound[socket], &after));
+    RREQUIRE(before.payloads_admitted == after.payloads_admitted &&
+             before.payload_writes_pending == after.payload_writes_pending &&
+             f->server_received.received_snapshot == 1U &&
+             f->clients_received[1].snapshot_acks == 0U,
+             "no old ACK credits, replay, or completion leakage");
+
+    /* Caller explicitly resends the exact same verified Snapshot payload;
+     * CNet itself never replays the old completed application operation. */
+    memset(bytes, 0x7b, sizeof(bytes));
+    snapshot.group_id = 103U;
+    snapshot.kind = TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK;
+    snapshot.data.snapshot_chunk.from = 3U;
+    snapshot.data.snapshot_chunk.to = 2U;
+    snapshot.data.snapshot_chunk.term = 3U;
+    snapshot.data.snapshot_chunk.snapshot_index = 19U;
+    snapshot.data.snapshot_chunk.snapshot_term = 3U;
+    snapshot.data.snapshot_chunk.snapshot_size = sizeof(bytes);
+    snapshot.data.snapshot_chunk.data_length = sizeof(bytes);
+    snapshot.data.snapshot_chunk.data = bytes;
+    snapshot.data.snapshot_chunk.done = true;
+    snapshot.data.snapshot_chunk.has_configuration = true;
+    snapshot.data.snapshot_chunk.configuration.phase = TR_RAFT_CONF_FINAL;
+    snapshot.data.snapshot_chunk.configuration.member_count = 1U;
+    snapshot.data.snapshot_chunk.configuration.members[0].node_id = 2U;
+    snapshot.data.snapshot_chunk.configuration.members[0].roles =
+        TR_RAFT_CONF_OLD_VOTER | TR_RAFT_CONF_NEW_VOTER;
+    RTRY(cmeta_sha256(
+        bytes, sizeof(bytes), snapshot.data.snapshot_chunk.snapshot_digest));
+    RTRY(tr_raft_cnet_channel_send(f->outbound[1], &snapshot));
+    memset(bytes, 0x44, sizeof(bytes));
+
+    for (round = 0U; round < MAX_PROGRESS; ++round) {
+        RTRY(cnet_client_poll(&f->clients, 1U, events));
+        RTRY(cnet_client_poll(&f->server, 1U, events));
+        if (f->server_received.received_snapshot == 2U) break;
+    }
+    RREQUIRE(round < MAX_PROGRESS, "one explicit N+1 TLS retransmission");
+    RTRY(take_owner_completion(f, 1U, &completed));
+    RREQUIRE(completed.operation == TR_RAFT_MULTICORE_RECEIVE_CHUNK &&
+             completed.result == SALTS_OK &&
+             completed.request_id == f->verified_payloads[socket].chunk_request_id &&
+             completed.request_id != 0U &&
+             completed.value.chunk.kind ==
+                 TR_RAFT_WIRE_PAYLOAD_SNAPSHOT_CHUNK &&
+             completed.value.chunk.ack_valid &&
+             completed.value.chunk.durable_or_installed &&
+             completed.value.chunk.ack.snapshot.accepted &&
+             completed.value.chunk.ack.snapshot.next_offset == 24U &&
+             completed.reply_origin.channel_instance ==
+                 fresh_origin.channel_instance &&
+             completed.reply_origin.connection_token ==
+                 fresh_origin.connection_token &&
+             f->owner_groups[1].installed_snapshots == 1U &&
+             f->owner_groups[1].chunk_calls == 2U,
+             "duplicate verified Snapshot retains WAL truth, installs once");
+    RTRY(tr_raft_cnet_channel_send_chunk_completion(
+        f->inbound[socket], &completed));
+    for (round = 0U; round < MAX_PROGRESS; ++round) {
+        RTRY(cnet_client_poll(&f->server, 1U, events));
+        RTRY(cnet_client_poll(&f->clients, 1U, events));
+        if (f->clients_received[1].snapshot_acks == 1U) break;
+    }
+    RREQUIRE(round < MAX_PROGRESS &&
+             f->clients_received[1].snapshot_acks == 1U &&
+             f->clients_received[1].wrong_payload == 0U &&
+             f->clients_received[0].received == 1U &&
+             f->server_received.wrong_payloads == 0U,
+             "only new verified Channel may confirm already-durable Snapshot");
+#undef RTRY
+#undef RREQUIRE
+    return SALTS_OK;
+}
+#endif
+
 static int run_two_distinct_peers(int forge_node_three)
 {
     identity_fixture f = {0};
