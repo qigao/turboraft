@@ -411,8 +411,9 @@ static int run_case(const char *program, const char *mode)
     tr_raft_wal_storage_t *wal = NULL;
     rx_fixture_t fixture = {0};
     tr_raft_snapshot_receive_result_t received = {0};
-    tr_raft_snapshot_chunk_t first, last;
-    uint8_t bytes[SNAPSHOT_SIZE], digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE];
+    tr_raft_snapshot_chunk_t first, last, corrupted;
+    uint8_t bytes[SNAPSHOT_SIZE], bad_bytes[SNAPSHOT_SIZE];
+    uint8_t digest[TR_RAFT_WIRE_SNAPSHOT_DIGEST_SIZE];
     char prefix[SALTS_FS_MAX_PATH], partial[SALTS_FS_MAX_PATH];
     const char *temp = getenv("TMPDIR");
     pid_t child;
@@ -520,11 +521,45 @@ static int run_case(const char *program, const char *mode)
     failed |= load_authoritative(wal, 0, 0, bytes);
     if (failed) goto done;
 
+    /* A restarted receiver can have accepted the complete byte count
+     * without having validated its digest. A forged final 12-byte fragment
+     * must abort the transient sink and leave the old WAL authoritative.
+     * Even this recoverable protocol error NEVER causes an implicit replay. */
+    memcpy(bad_bytes, bytes, sizeof(bad_bytes));
+    bad_bytes[SNAPSHOT_SIZE - 1U] ^= 0x01U;
+    corrupted = make_chunk(bad_bytes, digest, 1);
+    rc = tr_raft_snapshot_receiver_handle(
+        fixture.receiver, &corrupted, &received);
+    failed |= ensure(rc == SALTS_EPROTO &&
+                     !received.ack.accepted &&
+                     received.ack.next_offset == 0U &&
+                     !received.installed &&
+                     fixture.installed == 0U &&
+                     fixture.stream.commits == 0U,
+                     "SHA-256 mismatch never publishes incomplete Snapshot");
+    if (streaming)
+        failed |= ensure(fixture.stream.aborts == 1U &&
+                         fixture.stream.file == SALTS_INVALID_FILE &&
+                         cmeta_fs_access(partial, SALTS_FS_ACCESS_EXISTS)
+                             != SALTS_OK,
+                         "failed streamed digest aborts and removes its stage");
+    failed |= load_authoritative(wal, 0, 0, bytes);
+    if (failed) goto done;
+
+    /* After the explicit failed transfer, the application must restart
+     * from offset zero, not retry its terminal ACK or use stale staging. */
+    rc = tr_raft_snapshot_receiver_handle(fixture.receiver, &first, &received);
+    failed |= ensure(rc == SALTS_OK && received.ack.accepted &&
+                     received.ack.next_offset == FIRST_SIZE &&
+                     !received.installed,
+                     "explicit new offset-zero admission after digest failure");
+    if (failed) goto done;
+
     rc = tr_raft_snapshot_receiver_handle(fixture.receiver, &last, &received);
     failed |= ensure(rc == SALTS_OK && received.ack.accepted &&
                      received.ack.next_offset == SNAPSHOT_SIZE &&
                      received.installed,
-                     "final chunk alone validates and installs WAL Snapshot");
+                     "full digest verification alone authorizes WAL Snapshot");
     failed |= ensure(streaming ? fixture.stream.commits == 1U :
                      fixture.installed == 1U,
                      "exactly one real WAL Snapshot install per transfer");
