@@ -412,10 +412,27 @@ static int peer_case_run(int mode)
 
     if (mode == PEER_VALID || mode == PEER_STREAMS) {
         const size_t expected_server = mode == PEER_STREAMS ? 3U : 1U;
+        /* Prove actual CNet logical write completions, not merely terminal
+         * cancellation balancing the ledger after a successful receive. */
+        for (iteration = 0U; iteration < 1000U; ++iteration) {
+            PEER_TRY(cnet_client_poll(&f.client, 1U, &events));
+            PEER_TRY(cnet_client_poll(&f.server, 1U, &events));
+            PEER_TRY(tr_raft_cnet_channel_get_status(f.client_channel, &cs));
+            PEER_TRY(tr_raft_cnet_channel_get_status(f.server_channel, &ss));
+            if (cs.payloads_completed == expected_server &&
+                ss.payloads_completed == 1U)
+                break;
+        }
+        if (iteration == 1000U) {
+            result = SALTS_ETIMEDOUT;
+            error_stage = "authenticated CNet on_send never settled logical payloads";
+            goto cleanup;
+        }
         PEER_TRY(tr_raft_cnet_channel_get_status(f.client_channel, &cs));
         PEER_TRY(tr_raft_cnet_channel_get_status(f.server_channel, &ss));
         if (cs.payloads_admitted != expected_server ||
             ss.payloads_admitted != 1U ||
+            cs.payloads_canceled != 0U || ss.payloads_canceled != 0U ||
             cs.payloads_admitted != cs.payloads_completed +
                 cs.payloads_canceled + cs.payload_writes_pending ||
             ss.payloads_admitted != ss.payloads_completed +
