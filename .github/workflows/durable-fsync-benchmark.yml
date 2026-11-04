@@ -37,19 +37,29 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      GH_TOKEN: ${{ github.token }}
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
 
     steps:
       - name: Checkout TurboRaft
         uses: actions/checkout@v4
 
+      - name: Checkout released curl cache client
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: v0.1.4
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
       - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
+          triplet: x64-linux
+          host-triplet: x64-linux
 
       - name: Restore shared re2c binary
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.4
 
       - name: Restore published Salts SDKs
         uses: ./.github/actions/setup-native-sdks
@@ -92,6 +102,7 @@ jobs:
             ]
           }
           JSON
+          python3 build/vcpkg-cache-contract/scripts/restore-manifest-cache.py --manifest-root "$manifest" --triplet x64-linux --host-triplet x64-linux
           "$VCPKG_ROOT/vcpkg" install \
             --x-manifest-root="$manifest" \
             --x-install-root="$install" \

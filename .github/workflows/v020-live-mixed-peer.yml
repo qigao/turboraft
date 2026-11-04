@@ -17,16 +17,26 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      GH_TOKEN: ${{ github.token }}
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
       CURRENT_TURBORAFT_ROOT: ${{ github.workspace }}/stage/current
     steps:
       - name: Checkout current TurboRaft
         uses: actions/checkout@v4
 
+      - name: Checkout released curl cache client
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: v0.1.4
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
       - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
+          triplet: x64-linux
+          host-triplet: x64-linux
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -66,6 +76,7 @@ jobs:
             ]
           }
           JSON
+          python3 build/vcpkg-cache-contract/scripts/restore-manifest-cache.py --manifest-root "$manifest" --triplet x64-linux --host-triplet x64-linux
           "$VCPKG_ROOT/vcpkg" install \
             --x-manifest-root="$manifest" \
             --x-install-root="$VCPKG_INSTALLED_DIR" \

@@ -35,11 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
+          triplet: x64-linux
+          host-triplet: x64-linux
       - name: Restore shared re2c binary
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.4
       - name: Restore TurboDB 2.3.1 and published dependencies
         uses: ./.github/actions/setup-native-sdks
         with:
