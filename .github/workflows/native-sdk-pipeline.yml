@@ -123,10 +123,12 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
-      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+          triplet: x64-linux
+          host-triplet: x64-linux
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -203,10 +205,12 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
-      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+          triplet: x64-windows
+          host-triplet: x64-windows
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -370,10 +374,12 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
-      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+          triplet: ${{ matrix.triplet }}
+          host-triplet: ${{ matrix.triplet }}
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"

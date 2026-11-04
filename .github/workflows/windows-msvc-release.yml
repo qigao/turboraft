@@ -21,19 +21,30 @@ env:
 
 jobs:
   windows-x64:
+    env:
+      GH_TOKEN: ${{ github.token }}
     runs-on: windows-2025
     timeout-minutes: 90
     steps:
       - name: Checkout exact TurboRaft head
         uses: actions/checkout@v4
 
+      - name: Checkout released curl cache client
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: v0.1.4
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
       - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
+          triplet: qigao-x64-windows-v145
+          host-triplet: qigao-x64-windows-v145
 
       - name: Restore shared re2c binary
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.4
 
       - name: Checkout FlowMQ main
         uses: actions/checkout@v4
@@ -73,7 +84,7 @@ jobs:
           }
           "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
-          "TURBORAFT_VCPKG_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+          "TURBORAFT_VCPKG_TRIPLET=qigao-x64-windows-v145" >> $env:GITHUB_ENV
           "VCPKG_INSTALLED_DIR=$env:GITHUB_WORKSPACE\.ci\vcpkg_installed_windows" >> $env:GITHUB_ENV
           "FLOWMQ_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\flowmq" >> $env:GITHUB_ENV
           "CHTTP_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\chttp" >> $env:GITHUB_ENV
@@ -126,6 +137,8 @@ jobs:
             ]
           }
           '@ | Set-Content -LiteralPath (Join-Path $manifest "vcpkg.json")
+          python build/vcpkg-cache-contract/scripts/restore-manifest-cache.py --manifest-root $manifest --triplet $env:TURBORAFT_VCPKG_TRIPLET --host-triplet $env:TURBORAFT_VCPKG_TRIPLET
+          if ($LASTEXITCODE -ne 0) { throw 'Exact union ABI restore failed' }
           & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=$manifest --x-install-root=$env:VCPKG_INSTALLED_DIR --triplet=$env:TURBORAFT_VCPKG_TRIPLET --host-triplet=$env:TURBORAFT_VCPKG_TRIPLET --only-binarycaching
           if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency bootstrap failed" }
 

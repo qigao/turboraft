@@ -40,6 +40,7 @@ jobs:
           - name: tsan
             cmake_flags: -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF -DENABLE_SANITIZER_THREAD=ON
     env:
+      GH_TOKEN: ${{ github.token }}
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.ci/vcpkg_installed_${{ matrix.name }}
 
       FLOWMQ_ROOT: ${{ github.workspace }}/.ci/pkgs-${{ matrix.name }}/flowmq
@@ -49,13 +50,22 @@ jobs:
       - name: Checkout exact TurboRaft head
         uses: actions/checkout@v4
 
+      - name: Checkout released curl cache client
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: v0.1.4
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
       - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
+          triplet: x64-linux
+          host-triplet: x64-linux
 
       - name: Restore shared re2c binary
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.4
 
       - name: Restore published Salts SDKs
         uses: ./.github/actions/setup-native-sdks
@@ -115,6 +125,7 @@ jobs:
             ]
           }
           JSON
+          python3 build/vcpkg-cache-contract/scripts/restore-manifest-cache.py --manifest-root "$GITHUB_WORKSPACE/.ci/super-manifest-${{ matrix.name }}" --triplet x64-linux --host-triplet x64-linux
           "$VCPKG_ROOT/vcpkg" install \
             --x-manifest-root="$GITHUB_WORKSPACE/.ci/super-manifest-${{ matrix.name }}" \
             --x-install-root="$VCPKG_INSTALLED_DIR" \
