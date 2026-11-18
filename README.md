@@ -148,19 +148,11 @@ To invalidate the compiler cache, increment `turboraft-v1` in the setup action.
 To roll back caching, remove the `setup-sccache` steps from the workflows;
 the project presets and compiler settings require no changes.
 
-Published producer SDK downloads use a separate
-[NuGet payload cache](.github/actions/cache-native-packages/action.yml).
-The shared SDK restore action resolves floating versions on every run with
-`--no-cache --force-evaluate` and exports roots from that run's NuGet assets.
-Only producer package contents are cached; dependency assets, authenticated
-configs, build trees and the newly packed TurboRaft SDK are excluded. Matrix
-jobs have independent save keys and compatible restore prefixes.
-
-[ci.yml](.github/workflows/ci.yml) runs the complete Linux Release/sanitizer
-and Windows Release graphs. The [native SDK pipeline](.github/workflows/native-sdk-pipeline.yml)
-builds and tests before packaging, then checks the packed headers, callback
-contract and archive symbol inventories. Existing source-tree CTest suites
-provide runtime validation; no independent consumer validation projects are generated.
+Download the binary SDK for your platform and compiler from
+[GitHub Releases](https://github.com/qigao/turboraft/releases). Each release
+provides four CMake SDK archives, a JSON manifest with upstream versions and
+SHA-256 checksums. Extract the selected archive and use its root as the
+TurboRaft installation prefix. See [platforms and packaging](docs/SUPPORTED_PLATFORMS.md#native-sdk-packaging).
 
 Snapshot and WAL SHA-256 use Salts `cmeta_crypto.h`, backed by GmSSL, with no
 OpenSSL/BoringSSL link dependency.

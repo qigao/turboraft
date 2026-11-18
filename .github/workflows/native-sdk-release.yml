@@ -6,24 +6,72 @@ on:
     paths:
       - "CMakeLists.txt"
       - "vcpkg.json"
-      - ".github/workflows/native-sdk-pipeline.yml"
       - ".github/workflows/native-sdk-release.yml"
     tags:
       - "v*"
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
+  packages: read
 
 concurrency:
   group: turboraft-native-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  version:
     if: github.ref_type == 'tag' || startsWith(github.event.head_commit.message, 'release:')
-    uses: ./.github/workflows/native-sdk-pipeline.yml
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(jq -er '.["version-semver"]' vcpkg.json)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          tag="v$version"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then test "$tag" = "$GITHUB_REF_NAME"; fi
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            test "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse HEAD)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    uses: ./.github/workflows/ci.yml
     with:
-      publish: true
-      source_sha: ${{ github.sha }}
-    secrets: inherit
+      release_version: ${{ needs.version.outputs.version }}
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TURBORAFT_CI_ENV: ${{ vars.TURBORAFT_CI_ENV }}
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/load-upstream
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sdk-*
+          path: dist
+          merge-multiple: true
+      - name: Check SDK contents and write release manifest
+        run: python3 .github/ci/release-manifest.py
+      - name: Publish native SDKs on GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum --check SHA256SUMS
+          gh release create "v$RELEASE_VERSION" ./*.tar.gz ./*-manifest.json SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "TurboRaft $RELEASE_VERSION" --generate-notes \
+            --notes "Native CMake SDKs for Linux x64 and arm64, macOS arm64, and Windows x64. Select your compiler and architecture, verify the archive against SHA256SUMS, and extract it as the SDK prefix. The release manifest records the required upstream versions."

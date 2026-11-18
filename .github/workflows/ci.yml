@@ -16,6 +16,11 @@ on:
     branches: [master]
     paths: *code
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_version:
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -25,7 +30,7 @@ env:
   TURBORAFT_CI_ENV: ${{ vars.TURBORAFT_CI_ENV }}
 
 concurrency:
-  group: turboraft-ci-${{ github.ref }}
+  group: turboraft-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -146,6 +151,23 @@ jobs:
           if ($IsWindows) { ./cmake/WithVs.cmd cmake --build --preset "install-ci-$env:NATIVE_PRESET" }
           else { cmake --build --preset "install-ci-$env:NATIVE_PRESET" }
           exit $LASTEXITCODE
+      - name: Archive the tested Release SDK
+        if: inputs.release_version && endsWith(matrix.preset, '-release-user')
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SDK_PROFILE: ${{ matrix.name }}
+        run: |
+          $build = "build/ci-$env:NATIVE_PRESET"
+          $version = (Select-String -LiteralPath "$build/CMakeCache.txt" -Pattern '^CMAKE_PROJECT_VERSION:STATIC=(.+)$').Matches.Groups[1].Value
+          if ($version -cne $env:RELEASE_VERSION) { throw "CMake project version $version differs from release $env:RELEASE_VERSION" }
+          tar -czf "turboraft-$version-$env:SDK_PROFILE.tar.gz" -C "$build/stage" . -C "$env:GITHUB_WORKSPACE" LICENSE NOTICE THIRD_PARTY_NOTICES.md
+      - uses: actions/upload-artifact@v4
+        if: inputs.release_version && endsWith(matrix.preset, '-release-user')
+        with:
+          name: sdk-${{ matrix.name }}
+          path: turboraft-${{ inputs.release_version }}-${{ matrix.name }}.tar.gz
+          if-no-files-found: error
+          compression-level: 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:

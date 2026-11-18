@@ -88,18 +88,17 @@ legacy-compatibility or standalone-tool switches.
 
 ## Native SDK packaging
 
-The [release entry point](../.github/workflows/native-sdk-release.yml) calls
-[the Native SDK pipeline](../.github/workflows/native-sdk-pipeline.yml). The
-pipeline builds, tests and installs the complete Linux and Windows graph,
-then packs both SDKs. It captures installed public headers, enum values,
-callback contracts and archive symbols, compares platform inventories, and
-checks the unpacked package against those inventories.
+The [release workflow](../.github/workflows/native-sdk-release.yml) runs the
+same six jobs as the [CI matrix](../.github/workflows/ci.yml). After CTest and
+installation, the four Release jobs archive their SDK prefixes with the license
+and notices. Publication waits for all six jobs, including both sanitizer runs.
 
-These are package-content and ABI-inventory checks. Runtime evidence comes
-from the project's formal CTest suite; the pipeline does not generate
-independent installed-consumer validation projects. The
-[release workflow](../.github/workflows/native-sdk-release.yml) defines the
-publication steps.
+[GitHub Releases](https://github.com/qigao/turboraft/releases) provides one
+`.tar.gz` per Release profile, a versioned JSON manifest and `SHA256SUMS`.
+The manifest identifies the source commit, producer run, dependency versions
+and each archive's byte size and SHA-256. Download the archive for the target
+architecture and compiler, verify its digest, then extract it. The extracted
+prefix contains the libraries, public headers and `lib/cmake/TurboRaft`.
 
 ## Reporting validation
 

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.23)
 
 project(
         TurboRaft
-        VERSION 0.3.1
+        VERSION 0.3.2
         DESCRIPTION "Raft consensus library for the Salts ecosystem"
         HOMEPAGE_URL "https://github.com/qigao/turboraft"
         LANGUAGES C
