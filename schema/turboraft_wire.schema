@@ -1,4 +1,4 @@
-schema TurboRaftWire [id(8101), version(2), byte_order(little)];
+schema TurboRaftWire [id(8101), version(6), byte_order(little)];
 
 message RaftWireMessage {
     uint8 message_type;
@@ -16,10 +16,38 @@ message RaftWireMessage {
     uint64 previous_log_term;
     uint64 match_index;
     uint64 reject_hint;
-    uint64 entry_index;
-    uint64 entry_term;
-    uint64 entry_command_id;
-    bytes entry_data;
+    uint64 entry1_index;
+    uint64 entry1_term;
+    uint64 entry1_command_id;
+    uint64 entry2_index;
+    uint64 entry2_term;
+    uint64 entry2_command_id;
+    uint64 entry3_index;
+    uint64 entry3_term;
+    uint64 entry3_command_id;
+    uint64 entry4_index;
+    uint64 entry4_term;
+    uint64 entry4_command_id;
+    uint64 entry5_index;
+    uint64 entry5_term;
+    uint64 entry5_command_id;
+    uint64 entry6_index;
+    uint64 entry6_term;
+    uint64 entry6_command_id;
+    uint64 entry7_index;
+    uint64 entry7_term;
+    uint64 entry7_command_id;
+    uint64 entry8_index;
+    uint64 entry8_term;
+    uint64 entry8_command_id;
+    bytes entry1_data;
+    bytes entry2_data;
+    bytes entry3_data;
+    bytes entry4_data;
+    bytes entry5_data;
+    bytes entry6_data;
+    bytes entry7_data;
+    bytes entry8_data;
 }
 
 message InstallSnapshotChunk {

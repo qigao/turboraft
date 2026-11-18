@@ -1,5 +1,5 @@
 name: Restore published native SDKs
-description: Restore current stable SDK inputs and export the selected package roots.
+description: Restore latest SDK inputs, including prereleases, and export the selected package roots.
 inputs:
   rid:
     description: Native SDK runtime identifier
@@ -8,26 +8,57 @@ inputs:
     description: GitHub Packages read token
     required: true
   orm:
-    description: Restore TurboDB 2.3.1 and export the complete ORM integration SDK set
+    description: Restore latest TurboDB and export the complete ORM integration SDK set
     default: "false"
+  packages:
+    description: Space-separated SDKs to export from this restore
+    default: "salts salts-utils"
+  cache-profile:
+    description: Unique cache writer, including the matrix variant when applicable
+    default: ""
+  metadata:
+    description: Optional existing evidence file to append resolved versions to
+    default: ""
+  restore-log:
+    description: Optional restore log path for retained evidence
+    default: ""
 runs:
   using: composite
   steps:
     - uses: actions/setup-dotnet@v4
       with:
         dotnet-version: "8.0.x"
+    - uses: ./.github/actions/cache-native-packages
+      with:
+        packages-path: ${{ runner.temp }}/turboraft-native-dependencies
+        profile: ${{ inputs.cache-profile || github.job }}
     - name: Restore published SDKs
       shell: pwsh
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
         SDK_RID: ${{ inputs.rid }}
         SDK_ORM: ${{ inputs.orm }}
+        SDK_PACKAGES: ${{ inputs.packages }}
+        SDK_METADATA: ${{ inputs.metadata }}
+        SDK_RESTORE_LOG: ${{ inputs.restore-log }}
       run: |
         $ErrorActionPreference = "Stop"
         $packages = Join-Path $env:RUNNER_TEMP "turboraft-native-dependencies"
-        dotnet restore packaging/nuget/TurboRaft.Native.csproj --configfile cmake/native-sdk.nuget.config --packages $packages --no-cache --force-evaluate "-p:TurboRaftRestoreOrm=$env:SDK_ORM"
+        "NATIVE_SDK_PACKAGES=$($packages.Replace('\', '/'))" >> $env:GITHUB_ENV
+        $restoreArgs = @("restore", "packaging/nuget/TurboRaft.Native.csproj", "--configfile", "cmake/native-sdk.nuget.config", "--packages", $packages, "--no-cache", "--force-evaluate", "-p:TurboRaftRestoreOrm=$env:SDK_ORM")
+        if ($env:SDK_RESTORE_LOG) {
+          $logDirectory = Split-Path -Parent $env:SDK_RESTORE_LOG
+          if ($logDirectory) { New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null }
+          dotnet @restoreArgs 2>&1 | Tee-Object -FilePath $env:SDK_RESTORE_LOG
+        } else {
+          dotnet @restoreArgs
+        }
         if ($LASTEXITCODE -ne 0) { throw "native SDK restore failed" }
-        $selected = @("salts", "salts-utils")
-        if ($env:SDK_ORM -eq "true") { $selected += @("flowmq", "chttp", "turbodb") }
-        python tools/ci/export_native_sdks.py --assets packaging/nuget/obj/project.assets.json --rid $env:SDK_RID --packages @selected --runtime-paths
+        $selected = @($env:SDK_PACKAGES -split '\s+' | Where-Object { $_ })
+        if ($env:SDK_ORM -eq "true") { $selected += @("salts", "salts-utils", "chttp", "turbodb") }
+        $selected = @($selected | Select-Object -Unique)
+        if ($selected.Count -eq 0) { throw "at least one SDK must be selected" }
+        $exportArgs = @("cmake/export_native_sdks.py", "--assets", "packaging/nuget/obj/project.assets.json", "--rid", $env:SDK_RID, "--packages") + $selected + @("--runtime-paths")
+        if ($env:SDK_METADATA) { $exportArgs += @("--metadata", $env:SDK_METADATA) }
+        python @exportArgs
         if ($LASTEXITCODE -ne 0) { throw "native SDK resolution failed" }

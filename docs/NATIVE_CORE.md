@@ -6,18 +6,19 @@ requirements. It has no socket, HTTP, filesystem, or background-thread
 dependency.
 
 The core returns work through bounded Ready-style outputs. The service layer
-enforces persistence and apply ordering before advancing the core. All mutable
+enforces persistence and apply ordering. Ready acknowledgement releases the
+admitted work; application acknowledgement advances the proven applied index.
+These are separate facts for asynchronous applications; see the
+[CFlow contract](architecture/cflow-replicated-state-machine.md). All mutable
 core and service calls belong to one owner.
 
 The public `TurboRaft::Core` target links `Salts::Core` and privately uses
-`Salts::CSTL` plus `Salts::DataBind` for generated wire schemas. Transport is a
+`CMeta::CSTL` plus `Salts::DataBind` for generated wire schemas. Transport is a
 separate component:
 
-- `raft_transport.h` provides framing and validated borrowed decode callbacks.
-- `raft_cnet_peer.h` adapts one authenticated CNet connection without owning
+- [raft_transport.h](../include/turboraft/raft_transport.h) provides framing and validated borrowed decode callbacks.
+- [raft_cnet_peer.h](../include/turboraft/raft_cnet_peer.h) adapts one authenticated CNet connection without owning
   the CNet poll loop.
-- `raft_flowmq_peer_service.h` provides the bounded caller-driven multi-peer
-  ROUTER/DEALER service.
 
 Transport enqueue functions copy data before returning success and surface
 capacity pressure. They never retry, block indefinitely, silently drop, or

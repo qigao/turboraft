@@ -1,7 +1,7 @@
 # Peer protocol
 
-Peer traffic uses the TurboRaft binary wire format over authenticated CNet or
-FlowMQ connections. Administration uses CHTTP/CRPC and never enters the
+Peer traffic uses the TurboRaft binary wire format over authenticated CNet
+connections. Administration uses CHTTP/CRPC and never enters the
 consensus protocol.
 
 Each wire frame has a four-byte big-endian length prefix followed by a bounded
@@ -23,3 +23,8 @@ creation; there is no inferred or compatibility contract.
 
 Successful transport admission transfers a copy to bounded local storage. It
 does not acknowledge remote receipt, durability, commit, or apply.
+
+See [Wire protocol](WIRE_PROTOCOL.md) for the current envelope and generation
+contract. The host authenticates the connection and binds it to the peer
+identity before transport admission. All peers must use the current matching contract;
+older releases and mixed-version sessions are not qualified.

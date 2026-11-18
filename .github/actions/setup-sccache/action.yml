@@ -1,0 +1,42 @@
+name: Setup native compiler cache
+description: Cache C/C++ compilation across commits with sccache and GitHub Actions storage
+
+inputs:
+  compiler:
+    description: Compiler family used by the job (gcc, clang, or msvc)
+    required: true
+  configuration:
+    description: Build configuration, including sanitizer mode when enabled
+    required: true
+  profile:
+    description: Build profile used to isolate concurrent jobs
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Select compiler cache partition
+      shell: bash
+      env:
+        CACHE_COMPILER: ${{ inputs.compiler }}
+        CACHE_CONFIGURATION: ${{ inputs.configuration }}
+        CACHE_PROFILE: ${{ inputs.profile }}
+      run: |
+        set -euo pipefail
+        # Keep this namespace stable across commits; sccache hashes each
+        # compiler invocation and its inputs to decide which objects to reuse.
+        {
+          echo "SCCACHE_GHA_ENABLED=true"
+          echo "SCCACHE_GHA_VERSION=turboraft-v1-${RUNNER_OS}-${RUNNER_ARCH}-${CACHE_COMPILER}-${CACHE_CONFIGURATION}-${CACHE_PROFILE}"
+          # Preserve this job's statistics while long-running tests execute.
+          echo "SCCACHE_IDLE_TIMEOUT=0"
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache"
+        } >> "$GITHUB_ENV"
+
+    - name: Install sccache and expose GitHub Actions cache credentials
+      uses: mozilla-actions/sccache-action@v0.0.11
+      with:
+        version: v0.16.0
+      # The upstream post action reports hits, misses and non-cacheable calls
+      # in the job log and summary, including when a build or test fails.

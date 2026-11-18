@@ -5,8 +5,7 @@
       "repository": "https://github.com/qigao/vcpkg-cache",
       "reference": "ab71347f4df19381c819ce8989cb22cb3c61da10",
       "baseline": "ab71347f4df19381c819ce8989cb22cb3c61da10",
-      "packages": [
-        "gmssl",
+      "packages": [ 
         "zstd"
       ]
     }

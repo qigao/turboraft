@@ -40,7 +40,9 @@ the reliable local transport boundary. Once InstallSnapshot is acknowledged,
 the owner calls `tr_raft_service_snapshot_completed()`; Core advances that
 peer's replication progress and resumes with the retained log suffix. A missing
 snapshot transport callback fails fast when the path is first required.
-Snapshot Manager implements that callback with a bounded provider buffer. It
+Snapshot Manager implements that callback with an owned streaming source or an
+explicitly capped whole-buffer provider. The two providers are mutually
+exclusive; see [the manager API](../include/turboraft/raft_snapshot_manager.h). It
 deduplicates an active transfer for the same boundary and notifies Service once
 the peer acknowledges complete installation; ordinary Raft messages and
 snapshot requests use separate transport contexts.
@@ -59,41 +61,54 @@ failure must stop startup; it must not fall back to an empty state machine.
 
 ## InstallSnapshot transport boundary
 
-Wire protocol version 2 defines a versioned InstallSnapshot chunk and
-acknowledgement stream. A follower will stage chunks outside the active snapshot,
+The [current wire protocol](WIRE_PROTOCOL.md) carries InstallSnapshot chunks and
+acknowledgements. A follower stages chunks outside the active snapshot,
 verify identity, ordering, total size, and digest, then atomically install the
 completed snapshot through the storage boundary. Partial transfers never become
 the durable fact source. AppendEntries continues to carry only entries after the
 installed snapshot boundary.
 
-The receiver owns one bounded in-memory staging buffer and enforces exact chunk
-offsets. Duplicate chunks receive the current next offset without advancing
-state. A complete transfer is SHA-256 verified before the install callback.
+The [receiver](../include/turboraft/raft_snapshot_receiver.h) accepts one bounded
+active transfer and enforces exact chunk offsets. A streaming sink supplies
+begin/write/commit/abort callbacks; the whole-buffer install path instead
+requires an explicit `max_buffered_snapshot_bytes` cap. Duplicate chunks receive
+the current next offset without advancing state. A complete transfer is
+SHA-256 verified before sink commit or the buffered install callback.
 WAL remote installation atomically updates hard term, clears a stale vote,
 advances the commit index, installs the snapshot, and reconciles the log suffix.
 The suffix is preserved only when the local entry at the snapshot boundary has
 the same term.
 
-Peer service borrows the receiver and injects one snapshot callback into every
-admitted session. Chunks are processed by the receiver and their acknowledgements
-are enqueued into the same per-peer FIFO. A completed receiver retains only the
+The host routes snapshot chunks from its transport payload callback to the
+receiver and enqueues acknowledgements through the bounded CNet adapter.
+A completed receiver retains only the
 installed snapshot identity and next offset, not the payload bytes, so a lost
 ack can be answered idempotently without reinstalling the snapshot.
 
-The leader-side sender owns an immutable copy of one snapshot and its SHA-256
-digest. Its only progress fact is the acknowledged offset. Calling
-`tr_raft_snapshot_sender_next_chunk()` does not advance that offset, so repeated
-calls before a valid acknowledgement produce the same chunk and an
-unacknowledged chunk can be enqueued again after reconnect.
+The [sender](../include/turboraft/raft_snapshot_sender.h) takes ownership of an
+immutable source descriptor on successful `begin_source`; its small-snapshot
+helper copies the whole input. Chunk size and the 1..4 in-flight window are
+explicit. `next_chunk()` reserves a speculative claim and advances `next_offset`;
+only validated cumulative ACKs advance `acknowledged_offset` and release slots.
+With a one-chunk window, another call can return the current claim; larger full
+windows return `SALTS_EBUSY`. Cancel the newest claim after synchronous enqueue
+rejection, checking the result. After reconnect, `prepare_resume()` discards
+speculative claims so retransmission starts at the acknowledged offset.
+
+Chunk views borrow sender-owned slot storage. Enqueue/copy them before ACK,
+cancel, resume, reset or destruction can reuse that storage. The source release
+callback runs after final acknowledgement, reset or destruction. Transport
+admission does not establish remote snapshot installation.
 
 The sender validates peer identity, transfer identity, digest, and the exact
-next chunk boundary before committing progress. A peer-service acknowledgement
+next chunk boundary before committing progress. A transport acknowledgement
 callback can therefore enqueue the next sender chunk through the same bounded
 per-peer FIFO used by Raft messages.
 
-## Compatibility and rollback
+## Format safety
 
 The WAL format is strict and does not import the removed database format.
-Unknown format versions fail with `SALTS_EPROTO`. Rollback requires a WAL and
-snapshot backup from the target binary version. Wire compatibility is a
-separate concern from local storage format compatibility.
+Unknown format versions fail with `SALTS_EPROTO`. Restore requires a complete
+matching WAL and snapshot set; see [Recovery](RECOVERY.md). This is a durable
+data-safety requirement, not a promise of historical binary compatibility.
+Peer wire admission follows its separate [current contract](WIRE_PROTOCOL.md).

@@ -1,6 +1,6 @@
 #include "../tests/core/multicore_fixture.h"
 #include "multicore_metrics.h"
-#include <fmt.h>
+#include <core/fmt.h>
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -21,8 +21,8 @@ spec("multicore proposal scheduling benchmark")
     after_each() {
         if (fixture.mutex != NULL) test_release(&fixture);
         tr_raft_multicore_destroy(fixture.runtime);
-        cmeta_cond_destroy(&fixture.changed);
-        cmeta_mutex_destroy(&fixture.mutex);
+        sync_cond_destroy(&fixture.changed);
+        sync_mutex_destroy(&fixture.mutex);
         memset(&fixture, 0, sizeof(fixture));
     }
     for (uint32_t owners = 1U; owners <= 4U; owners *= 2U) {
@@ -38,7 +38,7 @@ spec("multicore proposal scheduling benchmark")
             request.operation = TR_RAFT_MULTICORE_PROPOSE;
             request.value.proposal.size = sizeof(uint64_t);
             check_equal(multicore_process_metrics(&cpu_before, &peak_bytes), 0);
-            begin = cmeta_hrtime();
+            begin = hrtime();
             benchmark_ops("8 groups, 8 pending/group, in-memory storage", MC_BENCH_SAMPLES,
                           TEST_GROUPS * MC_BENCH_BATCH) {
                 for (size_t group = 0; group < TEST_GROUPS; ++group) {
@@ -46,7 +46,7 @@ spec("multicore proposal scheduling benchmark")
                         request.request_id = sample * MC_BENCH_BATCH + n + 1U;
                         request.value.proposal.command_id = request.request_id;
                         memcpy(request.value.proposal.data, &request.request_id, sizeof(uint64_t));
-                        starts[group][n] = cmeta_hrtime();
+                        starts[group][n] = hrtime();
                         check_equal(tr_raft_multicore_submit(fixture.runtime, group + 1U, &request), SALTS_OK);
                     }
                 }
@@ -55,16 +55,16 @@ spec("multicore proposal scheduling benchmark")
                         int result;
                         do {
                             result = tr_raft_multicore_take(fixture.runtime, group + 1U, &completion);
-                            if (result == SALTS_ENOENT) cmeta_thread_yield();
-                        } while (result == SALTS_ENOENT && cmeta_hrtime() - starts[group][n] < UINT64_C(10000000000));
-                        latency[measured++] = cmeta_hrtime() - starts[group][n];
+                            if (result == SALTS_ENOENT) sync_thread_yield();
+                        } while (result == SALTS_ENOENT && hrtime() - starts[group][n] < UINT64_C(10000000000));
+                        latency[measured++] = hrtime() - starts[group][n];
                         check_equal(result, SALTS_OK);
                         check_equal(completion.result, SALTS_OK);
                     }
                 }
                 ++sample;
             }
-            elapsed = cmeta_hrtime() - begin;
+            elapsed = hrtime() - begin;
             check_equal(multicore_process_metrics(&cpu_after, &peak_bytes), 0);
             check_equal(tr_raft_multicore_stop(fixture.runtime), SALTS_OK);
             check_equal(measured, MC_BENCH_OPERATIONS);

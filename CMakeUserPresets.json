@@ -1,742 +1,542 @@
 {
   "version": 6,
   "include": [
-    "CMakePresets.json"
+    "CMakePresets.json",
+    "presets/UserEnvironments.json"
   ],
   "configurePresets": [
     {
-      "name": "vcpkg-cache-ci",
-      "hidden": true,
-      "inherits": "vcpkg-cache",
-      "environment": {
-        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
-        "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}"
-      }
-    },
-    {
-      "name": "vcpkg-cache-linux",
-      "hidden": true,
-      "inherits": "vcpkg-cache",
-      "cacheVariables": {
-        "VCPKG_HOST_TRIPLET": "x64-linux"
-      },
-      "environment": {
-        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{HOME}/.cache/qigao/vcpkg-cache"
-      }
-    },
-    {
-      "name": "vcpkg-cache-windows",
-      "hidden": true,
-      "inherits": "vcpkg-cache",
-      "cacheVariables": {
-        "VCPKG_HOST_TRIPLET": "x64-windows"
-      },
-      "environment": {
-        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{LOCALAPPDATA}/qigao/vcpkg-cache",
-        "RE2C_ROOT": "$env{PKG_ROOT}/re2c/windows-x64"
-      }
-    },
-    {
-      "name": "vcpkg-cache",
-      "hidden": true,
-      "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
-      "environment": {
-        "VCPKG_BINARY_SOURCES": "clear;default,readwrite;nugettimeout,1800;nugetconfig,${sourceDir}/cmake/vcpkg-cache.nuget.config,read",
-        "VCPKG_OVERLAY_PORTS": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/ports",
-        "RE2C_ROOT": "$penv{RE2C_ROOT}",
-        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$penv{PATH}"
-      }
-    },
-    {
-      "name": "win-toolchain",
-      "hidden": true,
-      "environment": {
-        "PROJECT_ROOT": "C:/projects/cpp",
-        "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
-        "VCPKG_ROOT": "C:/tools/vcpkg",
-        "USER_ROOT": "C:/Users/lockg",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
-      },
+      "name": "native-release-user",
+      "displayName": "Windows llvm-mingw Release",
       "inherits": [
-        "vcpkg-cache-windows"
+        "target-llvm-mingw-x64",
+        "full-native",
+        "native-environment"
       ]
     },
     {
-      "name": "win-paths",
-      "hidden": true,
-      "inherits": "win-toolchain",
-      "cacheVariables": {
-        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
-        "PKG_CONFIG_EXECUTABLE": "$env{VCPKG_INSTALLED_DIR}/x64-windows/tools/pkgconf/pkgconf.exe",
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "VCPKG_MANIFEST_MODE": "ON"
-      },
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
-      },
-      "toolset": {
-        "value": "host=x64",
-        "strategy": "external"
+      "name": "llvm-native-tsan-user",
+      "displayName": "Linux LLVM TSan",
+      "inherits": [
+        "native-environment",
+        "full-native-tsan",
+        "toolkit-llvm-native"
+      ],
+      "environment": {
+        "VCPKG_TARGET_TRIPLET": "$penv{VCPKG_TARGET_TRIPLET}"
       }
     },
     {
-      "name": "linux-paths",
-      "hidden": true,
-      "cacheVariables": {
-        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
-        "VCPKG_TARGET_TRIPLET": "x64-linux",
-        "VCPKG_MANIFEST_MODE": "ON"
-      },
-      "environment": {
-        "PKG_ROOT": "/opt",
-        "VCPKG_ROOT": "/opt/vcpkg",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
-      },
+      "name": "msvc-release-user",
+      "displayName": "Windows MSVC Release",
       "inherits": [
-        "vcpkg-cache-linux"
+        "windows-msvc",
+        "native-environment",
+        "full-native"
       ]
     },
     {
-      "name": "android-win-environment",
-      "hidden": true,
-      "inherits": "win-toolchain",
-      "environment": {
-        "ANDROID_SDK_ROOT": "$env{USER_ROOT}/AppData/Local/Android/Sdk",
-        "ANDROID_NDK_VERSION": "28.2.13676358",
-        "ANDROID_NDK_HOME": "$env{ANDROID_SDK_ROOT}/ndk/$env{ANDROID_NDK_VERSION}"
-      }
-    },
-    {
-      "name": "android-win-user-paths",
-      "hidden": true,
+      "name": "llvm-native-release-user",
+      "displayName": "POSIX LLVM Release",
       "inherits": [
-        "vcpkg-cache-windows",
-        "android-win-paths",
-        "ISWindows"
-      ],
-      "cacheVariables": {
-        "PKG_CONFIG_EXECUTABLE": "$env{VCPKG_INSTALLED_DIR}/x64-windows/tools/pkgconf/pkgconf.exe",
-        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}"
-      }
-    },
-    {
-      "name": "win-dev-user",
-      "inherits": [
-        "base-win-dev-user",
-        "win-paths"
+        "native-environment",
+        "toolkit-llvm-native",
+        "full-native"
       ],
       "environment": {
-        "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
-        "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
-        "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq/debug",
-        "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/debug",
-        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{FLOWMQ_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}"
-      },
-      "cacheVariables": {
-        "ENABLE_SANITIZER_ADDRESS": "ON",
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug",
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft/debug"
+        "VCPKG_TARGET_TRIPLET": "$penv{VCPKG_TARGET_TRIPLET}"
       }
     },
     {
-      "name": "win-release-user",
+      "name": "gcc-release-user",
+      "displayName": "Linux GCC Release",
       "inherits": [
-        "base-win-release-user",
-        "win-paths"
-      ],
-      "environment": {
-        "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-        "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
-        "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq/release",
-        "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/release",
-        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{FLOWMQ_ROOT}/bin${pathListSep}$env{TURBODB_ROOT}/bin${pathListSep}$penv{PATH}"
-      },
-      "cacheVariables": {
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows",
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft/release"
-      }
-    },
-    {
-      "name": "linux-dev-user",
-      "inherits": [
-        "base-linux-dev-user",
-        "linux-paths"
-      ],
-      "environment": {
-        "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
-        "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
-        "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq/debug",
-        "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/debug",
-        "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{FLOWMQ_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
-      },
-      "cacheVariables": {
-        "ENABLE_SANITIZER_ADDRESS": "ON",
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug",
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft/debug"
-      }
-    },
-    {
-      "name": "linux-release-user",
-      "inherits": [
-        "release-linux-ninja",
-        "linux-paths"
-      ],
-      "environment": {
-        "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-        "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
-        "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq/release",
-        "TURBODB_ROOT": "$env{PKG_ROOT}/turbodb/release",
-        "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{FLOWMQ_ROOT}/lib${pathListSep}$env{TURBODB_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
-      },
-      "cacheVariables": {
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft/release"
-      }
-    },
-    {
-      "name": "win-analyze-user",
-      "inherits": [
-        "win-dev-user"
-      ],
-      "binaryDir": "${sourceDir}/build/Msvc-Analyze",
-      "cacheVariables": {
-        "ENABLE_SANITIZER_ADDRESS": "OFF",
-        "ENABLE_MSVC_ANALYZE": "ON"
-      }
-    },
-    {
-      "name": "linux-ubsan-user",
-      "inherits": [
-        "linux-dev-user"
-      ],
-      "binaryDir": "${sourceDir}/build/Linux-UBSan",
-      "cacheVariables": {
-        "ENABLE_SANITIZER_ADDRESS": "OFF",
-        "ENABLE_SANITIZER_UNDEFINED": "ON"
-      }
-    },
-    {
-      "name": "linux-tsan-user",
-      "inherits": [
-        "linux-dev-user"
-      ],
-      "binaryDir": "${sourceDir}/build/Linux-TSan",
-      "cacheVariables": {
-        "ENABLE_SANITIZER_ADDRESS": "OFF",
-        "ENABLE_SANITIZER_THREAD": "ON"
-      }
-    },
-    {
-      "name": "android-dependencies-debug",
-      "hidden": true,
-      "environment": {
-        "SALTS_ROOT": "$env{PKG_ROOT}/salts-android/debug",
-        "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils-android/debug",
-        "SALTS_UTILS_HOST_ROOT": "$env{PKG_ROOT}/salts-utils/release",
-        "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq-android/debug"
-      },
-      "cacheVariables": {
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft-android/debug"
-      }
-    },
-    {
-      "name": "android-dependencies-release",
-      "hidden": true,
-      "environment": {
-        "SALTS_ROOT": "$env{PKG_ROOT}/salts-android/release",
-        "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils-android/release",
-        "SALTS_UTILS_HOST_ROOT": "$env{PKG_ROOT}/salts-utils/release",
-        "FLOWMQ_ROOT": "$env{PKG_ROOT}/flowmq-android/release"
-      },
-      "cacheVariables": {
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft-android/release"
-      }
-    },
-    {
-      "name": "android-arm64-v8a-debug-win",
-      "inherits": [
-        "android-arm64-v8a-debug",
-        "android-dependencies-debug",
-        "android-win-user-paths",
-        "android-win-environment"
+        "native-environment",
+        "linux-gcc",
+        "full-native"
       ]
     },
     {
-      "name": "android-arm64-v8a-release-win",
+      "name": "android-release-user",
+      "displayName": "Android NDK Clang Release",
+      "inherits": [
+        "vcpkg-cache",
+        "android-release"
+      ]
+    },
+    {
+      "name": "llvm-mingw-x64-release-user",
+      "displayName": "llvm-mingw Windows x64 Release",
+      "inherits": [
+        "target-llvm-mingw-x64",
+        "release-mode",
+        "native-environment"
+      ]
+    },
+    {
+      "name": "android-arm64-release-user",
+      "displayName": "Android NDK arm64-v8a Release",
       "inherits": [
         "android-arm64-v8a-release",
-        "android-dependencies-release",
-        "android-win-user-paths",
-        "android-win-environment"
+        "vcpkg-cache"
       ]
     },
     {
-      "name": "android-x86_64-debug-win",
-      "inherits": [
-        "android-x86_64-debug",
-        "android-dependencies-debug",
-        "android-win-user-paths",
-        "android-win-environment"
-      ]
-    },
-    {
-      "name": "android-x86_64-release-win",
+      "name": "android-x64-release-user",
+      "displayName": "Android NDK x86_64 Release",
       "inherits": [
         "android-x86_64-release",
-        "android-dependencies-release",
-        "android-win-user-paths",
-        "android-win-environment"
+        "vcpkg-cache"
       ]
     },
     {
-      "name": "android-x86-debug-win",
-      "inherits": [
-        "android-x86-debug",
-        "android-dependencies-debug",
-        "android-win-user-paths",
-        "android-win-environment"
-      ]
-    },
-    {
-      "name": "android-x86-release-win",
-      "inherits": [
-        "android-x86-release",
-        "android-dependencies-release",
-        "android-win-user-paths",
-        "android-win-environment"
-      ]
-    },
-    {
-      "name": "native-sdk-ci",
+      "name": "ci-vcpkg",
       "hidden": true,
-      "inherits": "vcpkg-cache-ci",
-      "binaryDir": "${sourceDir}/build/native-sdk",
+      "description": "CI consumes restored preinstalled vcpkg-cache packages",
       "environment": {
-        "VCPKG_ROOT": "$penv{VCPKG_ROOT}",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
-        "SALTS_ROOT": "$penv{SALTS_ROOT}",
-        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-        "FLOWMQ_ROOT": "$penv{FLOWMQ_ROOT}",
-        "CHTTP_ROOT": "$penv{CHTTP_ROOT}",
-        "TURBODB_ROOT": "$penv{TURBODB_ROOT}"
+        "VCPKG_INSTALLED_DIR": "$penv{VCPKG_INSTALLED_DIR}"
       },
       "cacheVariables": {
-        "VCPKG_MANIFEST_MODE": true,
-        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
-        "VCPKG_INSTALL_OPTIONS": "--only-binarycaching",
-        "BUILD_TESTING": false,
-        "BUILD_TESTS": false,
-        "BUILD_BENCHMARKS": false,
-        "BUILD_EXAMPLES": false,
-        "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": false
+        "BUILD_TESTS": "OFF",
+        "BUILD_BENCHMARKS": "OFF",
+        "BUILD_EXAMPLES": "OFF"
       }
     },
     {
-      "name": "native-sdk-linux-user",
+      "name": "ci-native-tests",
+      "hidden": true,
+      "inherits": "ci-vcpkg",
+      "description": "Native CI builds and executes the complete formal test graph",
+      "cacheVariables": {
+        "BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "ci-msvc-release-user",
+      "displayName": "CI shared vcpkg cache: msvc-release-user",
       "inherits": [
-        "native-sdk-ci",
-        "release-linux-ninja"
-      ],
-      "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "x64-linux",
-        "VCPKG_HOST_TRIPLET": "x64-linux",
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/sdk/linux-x64"
-      }
+        "ci-native-tests",
+        "msvc-release-user"
+      ]
     },
     {
-      "name": "native-sdk-windows-user",
+      "name": "ci-llvm-mingw-x64-release-user",
+      "displayName": "CI shared vcpkg cache: llvm-mingw-x64-release-user",
       "inherits": [
-        "native-sdk-ci",
-        "release-win-msvc-ninja"
-      ],
-      "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "VCPKG_HOST_TRIPLET": "x64-windows",
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows",
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/sdk/windows-x64"
-      }
+        "ci-native-tests",
+        "llvm-mingw-x64-release-user"
+      ]
     },
     {
-      "name": "ci-linux-release-user",
-      "inherits": "native-sdk-linux-user",
-      "binaryDir": "${sourceDir}/.ci/build/turboraft",
-      "cacheVariables": {
-        "TURBORAFT_BUILD_PROFILE": "full",
-        "BUILD_TESTING": true,
-        "BUILD_TESTS": true
-      },
+      "name": "ci-llvm-native-release-user",
+      "displayName": "CI shared vcpkg cache: llvm-native-release-user",
+      "inherits": [
+        "ci-native-tests",
+        "llvm-native-release-user"
+      ]
+    },
+    {
+      "name": "ci-gcc-release-user",
+      "displayName": "CI shared vcpkg cache: gcc-release-user",
+      "inherits": [
+        "ci-native-tests",
+        "gcc-release-user"
+      ]
+    },
+    {
+      "name": "ci-android-arm64-release-user",
+      "displayName": "CI Android arm64-v8a Release (build and install)",
+      "inherits": [
+        "ci-vcpkg",
+        "android-arm64-release-user"
+      ]
+    },
+    {
+      "name": "ci-android-x64-release-user",
+      "displayName": "CI Android x86_64 Release (build and install)",
+      "inherits": [
+        "ci-vcpkg",
+        "android-x64-release-user"
+      ]
+    },
+    {
+      "name": "llvm-native-asan-ubsan-user",
+      "inherits": [
+        "native-environment",
+        "full-native-asan-ubsan",
+        "toolkit-llvm-native"
+      ],
       "environment": {
-        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{FLOWMQ_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "${sourceDir}/.ci/build/turboraft/bin${pathListSep}$env{FLOWMQ_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+        "VCPKG_TARGET_TRIPLET": "$penv{VCPKG_TARGET_TRIPLET}"
       }
     },
     {
-      "name": "win-storage-user",
-      "inherits": "win-release-user",
-      "description": "Release storage-dev libraries without FlowMQ or host parser tools",
-      "binaryDir": "${sourceDir}/build/Msvc-Storage",
-      "cacheVariables": {
-        "TURBORAFT_BUILD_PROFILE": "storage-dev",
-        "BUILD_TESTING": false,
-        "BUILD_TESTS": false,
-        "BUILD_BENCHMARKS": false,
-        "BUILD_EXAMPLES": false,
-        "TURBORAFT_BUILD_FUZZERS": false,
-        "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": false,
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboraft-storage/release"
-      }
+      "name": "ci-llvm-native-asan-ubsan-user",
+      "inherits": [
+        "ci-native-tests",
+        "llvm-native-asan-ubsan-user"
+      ]
     },
     {
-      "name": "win-benchmarks-user",
-      "inherits": "win-release-user",
-      "binaryDir": "${sourceDir}/build/Msvc-Benchmarks",
-      "cacheVariables": {
-        "BUILD_TESTING": true,
-        "BUILD_TESTS": false,
-        "BUILD_BENCHMARKS": true,
-        "BUILD_EXAMPLES": true
-      }
-    },
-    {
-      "name": "linux-benchmarks-user",
-      "inherits": "linux-release-user",
-      "binaryDir": "${sourceDir}/build/Linux-Benchmarks",
-      "cacheVariables": {
-        "BUILD_TESTING": true,
-        "BUILD_TESTS": false,
-        "BUILD_BENCHMARKS": true,
-        "BUILD_EXAMPLES": true
-      }
-    },
-    {
-      "name": "win-orm-user",
-      "inherits": "win-release-user",
-      "binaryDir": "${sourceDir}/build/Msvc-Orm",
-      "cacheVariables": {
-        "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": true,
-        "BUILD_TESTING": true,
-        "BUILD_TESTS": true,
-        "BUILD_EXAMPLES": false,
-        "BUILD_BENCHMARKS": false
-      }
-    },
-    {
-      "name": "ci-linux-orm-user",
-      "inherits": "ci-linux-release-user",
-      "binaryDir": "${sourceDir}/.ci/build/turboraft-orm",
-      "cacheVariables": {
-        "TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES": true,
-        "BUILD_TESTING": true,
-        "BUILD_TESTS": true,
-        "BUILD_EXAMPLES": false,
-        "BUILD_BENCHMARKS": false
-      }
+      "name": "ci-llvm-native-tsan-user",
+      "inherits": [
+        "ci-native-tests",
+        "llvm-native-tsan-user"
+      ]
     }
   ],
   "buildPresets": [
     {
-      "name": "ci-linux-release-user",
-      "configurePreset": "ci-linux-release-user"
+      "name": "native-release-user",
+      "inherits": [
+        "base-build",
+        "build-windows"
+      ],
+      "configurePreset": "native-release-user"
     },
     {
-      "name": "install-ci-linux-release-user",
-      "configurePreset": "ci-linux-release-user",
-      "targets": [
-        "install"
-      ]
+      "name": "install-native-release-user",
+      "inherits": [
+        "base-install",
+        "build-windows"
+      ],
+      "configurePreset": "native-release-user"
     },
     {
-      "name": "win-dev-user",
-      "configurePreset": "win-dev-user"
+      "name": "llvm-native-tsan-user",
+      "inherits": [
+        "base-build",
+        "build-linux"
+      ],
+      "configurePreset": "llvm-native-tsan-user"
     },
     {
-      "name": "win-release-user",
-      "configurePreset": "win-release-user"
+      "name": "install-llvm-native-tsan-user",
+      "inherits": [
+        "base-install",
+        "build-linux"
+      ],
+      "configurePreset": "llvm-native-tsan-user"
     },
     {
-      "name": "win-analyze-user",
-      "configurePreset": "win-analyze-user"
+      "name": "msvc-release-user",
+      "inherits": [
+        "base-build",
+        "build-windows"
+      ],
+      "configurePreset": "msvc-release-user"
     },
     {
-      "name": "linux-dev-user",
-      "configurePreset": "linux-dev-user"
+      "name": "install-msvc-release-user",
+      "inherits": [
+        "base-install",
+        "build-windows"
+      ],
+      "configurePreset": "msvc-release-user"
     },
     {
-      "name": "linux-release-user",
-      "configurePreset": "linux-release-user"
+      "name": "llvm-native-release-user",
+      "inherits": [
+        "base-build",
+        "build-posix"
+      ],
+      "configurePreset": "llvm-native-release-user"
     },
     {
-      "name": "linux-ubsan-user",
-      "configurePreset": "linux-ubsan-user"
+      "name": "install-llvm-native-release-user",
+      "inherits": [
+        "base-install",
+        "build-posix"
+      ],
+      "configurePreset": "llvm-native-release-user"
     },
     {
-      "name": "linux-tsan-user",
-      "configurePreset": "linux-tsan-user"
+      "name": "gcc-release-user",
+      "inherits": [
+        "base-build",
+        "build-linux"
+      ],
+      "configurePreset": "gcc-release-user"
     },
     {
-      "name": "install-win-dev-user",
-      "configurePreset": "win-dev-user",
-      "targets": [
-        "install"
-      ]
+      "name": "install-gcc-release-user",
+      "inherits": [
+        "base-install",
+        "build-linux"
+      ],
+      "configurePreset": "gcc-release-user"
     },
     {
-      "name": "install-win-release-user",
-      "configurePreset": "win-release-user",
-      "targets": [
-        "install"
-      ]
+      "name": "android-release-user",
+      "inherits": "base-build",
+      "configurePreset": "android-release-user"
     },
     {
-      "name": "install-linux-dev-user",
-      "configurePreset": "linux-dev-user",
-      "targets": [
-        "install"
-      ]
+      "name": "install-android-release-user",
+      "inherits": "base-install",
+      "configurePreset": "android-release-user"
     },
     {
-      "name": "install-linux-release-user",
-      "configurePreset": "linux-release-user",
-      "targets": [
-        "install"
-      ]
+      "name": "llvm-mingw-x64-release-user",
+      "inherits": [
+        "base-build",
+        "build-windows"
+      ],
+      "configurePreset": "llvm-mingw-x64-release-user"
     },
     {
-      "name": "android-arm64-v8a-debug-win",
-      "configurePreset": "android-arm64-v8a-debug-win"
+      "name": "install-llvm-mingw-x64-release-user",
+      "inherits": [
+        "base-install",
+        "build-windows"
+      ],
+      "configurePreset": "llvm-mingw-x64-release-user"
     },
     {
-      "name": "android-arm64-v8a-release-win",
-      "configurePreset": "android-arm64-v8a-release-win"
+      "name": "android-arm64-release-user",
+      "inherits": "base-build",
+      "configurePreset": "android-arm64-release-user"
     },
     {
-      "name": "android-x86_64-debug-win",
-      "configurePreset": "android-x86_64-debug-win"
+      "name": "install-android-arm64-release-user",
+      "inherits": "base-install",
+      "configurePreset": "android-arm64-release-user"
     },
     {
-      "name": "android-x86_64-release-win",
-      "configurePreset": "android-x86_64-release-win"
+      "name": "android-x64-release-user",
+      "inherits": "base-build",
+      "configurePreset": "android-x64-release-user"
     },
     {
-      "name": "android-x86-debug-win",
-      "configurePreset": "android-x86-debug-win"
+      "name": "install-android-x64-release-user",
+      "inherits": "base-install",
+      "configurePreset": "android-x64-release-user"
     },
     {
-      "name": "android-x86-release-win",
-      "configurePreset": "android-x86-release-win"
+      "name": "ci-msvc-release-user",
+      "inherits": [
+        "msvc-release-user"
+      ],
+      "configurePreset": "ci-msvc-release-user"
     },
     {
-      "name": "install-android-arm64-v8a-debug-win",
-      "configurePreset": "android-arm64-v8a-debug-win",
-      "targets": [
-        "install"
-      ]
+      "name": "install-ci-msvc-release-user",
+      "inherits": [
+        "install-msvc-release-user"
+      ],
+      "configurePreset": "ci-msvc-release-user"
     },
     {
-      "name": "install-android-arm64-v8a-release-win",
-      "configurePreset": "android-arm64-v8a-release-win",
-      "targets": [
-        "install"
-      ]
+      "name": "ci-llvm-mingw-x64-release-user",
+      "inherits": [
+        "llvm-mingw-x64-release-user"
+      ],
+      "configurePreset": "ci-llvm-mingw-x64-release-user"
     },
     {
-      "name": "install-android-x86_64-debug-win",
-      "configurePreset": "android-x86_64-debug-win",
-      "targets": [
-        "install"
-      ]
+      "name": "install-ci-llvm-mingw-x64-release-user",
+      "inherits": [
+        "install-llvm-mingw-x64-release-user"
+      ],
+      "configurePreset": "ci-llvm-mingw-x64-release-user"
     },
     {
-      "name": "install-android-x86_64-release-win",
-      "configurePreset": "android-x86_64-release-win",
-      "targets": [
-        "install"
-      ]
+      "name": "ci-llvm-native-release-user",
+      "inherits": [
+        "llvm-native-release-user"
+      ],
+      "configurePreset": "ci-llvm-native-release-user"
     },
     {
-      "name": "install-android-x86-debug-win",
-      "configurePreset": "android-x86-debug-win",
-      "targets": [
-        "install"
-      ]
+      "name": "install-ci-llvm-native-release-user",
+      "inherits": [
+        "install-llvm-native-release-user"
+      ],
+      "configurePreset": "ci-llvm-native-release-user"
     },
     {
-      "name": "install-android-x86-release-win",
-      "configurePreset": "android-x86-release-win",
-      "targets": [
-        "install"
-      ]
+      "name": "ci-gcc-release-user",
+      "inherits": [
+        "gcc-release-user"
+      ],
+      "configurePreset": "ci-gcc-release-user"
     },
     {
-      "name": "native-sdk-linux-user",
-      "configurePreset": "native-sdk-linux-user"
+      "name": "install-ci-gcc-release-user",
+      "inherits": [
+        "install-gcc-release-user"
+      ],
+      "configurePreset": "ci-gcc-release-user"
     },
     {
-      "name": "install-native-sdk-linux-user",
-      "configurePreset": "native-sdk-linux-user",
-      "targets": [
-        "install"
-      ]
+      "name": "ci-android-arm64-release-user",
+      "inherits": "android-arm64-release-user",
+      "configurePreset": "ci-android-arm64-release-user"
     },
     {
-      "name": "native-sdk-windows-user",
-      "configurePreset": "native-sdk-windows-user"
+      "name": "install-ci-android-arm64-release-user",
+      "inherits": "install-android-arm64-release-user",
+      "configurePreset": "ci-android-arm64-release-user"
     },
     {
-      "name": "install-native-sdk-windows-user",
-      "configurePreset": "native-sdk-windows-user",
-      "targets": [
-        "install"
-      ]
+      "name": "ci-android-x64-release-user",
+      "inherits": "android-x64-release-user",
+      "configurePreset": "ci-android-x64-release-user"
     },
     {
-      "name": "win-storage-user",
-      "configurePreset": "win-storage-user"
+      "name": "install-ci-android-x64-release-user",
+      "inherits": "install-android-x64-release-user",
+      "configurePreset": "ci-android-x64-release-user"
     },
     {
-      "name": "install-win-storage-user",
-      "configurePreset": "win-storage-user",
-      "targets": [
-        "install"
-      ]
+      "name": "llvm-native-asan-ubsan-user",
+      "inherits": [
+        "base-build",
+        "build-linux"
+      ],
+      "configurePreset": "llvm-native-asan-ubsan-user"
     },
     {
-      "name": "win-benchmarks-user",
-      "configurePreset": "win-benchmarks-user"
+      "name": "install-llvm-native-asan-ubsan-user",
+      "inherits": [
+        "base-install",
+        "build-linux"
+      ],
+      "configurePreset": "llvm-native-asan-ubsan-user"
     },
     {
-      "name": "install-win-benchmarks-user",
-      "configurePreset": "win-benchmarks-user",
-      "targets": [
-        "install"
-      ]
+      "name": "ci-llvm-native-asan-ubsan-user",
+      "inherits": [
+        "base-build",
+        "build-linux"
+      ],
+      "configurePreset": "ci-llvm-native-asan-ubsan-user"
     },
     {
-      "name": "linux-benchmarks-user",
-      "configurePreset": "linux-benchmarks-user"
+      "name": "install-ci-llvm-native-asan-ubsan-user",
+      "inherits": [
+        "base-install",
+        "build-linux"
+      ],
+      "configurePreset": "ci-llvm-native-asan-ubsan-user"
     },
     {
-      "name": "install-linux-benchmarks-user",
-      "configurePreset": "linux-benchmarks-user",
-      "targets": [
-        "install"
-      ]
+      "name": "ci-llvm-native-tsan-user",
+      "inherits": [
+        "base-build",
+        "build-linux"
+      ],
+      "configurePreset": "ci-llvm-native-tsan-user"
     },
     {
-      "name": "win-orm-user",
-      "configurePreset": "win-orm-user"
-    },
-    {
-      "name": "install-win-orm-user",
-      "configurePreset": "win-orm-user",
-      "targets": [
-        "install"
-      ]
-    },
-    {
-      "name": "ci-linux-orm-user",
-      "configurePreset": "ci-linux-orm-user"
-    },
-    {
-      "name": "install-ci-linux-orm-user",
-      "configurePreset": "ci-linux-orm-user",
-      "targets": [
-        "install"
-      ]
+      "name": "install-ci-llvm-native-tsan-user",
+      "inherits": [
+        "base-install",
+        "build-linux"
+      ],
+      "configurePreset": "ci-llvm-native-tsan-user"
     }
   ],
   "testPresets": [
     {
-      "name": "ci-linux-release-user",
-      "configurePreset": "ci-linux-release-user",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error"
-      }
+      "name": "native-release-user",
+      "inherits": [
+        "base-test",
+        "test-windows"
+      ],
+      "configurePreset": "native-release-user"
     },
     {
-      "name": "win-dev-user",
-      "inherits": "base-test",
-      "configurePreset": "win-dev-user"
+      "name": "llvm-native-tsan-user",
+      "inherits": [
+        "base-test",
+        "test-linux"
+      ],
+      "configurePreset": "llvm-native-tsan-user"
     },
     {
-      "name": "win-release-user",
-      "inherits": "base-test",
-      "configurePreset": "win-release-user"
+      "name": "msvc-release-user",
+      "inherits": [
+        "base-test",
+        "test-windows"
+      ],
+      "configurePreset": "msvc-release-user"
     },
     {
-      "name": "win-analyze-user",
-      "inherits": "base-test",
-      "configurePreset": "win-analyze-user"
+      "name": "llvm-native-release-user",
+      "inherits": [
+        "base-test",
+        "test-posix"
+      ],
+      "configurePreset": "llvm-native-release-user"
     },
     {
-      "name": "linux-dev-user",
-      "inherits": "base-test",
-      "configurePreset": "linux-dev-user"
+      "name": "gcc-release-user",
+      "inherits": [
+        "base-test",
+        "test-linux"
+      ],
+      "configurePreset": "gcc-release-user"
     },
     {
-      "name": "linux-release-user",
-      "inherits": "base-test",
-      "configurePreset": "linux-release-user"
+      "name": "llvm-mingw-x64-release-user",
+      "inherits": [
+        "base-test",
+        "test-windows"
+      ],
+      "configurePreset": "llvm-mingw-x64-release-user"
     },
     {
-      "name": "linux-ubsan-user",
-      "inherits": "base-test",
-      "configurePreset": "linux-ubsan-user"
+      "name": "ci-msvc-release-user",
+      "inherits": [
+        "msvc-release-user"
+      ],
+      "configurePreset": "ci-msvc-release-user"
     },
     {
-      "name": "linux-tsan-user",
-      "inherits": "base-test",
-      "configurePreset": "linux-tsan-user"
+      "name": "ci-llvm-mingw-x64-release-user",
+      "inherits": [
+        "llvm-mingw-x64-release-user"
+      ],
+      "configurePreset": "ci-llvm-mingw-x64-release-user"
     },
     {
-      "name": "win-benchmarks-user",
-      "configurePreset": "win-benchmarks-user",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error"
-      }
+      "name": "ci-llvm-native-release-user",
+      "inherits": [
+        "llvm-native-release-user"
+      ],
+      "configurePreset": "ci-llvm-native-release-user"
     },
     {
-      "name": "linux-benchmarks-user",
-      "configurePreset": "linux-benchmarks-user",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error"
-      }
+      "name": "ci-gcc-release-user",
+      "inherits": [
+        "gcc-release-user"
+      ],
+      "configurePreset": "ci-gcc-release-user"
     },
     {
-      "name": "win-orm-user",
-      "configurePreset": "win-orm-user",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error"
-      }
+      "name": "llvm-native-asan-ubsan-user",
+      "inherits": [
+        "base-test",
+        "test-linux"
+      ],
+      "configurePreset": "llvm-native-asan-ubsan-user"
     },
     {
-      "name": "ci-linux-orm-user",
-      "configurePreset": "ci-linux-orm-user",
-      "output": {
-        "outputOnFailure": true
-      },
-      "filter": {
-        "include": {
-          "label": "^orm$"
-        }
-      },
-      "execution": {
-        "noTestsAction": "error"
-      }
+      "name": "ci-llvm-native-asan-ubsan-user",
+      "inherits": [
+        "base-test",
+        "test-linux"
+      ],
+      "configurePreset": "ci-llvm-native-asan-ubsan-user"
+    },
+    {
+      "name": "ci-llvm-native-tsan-user",
+      "inherits": [
+        "base-test",
+        "test-linux"
+      ],
+      "configurePreset": "ci-llvm-native-tsan-user"
     }
   ]
 }

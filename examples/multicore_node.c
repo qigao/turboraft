@@ -1,10 +1,10 @@
 #include "multicore_node.h"
 #include <turboraft/raft_wal_storage.h>
-#include <salts/thread.h>
-#include <salts/clock.h>
-#include <cmeta_error.h>
-#include <fmt.h>
-#include <tlog.h>
+#include <threads/threads.h>
+#include <core/clock.h>
+#include <core/error.h>
+#include <core/fmt.h>
+#include <core/tlog.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -16,7 +16,7 @@ typedef struct counter_group {
 typedef struct counter_node {
     const tr_raft_node_settings_t *settings;
     counter_group_t *groups;
-    cmeta_mutex_t mutex;
+    sync_mutex_t mutex;
     int close_error;
 } counter_node_t;
 
@@ -105,21 +105,21 @@ static void counter_close(void *context, tr_raft_owner_t *owner, uint64_t id)
     int result = tr_raft_wal_storage_close(g->wal);
     (void)owner;
     g->wal = NULL;
-    cmeta_mutex_lock(&node->mutex);
+    sync_mutex_lock(&node->mutex);
     if (result != SALTS_OK) node->close_error = result;
-    cmeta_mutex_unlock(&node->mutex);
+    sync_mutex_unlock(&node->mutex);
 }
 
 static int counter_take(tr_raft_multicore_t *runtime, uint64_t id,
                          tr_raft_multicore_completion_t *completion)
 {
-    const uint64_t deadline = cmeta_monotonic_ms() + 30000U;
+    const uint64_t deadline = monotonic_ms() + 30000U;
     int result;
     do {
         result = tr_raft_multicore_take(runtime, id, completion);
         if (result != SALTS_ENOENT) return result;
-        cmeta_sleep_ms(1U);
-    } while (cmeta_monotonic_ms() < deadline);
+        sleep_ms(1U);
+    } while (monotonic_ms() < deadline);
     return SALTS_ETIMEDOUT;
 }
 
@@ -134,10 +134,12 @@ int multicore_node_run(const tr_raft_node_settings_t *settings, uint64_t *counts
     size_t i;
     if (result != SALTS_OK) return result;
     if (counts == NULL || count != settings->runtime.group_count) return SALTS_EINVAL;
-    if (settings->network_enabled) return SALTS_ENOTSUP;
+    for (i = 0; i < count; ++i)
+        if (settings->groups[i].core.voter_count != 1U ||
+            settings->groups[i].core.learner_count != 0U) return SALTS_ENOTSUP;
     node.settings = settings;
     node.groups = calloc(count, sizeof(*node.groups));
-    cmeta_mutex_init(&node.mutex);
+    sync_mutex_init(&node.mutex);
     if (node.groups == NULL || node.mutex == NULL) { result = SALTS_ENOMEM; goto done; }
     factory.context = &node;
     factory.group_open = counter_open;
@@ -145,7 +147,7 @@ int multicore_node_run(const tr_raft_node_settings_t *settings, uint64_t *counts
     result = tr_raft_multicore_create(&settings->runtime, &factory, &runtime);
     for (i = 0; result == SALTS_OK && i < count; ++i) {
         const uint64_t id = settings->groups[i].group_id;
-        const uint64_t deadline = cmeta_monotonic_ms() + 30000U;
+        const uint64_t deadline = monotonic_ms() + 30000U;
         bool leader = false;
         request.operation = TR_RAFT_MULTICORE_STATUS;
         while (result == SALTS_OK && !leader) {
@@ -154,8 +156,8 @@ int multicore_node_run(const tr_raft_node_settings_t *settings, uint64_t *counts
             if (result == SALTS_OK) result = completion.result;
             if (result != SALTS_OK) break;
             leader = completion.value.status.core.role == TR_RAFT_LEADER;
-            if (cmeta_monotonic_ms() >= deadline) result = SALTS_ETIMEDOUT;
-            if (!leader) cmeta_sleep_ms(1U);
+            if (monotonic_ms() >= deadline) result = SALTS_ETIMEDOUT;
+            if (!leader) sleep_ms(1U);
         }
         if (result == SALTS_OK) {
             if (completion.value.status.core.last_log_index == UINT64_MAX) { result = SALTS_ERANGE; break; }
@@ -180,7 +182,7 @@ int multicore_node_run(const tr_raft_node_settings_t *settings, uint64_t *counts
         for (i = 0; i < count; ++i) counts[i] = node.groups[i].count;
 done:
     tr_raft_multicore_destroy(runtime);
-    cmeta_mutex_destroy(&node.mutex);
+    sync_mutex_destroy(&node.mutex);
     free(node.groups);
     return result;
 }

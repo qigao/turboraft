@@ -12,8 +12,8 @@ TurboRaft keeps one durable fact source set per Raft group:
 Quiesce and close the storage instance before copying files. Copy the durable
 `<prefix>.manifest`, every WAL segment in its authoritative live range, and
 every referenced snapshot file as one backup set. The manifest is mandatory:
-after the monotonic segment sequence grows beyond the live-retention bound,
-the high-sequence WAL cannot be rediscovered by the legacy compatibility scan.
+the live-retention bound does not identify the store's monotonic segment
+sequence, so enumerating only low-numbered files can lose authoritative data.
 Record the TurboRaft version, node ID, cluster ID, and backup time beside that
 set.
 
@@ -57,7 +57,7 @@ never skips a damaged committed record.
 An FSM restore failure faults startup. Do not start from an empty FSM or apply
 suffix entries on top of an unverified state.
 
-For the versioned asynchronous CFlow/CMeta application contract, the
+For the asynchronous CFlow/CMeta application contract, the
 application's durable applied marker and exact entry identity are separate
 facts from the Raft snapshot boundary. Recreate the CFlow instance and
 application persistence first, initialize Core from the proven durable
@@ -65,7 +65,7 @@ application boundary, then replay/reconcile the committed suffix. Never treat
 Ready admission as application completion or blindly retry an uncertain host
 commit.
 
-See `docs/architecture/cflow-replicated-state-machine.md` for the complete
+See [the CFlow application contract](architecture/cflow-replicated-state-machine.md) for the complete
 ownership, crash-cut, reconciliation, and shutdown protocol.
 
 ## Restore or rebuild

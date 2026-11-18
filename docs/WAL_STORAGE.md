@@ -17,8 +17,7 @@ snapshot payload without depending on a database.
   current segment until its namespace publication is durable.
 - Segment and transaction capacities are fixed at open. `max_live_segments` is
   the maximum simultaneously live WAL segment count, not a lifetime sequence
-  ceiling. The legacy `max_segments` field spelling remains a deprecated
-  layout-preserving alias only. Segment identities are monotonic 64-bit sequence numbers and are
+  ceiling. Segment identities are monotonic 64-bit sequence numbers and are
   never reused. Capacity exhaustion returns `SALTS_ENOSPC`; there is no
   unbounded allocation or in-memory fallback.
 - Every transaction frame contains its transaction id, predecessor id,
@@ -48,11 +47,12 @@ only then are older segments unlinked. A crash therefore observes either the
 old authoritative history or the complete new checkpoint, never a range that
 references already-reclaimed history.
 
-Pre-manifest WALs are supported by one bounded compatibility scan from
-sequence 1 through the configured `max_live_segments`. A successful open writes
-the durable manifest immediately. All subsequent recovery scans only the
-manifest's bounded live range, so startup work is independent of lifetime
-segment sequence.
+An open without a manifest scans only sequence 1 through the configured
+`max_live_segments`. A successful open writes the durable manifest immediately.
+This bounded scan cannot discover a high-sequence backup set. Restore must
+include its manifest and use `create_if_missing=false`; see
+[Recovery](RECOVERY.md). Subsequent recovery scans only the manifest's bounded
+live range, so startup work is independent of lifetime segment sequence.
 
 Snapshot data is written to a staging file and published with
 `salts_fs_replace_durable` before its referencing WAL transaction. A

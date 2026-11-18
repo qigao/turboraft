@@ -1,9 +1,15 @@
 # Control-plane audit sink
 
-The optional audit adapter provides a fixed-metadata boundary for RPC mutation
-authorization, acceptance, and completion events. It never accepts command
+The audit adapter provides a fixed-metadata sink for caller-emitted
+authorization, acceptance and completion events. It never accepts command
 bytes, application payloads, credentials, certificates, headers, or snapshot
 content.
+
+The current [control plane](CONTROL_PLANE.md) is status-only. Its
+[configuration](../include/turboraft/raft_control_plane.h) has no audit-handle
+field, and it does not automatically emit mutation audit events. Applications
+that use the [audit API](../include/turboraft/raft_control_audit.h) own emission
+and enforcement at their command boundary.
 
 ## Lifecycle
 
@@ -37,9 +43,8 @@ tr_raft_control_audit_destroy(audit);
 Creation allocates the opaque adapter once. Emission does not allocate. The
 caller destroys the handle only after all producers are quiescent.
 
-The control plane borrows the handle through
-`tr_raft_control_plane_config_t.audit`; it never destroys it. Destroy the plane
-before destroying the audit handle.
+The adapter borrows its sink and context. Stop all emitters before destroying
+the handle, then release the sink context.
 
 ## Configuration
 
@@ -61,22 +66,20 @@ adapter cannot be allocated.
 per-instance sequence before invoking the sink. Method and phase must use the
 declared typed constants.
 
-For required audit, a sink failure is returned to the caller and must prevent
-command submission when emitted at the acceptance boundary. For optional
+For required audit, a sink failure is returned unchanged to the caller. The
+application must check that result before submitting a command whose audit is
+required. For optional
 audit, a missing or failing sink increments the atomic dropped-event counter
 and returns success. Read the counter with
 `tr_raft_control_audit_dropped()`.
 
-TurboRaft emits an authorization/intent event before each mutation command and
-a completion event after it. A required pre-command failure marks the plane
-audit-faulted and prevents the command. A required completion failure cannot
-roll back an already durable Raft command; the plane returns the real command
-result, marks itself audit-faulted, and rejects subsequent mutations. This
-avoids reporting a false command failure that could make a client retry a
-successful non-idempotent operation.
+The adapter does not submit commands, maintain a control-plane fault state or
+roll back durable work. If a completion event fails after a command commits,
+the application must retain the real command outcome separately from the audit
+error; an audit failure is not proof that retrying the command is safe.
 
 The sink may be called concurrently and must provide its own output
-synchronization. It must not call back into the same control-plane instance.
+synchronization. Avoid re-entering the emitting command boundary from the sink.
 
 ## ABI and redaction
 

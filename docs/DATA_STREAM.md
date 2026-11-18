@@ -1,19 +1,22 @@
-# FlowMQ-backed Raft data streams
+# Raft data streams
 
-TurboRaft keeps large bytes out of `AppendEntries`. FlowMQ carries ordered
+TurboRaft keeps large bytes out of `AppendEntries`. The transport carries ordered
 64 KiB `DATA_CHUNK` frames; Raft commits a 56-byte descriptor only after the
 same stream is durable on a voting quorum.
 
 ## Protocol
 
 - Identity: `(leader term, stream_id, stream_size, SHA-256 digest)`.
-- Ownership: sender chunks borrow immutable caller storage until the complete
-  durable ACK; the FlowMQ queue copies accepted chunks into `mem_buffer_t`.
+- Ownership: `sender_begin` copies the complete input for small objects.
+  `sender_begin_source` takes ownership of a source on success and reads into
+  bounded sender-owned chunk slots. CNet enqueue copies accepted chunks into managed
+  `mem_buffer_t` storage before returning from enqueue.
 - Ordering: receivers accept the exact cumulative `next_offset`. Duplicate
   earlier chunks return the current offset; gaps and identity changes fail.
-- Capacity: one stream is at most 1 GiB. A chunk is at most 64 KiB. The default
-  FlowMQ batch is four frames (256 KiB), the receive buffer is 256 KiB, and the
-  retained per-peer data budget is 4 MiB.
+- Capacity: the caller supplies a nonzero 64-bit `max_stream_bytes`, a chunk
+  size from 1 through 64 KiB, and 1 through 16 in-flight chunks (4 recommended).
+  Sender chunk storage is `chunk_size * max_inflight_chunks`. Transport item
+  and byte budgets are separately configured; none is inferred from stream size.
 - Backpressure: a full outbound item queue or byte budget returns
   `SALTS_ENOSPC`; no data is dropped or moved to unbounded storage.
 - Durability: the receiver calls `sink.commit` only after length and SHA-256
@@ -31,36 +34,40 @@ Create one sender per peer and one receiver per inbound stream owner. Sink
 callbacks stage directly to a bounded file, database blob, or object store;
 `write` receives ordered offsets and must not publish partial content.
 
+The [public API](../include/turboraft/raft_data_stream.h) and
+[formal tests](../tests/core/test_raft_data_stream.c) define the source, sink and
+ACK contracts. A sender configuration must supply all capacities explicitly:
+
 ```c
 tr_raft_data_stream_sender_config_t config = {
     .self_id = 1,
     .peer_id = 2,
-    .max_stream_bytes = 1024U * 1024U * 1024U,
+    .max_stream_bytes = 1024ULL * 1024ULL * 1024ULL,
+    .chunk_size = TR_RAFT_WIRE_MAX_DATA_CHUNK_BYTES,
+    .max_inflight_chunks = TR_RAFT_DATA_STREAM_RECOMMENDED_INFLIGHT_CHUNKS,
 };
-tr_raft_data_stream_sender_t *sender = NULL;
-int rc = tr_raft_data_stream_sender_create(&config, &sender);
-if (rc == SALTS_OK)
-    rc = tr_raft_data_stream_sender_begin(sender, term, stream_id,
-                                           bytes, byte_count);
-while (rc == SALTS_OK) {
-    tr_raft_data_chunk_t chunk;
-    rc = tr_raft_data_stream_sender_next(sender, &chunk);
-    if (rc == SALTS_OK) {
-        tr_raft_transport_payload_t payload = {
-            .kind = TR_RAFT_WIRE_PAYLOAD_DATA_CHUNK,
-            .data.data_chunk = chunk,
-        };
-        rc = tr_raft_flowmq_peer_service_enqueue_payload(flowmq, &payload);
-        if (rc != SALTS_OK)
-            tr_raft_data_stream_sender_cancel(sender, chunk.stream_offset);
-    }
-}
 ```
 
-`sender_begin` returns `SALTS_EINVAL` for invalid identity, pointer, or size and
-`SALTS_EBUSY` while another stream is active. `sender_next` returns
-`SALTS_EBUSY` when its bounded window is full. Receiver callbacks propagate
-their error; digest, order, or identity violations return `SALTS_EPROTO`.
+The 1 GiB limit above is an application choice, not a protocol ceiling. For
+large objects, provide a source with the declared size, SHA-256 digest and a
+`read_at` callback that fills each requested bounded chunk. Source ownership
+transfers only after `sender_begin_source` succeeds; its release callback runs
+when the sender clears or destroys that source. The small-object `sender_begin`
+helper instead allocates and copies the entire input.
+
+Drive the sender and transport on their owner. `sender_next` reserves an
+in-flight slot and returns a borrowed chunk view. Copy/enqueue it before ACK,
+cancel, resume, reset or destruction can release/reuse its slot. If enqueue
+rejects the newest chunk, cancel that exact offset and check the cancellation
+result before retrying. A successful enqueue is local admission only; deliver
+received ACKs to `sender_acknowledge` to release the bounded window. Window
+exhaustion returns `SALTS_EBUSY`; it is not transfer completion. Query sender
+status to distinguish progress from completion.
+
+Invalid sender identity, capacities, pointers or sizes return `SALTS_EINVAL`.
+Beginning another transfer while one is active returns `SALTS_EBUSY`.
+Source and receiver callback errors propagate; digest, order or identity
+violations return `SALTS_EPROTO`. Reset or destroy aborts an uncommitted sink.
 
 After every current member returns a final durable ACK, encode the proposal:
 
@@ -75,3 +82,7 @@ if (rc == SALTS_OK)
 
 The state machine decodes committed descriptor bytes with
 `tr_raft_data_descriptor_decode` and atomically publishes the staged object.
+
+Keep `descriptor` alive through the proposal call: the proposal borrows that
+storage. The application owns staging-object retention and publication; an
+accepted transport frame alone never authorizes publishing bytes.

@@ -7,8 +7,6 @@
   "work_budget": 8,
   "tick_ms": 10,
   "idle_ms": 1,
-  "network_enabled": false,
-  "owners": [],
   "groups": [
     { "group_id": 1, "owner_index": 0, "voters": [1], "learners": [], "storage_path": "/var/lib/turboraft/group1" },
     { "group_id": 2, "owner_index": 1, "voters": [1], "learners": [], "storage_path": "/var/lib/turboraft/group2" },

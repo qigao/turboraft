@@ -52,7 +52,7 @@
       "release": "No resource ownership is transferred."
     },
     "control_status_provider": {
-      "owner": "Invoked by the standalone CHttp/CRPC owner thread servicing the control request.",
+      "owner": "Invoked by the standalone CHttp Application worker pool servicing the control request.",
       "borrow": "The provider receives caller-owned output status storage and no retainable TurboRaft pointer.",
       "retain": "The provider must not retain the output pointer. If Raft belongs to another owner, status must be copied through an executor/mailbox.",
       "reentry": "Must not directly re-enter a single-owner Raft Service owned by another thread; recursive entry through the same ControlPlane request is unsupported.",

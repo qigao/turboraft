@@ -1,7 +1,7 @@
 # Multi-process chaos testing
 
 `turboraft.multiprocess_chaos` runs three independent TurboRaft child
-processes. Each child is now a Multi-Group host containing three independent
+processes. Each child is a Multi-Group host containing three independent
 Raft groups:
 
 ~~~text
@@ -32,8 +32,7 @@ decisions deterministic and independent of operating-system packet timing.
 
 ## Existing deterministic fault campaign
 
-The historical seed campaign remains focused on G100 so prior safety evidence
-is preserved. It covers:
+The seeded fault campaign focuses on G100. It covers:
 
 - packet loss, duplication, delay, and reorder;
 - a minority partition;
@@ -49,7 +48,7 @@ application hashes at equal applied indexes.
 
 ## Multi-Group acceptance scenario
 
-The R0 Multi-Group acceptance case exercises all three groups in the same three
+The Multi-Group acceptance case exercises all three groups in the same three
 physical child processes.
 
 The deterministic election-timeout fixture drives:
@@ -70,56 +69,25 @@ The scenario then verifies:
 4. terminating and restarting physical node 2 reopens three independent WAL
    prefixes and all groups reconverge.
 
-Focused CI also verifies the same scenario with three real OS child processes
-and real TurboRaft Core, Service, and WAL implementations. That focused harness
-uses a test-only group-aware wire shim to keep the executable independent from
-the full DataBind/private-dependency closure. The production v6 group-aware
-wire contract is verified separately by the #26 gate. The repository's final
-`turboraft.multiprocess_chaos` CTest remains the authoritative combined test
-with the real wire codec.
-
-The focused three-process evidence is:
-
-~~~text
-run 35501109360
-head c53bd888d088145f1585c4b2aa2fe509733fef9d
-result SUCCESS
-~~~
-
-A separate combined snapshot/scheduler executable also streams G100 through
-the same bounded per-peer group scheduler while G101/G102 protocol traffic is
-scheduled between every snapshot chunk. The receiver completes digest
-verification and commits the snapshot:
-
-~~~text
-run 35501381815
-head b0882af6839145223965d16d318283d03fa2522f
-result SUCCESS
-~~~
-
-## Remaining combined R0 evidence
-
-The following still require the complete project/private dependency
-environment before R0 is closed:
-
-- run `turboraft.multiprocess_chaos` with the production wire codec;
-- run the authoritative production FlowMQ/mTLS snapshot-catch-up case while
-  sibling groups continue committing on the shared physical transport;
-- run the full Release CTest suite with zero failures.
-
-Unknown/stopped-group routing isolation is independently covered by the
-transport #27 tests; malformed/auth/session/protocol failures remain
-peer-session failures.
+The formal [multiprocess fixture](../tests/chaos/test_raft_multiprocess_chaos.c)
+uses real child processes and the production Core, Service, WAL and wire codec.
+It also checks a quiescent backup copied to a fresh process, rejection of an
+incomplete copy, and restored-node catch-up while the remaining quorum
+continues. Scenario coverage describes the fixture, not a passing run of the
+current checkout.
 
 ## Running the real chaos test
 
-Run the test with the normal preset:
+After loading the required compiler and SDK inputs, build the complete graph
+and select the test through CTest:
 
 ~~~powershell
-ctest --preset win-release-user -R turboraft.multiprocess_chaos --output-on-failure
+cmake --fresh --preset msvc-release-user
+cmake --build --preset msvc-release-user
+ctest --preset msvc-release-user -R "^turboraft\.multiprocess_chaos$" --output-on-failure
 ~~~
 
-With no additional environment configuration, the legacy deterministic fault
+With no additional environment configuration, the deterministic fault
 campaign executes seeds 1 through 4. A bounded campaign can select a different
 contiguous range:
 
@@ -127,7 +95,7 @@ contiguous range:
 $env:TURBORAFT_CHAOS_FIRST_SEED = "17"
 $env:TURBORAFT_CHAOS_SEED_COUNT = "8"
 try {
-  ctest --preset win-release-user -R "^turboraft\.multiprocess_chaos$" --output-on-failure
+  ctest --preset msvc-release-user -R "^turboraft\.multiprocess_chaos$" --output-on-failure
 } finally {
   Remove-Item Env:TURBORAFT_CHAOS_FIRST_SEED -ErrorAction SilentlyContinue
   Remove-Item Env:TURBORAFT_CHAOS_SEED_COUNT -ErrorAction SilentlyContinue
@@ -146,32 +114,36 @@ values to reproduce only that seed:
 ~~~powershell
 $env:TURBORAFT_CHAOS_FIRST_SEED = "23"
 $env:TURBORAFT_CHAOS_SEED_COUNT = "1"
-ctest --preset win-release-user -R "^turboraft\.multiprocess_chaos$" --output-on-failure
+ctest --preset msvc-release-user -R "^turboraft\.multiprocess_chaos$" --output-on-failure
 ~~~
 
-The deterministic parent-owned network does not replace the CNet/FlowMQ mTLS
-tests. Those tests validate the physical peer transport; this harness validates
+The deterministic parent-owned network does not replace the CNet adapter and
+peer-handshake tests. This harness validates
 Multi-Group process isolation, per-group durable recovery, and deterministic
 cross-group fault isolation.
 
-## Retained extended campaign
+## Longer campaigns and evidence
 
-The scheduled/manual extended workflow runs the bounded seeded multi-process
-campaign and retains a companion `turboraft.snapshot_group_isolation` run in
-the same evidence bundle. The companion scenario uses the real bounded group
-queue plus snapshot sender/receiver and proves that sibling groups continue to
-make progress between snapshot chunks. It complements, but does not replace,
-the FlowMQ/mTLS physical transport qualification.
+There is no separate scheduled extended-chaos workflow. Run a bounded seed
+range through the same CTest entry. The companion
+`turboraft.snapshot_group_isolation` test exercises the bounded group queue and
+snapshot sender/receiver, checking sibling-group progress between chunks.
+Run it through the same configured preset:
 
-Campaign evidence records the exact TurboRaft, Salts, SaltsUtils, and FlowMQ
-commit SHAs, seed range, runner identity, scenario names, configure/build logs,
-seeded chaos output, snapshot-group-isolation output, and a reproduction
-script.
+~~~powershell
+ctest --preset msvc-release-user -R "^turboraft\.snapshot_group_isolation$" --output-on-failure
+~~~
+
+Retain exact source and dependency revisions, seed range, runner identity,
+configure/build output, CTest logs and reproduction commands with campaign
+results. Neither a longer seed campaign nor the companion test replaces the
+transport admission tests or a full CTest run. Physical TLS authentication must
+be validated with the host's actual CNet connections and deployment policy.
 
 ### Failure-to-regression policy
 
 A deterministic campaign failure is not considered resolved merely because a
-later scheduled run passes.
+later run passes.
 
 1. Read the retained `chaos.log` failure line and capture its exact
    `seed`, `stage`, and `round` plus the campaign commit/dependency SHAs.
@@ -180,14 +152,9 @@ later scheduled run passes.
    `TURBORAFT_CHAOS_SEED_COUNT=1`.
 3. Reduce the failure to the narrowest stable contract test when practical.
    The resulting focused regression must run in normal hosted CI; retaining
-   only the seed in the scheduled campaign is insufficient.
+   only the seed in a longer local campaign is insufficient.
 4. Link the failure evidence and regression PR from the owning reliability
    issue before treating the seed as closed.
 5. If the failure is in the companion snapshot scenario, preserve a focused
    `snapshot_group_isolation` (or narrower sender/receiver/scheduler)
    regression rather than inventing a seed for a non-seeded test.
-
-Issue #85 remains open until at least one retained multi-seed campaign has
-completed successfully on current `master`. Normal PR CI remains bounded:
-the extended workflow only runs a single seed when the workflow file itself is
-changed in a pull request.

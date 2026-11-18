@@ -1,10 +1,11 @@
 name: Windows MSVC Release
 
 on:
-  pull_request:
-    branches: [master]
-  push:
-    branches: [master]
+  workflow_call:
+    inputs:
+      native-inputs-prepared:
+        type: boolean
+        default: false
   workflow_dispatch:
 
 concurrency:
@@ -16,34 +17,60 @@ permissions:
   packages: read
 
 env:
-  FLOWMQ_REF: main
-  CHTTP_REF: master
+  VCPKG_CACHE_VERSION: ${{ vars.VCPKG_CACHE_VERSION }}
+  CHTTP_REF: v2.1.0-rc.3
 
 jobs:
+  native-inputs:
+    if: ${{ !inputs.native-inputs-prepared }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-native-inputs
+        with:
+          operation: prepare
+          triplets: x64-windows
+          token: ${{ secrets.GITHUB_TOKEN }}
   windows-x64:
+    needs: native-inputs
+    if: ${{ always() && !cancelled() && (inputs.native-inputs-prepared || needs.native-inputs.result == 'success') }}
     runs-on: windows-2025
     timeout-minutes: 90
     steps:
       - name: Checkout exact TurboRaft head
         uses: actions/checkout@v4
 
-      - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - name: Enable compiler cache
+        uses: ./.github/actions/setup-sccache
         with:
-          mode: read
+          compiler: msvc
+          configuration: Release
+          profile: full-stack
 
-      - name: Restore shared re2c binary
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
-
-      - name: Checkout FlowMQ main
+      - name: Checkout selected infrastructure for source gates
         uses: actions/checkout@v4
         with:
-          repository: qigao/flowmq
-          ref: ${{ env.FLOWMQ_REF }}
-          path: .ci/src/flowmq
+          repository: qigao/vcpkg-cache
+          ref: v${{ env.VCPKG_CACHE_VERSION }}
+          path: .ci/vcpkg-cache
           persist-credentials: false
 
-      - name: Checkout CHttp master
+      - name: Bootstrap canonical vcpkg for CHttp source gate
+        uses: ./.ci/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache
+        with:
+          mode: read
+          triplet: x64-windows
+          host-triplet: x64-windows
+          restore-packages: "false"
+
+      - name: Restore released libraries and paired host tools
+        uses: ./.github/actions/setup-native-inputs
+        with:
+          triplet: x64-windows
+          host-rid: windows-x64
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout CHttp RC source
         uses: actions/checkout@v4
         with:
           repository: qigao/chttp
@@ -68,15 +95,14 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($vsInstall)) {
             throw "Visual Studio x64 C++ toolchain not found"
           }
-          if ([string]::IsNullOrWhiteSpace($env:QIGAO_VCPKG_WINDOWS_TRIPLET)) {
-            throw "canonical Qigao Windows vcpkg triplet is unavailable"
-          }
           "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
-          "TURBORAFT_VCPKG_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
-          "VCPKG_INSTALLED_DIR=$env:GITHUB_WORKSPACE\.ci\vcpkg_installed_windows" >> $env:GITHUB_ENV
-          "FLOWMQ_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\flowmq" >> $env:GITHUB_ENV
-          "CHTTP_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\chttp" >> $env:GITHUB_ENV
+          "TURBORAFT_VCPKG_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+          "QIGAO_VCPKG_WINDOWS_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+          "QIGAO_VCPKG_WINDOWS_HOST_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+          "QIGAO_TARGET_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+          "QIGAO_HOST_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+          "QIGAO_SDK_RID=windows-x64" >> $env:GITHUB_ENV
           "TURBORAFT_ROOT=$env:GITHUB_WORKSPACE\.ci\pkgs\turboraft" >> $env:GITHUB_ENV
 
       - name: Restore published Salts SDKs
@@ -84,6 +110,12 @@ jobs:
         with:
           rid: windows-x64
           token: ${{ secrets.GITHUB_TOKEN }}
+          orm: "true"
+
+      - name: Select source gate SDK outputs
+        shell: pwsh
+        run: |
+          "CHTTP_ROOT=$env:GITHUB_WORKSPACE/.ci/src/chttp/stage/sdk/windows-x64" >> $env:GITHUB_ENV
 
       - name: Verify restored Salts SDK files
         shell: pwsh
@@ -96,126 +128,62 @@ jobs:
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing restored SDK file: $path" }
           }
 
-      - name: Bootstrap Windows vcpkg dependency union
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path $env:VCPKG_INSTALLED_DIR | Out-Null
-          $manifest = Join-Path $env:GITHUB_WORKSPACE ".ci\super-manifest-windows"
-          New-Item -ItemType Directory -Force -Path $manifest | Out-Null
-          @'
-          {
-            "name": "turboraft-windows-ci",
-            "version-semver": "0.1.0",
-            "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
-            "dependencies": [
-              "gmssl",
-              { "name": "pkgconf", "host": true },
-              "simde",
-              "zstd",
-              "aklomp-base64",
-              "c-ares",
-              "libuv",
-              "kcp",
-              "llhttp",
-              "tree-sitter",
-              "tree-sitter-c",
-              "miniaudio",
-              { "name": "zeromq", "default-features": false },
-              { "name": "xxhash", "version>=": "0.8.3" }
-            ]
-          }
-          '@ | Set-Content -LiteralPath (Join-Path $manifest "vcpkg.json")
-          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=$manifest --x-install-root=$env:VCPKG_INSTALLED_DIR --triplet=$env:TURBORAFT_VCPKG_TRIPLET --host-triplet=$env:TURBORAFT_VCPKG_TRIPLET --only-binarycaching
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency bootstrap failed" }
-
-      - name: Build and install CHttp master
+      - name: Build and install CHttp RC source
         shell: cmd
+        working-directory: .ci/src/chttp
         run: |
+          set "TURBORAFT_CACHE_VCPKG_ROOT=%VCPKG_ROOT%"
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
-          set "PATH=%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
-          cmake -S .ci\src\chttp -B .ci\build\chttp -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF -DCMAKE_INSTALL_PREFIX="%CHTTP_ROOT%" -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          set "VCPKG_ROOT=%TURBORAFT_CACHE_VCPKG_ROOT%"
+          cmake --preset ci-sdk-release-user
           if errorlevel 1 exit /b 1
-          cmake --build .ci\build\chttp --target install --parallel 2
+          cmake --build --preset ci-sdk-release-user --parallel 2
           if errorlevel 1 exit /b 1
-
-      - name: Build and install FlowMQ main
-        shell: cmd
-        run: |
-          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          if errorlevel 1 exit /b 1
-          set "PATH=%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
-          cmake -S .ci\src\flowmq -B .ci\build\flowmq -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF -DCMAKE_INSTALL_PREFIX="%FLOWMQ_ROOT%" -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
-          if errorlevel 1 exit /b 1
-          cmake --build .ci\build\flowmq --target install --parallel 2
+          cmake --build --preset install-ci-sdk-release-user
           if errorlevel 1 exit /b 1
 
       - name: Configure and build TurboRaft Release
         shell: cmd
         run: |
+          set "TURBORAFT_CACHE_VCPKG_ROOT=%VCPKG_ROOT%"
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
-          set "PATH=%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%FLOWMQ_ROOT%\bin;%CHTTP_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
-          cmake -S . -B .ci\build\turboraft -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_APPLOCAL_DEPS=OFF -DBUILD_TESTING=ON -DBUILD_TESTS=ON -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF
+          set "VCPKG_ROOT=%TURBORAFT_CACHE_VCPKG_ROOT%"
+          set "PATH=%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%CHTTP_ROOT%\bin;%GITHUB_WORKSPACE%\.ci\src\chttp\vcpkg_installed\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
+          cmake --fresh --preset ci-msvc-release-user
           if errorlevel 1 exit /b 1
-          cmake --build .ci\build\turboraft --parallel 2
+          cmake --build --preset ci-msvc-release-user --parallel 2
           if errorlevel 1 exit /b 1
 
       - name: Run full Windows Release CTest
         shell: cmd
         run: |
+          set "TURBORAFT_CACHE_VCPKG_ROOT=%VCPKG_ROOT%"
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          set "PATH=%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%FLOWMQ_ROOT%\bin;%CHTTP_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
-          ctest --test-dir .ci\build\turboraft --output-on-failure
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%TURBORAFT_CACHE_VCPKG_ROOT%"
+          set "PATH=%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%CHTTP_ROOT%\bin;%GITHUB_WORKSPACE%\.ci\src\chttp\vcpkg_installed\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
+          ctest --preset ci-msvc-release-user
           if errorlevel 1 exit /b 1
 
       - name: Install TurboRaft Windows SDK
         shell: cmd
         run: |
+          set "TURBORAFT_CACHE_VCPKG_ROOT=%VCPKG_ROOT%"
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          set "PATH=%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%FLOWMQ_ROOT%\bin;%CHTTP_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
-          cmake --install .ci\build\turboraft --prefix "%TURBORAFT_ROOT%"
           if errorlevel 1 exit /b 1
-
-      - name: Verify installed Core and FlowMQ package contracts
-        shell: cmd
-        run: |
-          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          set "PATH=%TURBORAFT_ROOT%\bin;%CHTTP_ROOT%\bin;%FLOWMQ_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%VCPKG_INSTALLED_DIR%\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
-          cmake -S tests\package_core_consumer -B .ci\build\package-core-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF
+          set "VCPKG_ROOT=%TURBORAFT_CACHE_VCPKG_ROOT%"
+          set "PATH=%SALTS_ROOT%\bin;%SALTS_UTILS_ROOT%\bin;%CHTTP_ROOT%\bin;%GITHUB_WORKSPACE%\.ci\src\chttp\vcpkg_installed\%TURBORAFT_VCPKG_TRIPLET%\bin;%PATH%"
+          cmake --build --preset install-ci-msvc-release-user
           if errorlevel 1 exit /b 1
-          cmake --build .ci\build\package-core-windows --parallel 2
-          if errorlevel 1 exit /b 1
-          .ci\build\package-core-windows\turboraft_core_package_consumer.exe
-          if errorlevel 1 exit /b 1
-          cmake -S tests\package_flowmq_consumer -B .ci\build\package-flowmq-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF
-          if errorlevel 1 exit /b 1
-          cmake --build .ci\build\package-flowmq-windows --parallel 2
-          if errorlevel 1 exit /b 1
-          .ci\build\package-flowmq-windows\turboraft_flowmq_package_consumer.exe
-          if errorlevel 1 exit /b 1
-
-          cmake -S tests\package_control_plane_consumer -B .ci\build\package-control-plane-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF
-          if errorlevel 1 exit /b 1
-          cmake --build .ci\build\package-control-plane-windows --parallel 2
-          if errorlevel 1 exit /b 1
-          .ci\build\package-control-plane-windows\turboraft_control_plane_package_consumer.exe
-          if errorlevel 1 exit /b 1
-
-          for /f %%C in ('python tests\package_component_consumer\list_components.py full') do (
-            cmake -S tests\package_component_consumer -B ".ci\build\package-component-%%C" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_HOST_TRIPLET=%TURBORAFT_VCPKG_TRIPLET% -DVCPKG_INSTALLED_DIR="%VCPKG_INSTALLED_DIR%" -DVCPKG_MANIFEST_MODE=OFF -DTURBORAFT_COMPONENT=%%C
-            if errorlevel 1 exit /b 1
-            cmake --build ".ci\build\package-component-%%C" --parallel 2
-            if errorlevel 1 exit /b 1
-            ".ci\build\package-component-%%C\turboraft_component_package_consumer.exe"
-            if errorlevel 1 exit /b 1
-          )
 
       - name: Upload Windows CTest diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: turboraft-windows-ctest-diagnostics
-          path: .ci/build/turboraft/Testing/Temporary
+          path: |
+            build/ci-msvc-release-user/Testing/Temporary
+            .ci/src/chttp/build/native-sdk/CMakeFiles/CMakeConfigureLog.yaml
           if-no-files-found: ignore

@@ -1,32 +1,37 @@
-# Wire Codec Fuzzing
+# Wire codec fuzz corpus
 
-TurboRaft uses one shared harness for the untrusted wire envelope and all three payload decoders: Raft messages, snapshot chunks, and snapshot acknowledgements. Every successfully decoded object must encode and decode again; failure of that invariant terminates the process so a fuzzing engine records the input.
+TurboRaft shares a harness for untrusted wire input across the Raft-message,
+snapshot-chunk and snapshot-acknowledgement decoders. A successfully decoded
+object must encode and decode again; failure of that invariant aborts the
+process. See the [harness](../tests/fuzz/raft_wire_fuzz.c) and
+[corpus driver](../tests/core/test_raft_wire_fuzz_corpus.c).
 
 ## Deterministic CTest corpus
 
-The default test suite builds `turboraft_wire_fuzz_corpus_tests`. It generates valid frames for every payload kind, then exercises every truncation, one-byte mutations, trailing data, null/empty input, and 128 deterministic bounded-noise inputs.
+`BUILD_TESTS=ON` includes `turboraft.wire_fuzz_corpus` in the normal test graph.
+The corpus generates valid Raft, snapshot-chunk and snapshot-acknowledgement
+frames, then exercises truncations, one-byte mutations, trailing data,
+null/empty input and 128 deterministic bounded-noise inputs. This harness does
+not provide round-trip coverage for the application data-stream decoders.
+
+From a configured compiler environment with the required SDK inputs:
 
 ```powershell
-cmake --build --preset win-release-user --target turboraft_wire_fuzz_corpus_tests
-ctest --preset win-release-user -R turboraft.wire_fuzz_corpus --output-on-failure
+cmake --fresh --preset msvc-release-user
+cmake --build --preset msvc-release-user
+ctest --preset msvc-release-user -R "^turboraft\.wire_fuzz_corpus$" --output-on-failure
 ```
 
-This path is compiler-independent and is intended for every CI run. It is a regression corpus, not a replacement for coverage-guided fuzzing.
+Linux uses `gcc-release-user` or one of the
+[diagnostic presets](DIAGNOSTICS.md). CI runs the corpus as part of its full
+CTest suite.
 
-## Clang/libFuzzer target
+## Coverage boundary
 
-Configure a separate Clang build with `TURBORAFT_BUILD_FUZZERS=ON`. Configuration fails fast for compilers that do not provide the libFuzzer instrumentation used by the target.
+The harness exports `LLVMFuzzerTestOneInput`, but the current CMake graph does
+not register a libFuzzer executable or a fuzzing feature switch. The maintained
+entry point is the deterministic CTest corpus; a passing corpus is not evidence
+of a coverage-guided fuzzing campaign.
 
-```bash
-cmake --preset linux-dev-user --fresh \
-  -DTURBORAFT_BUILD_FUZZERS=ON \
-  -DCMAKE_C_COMPILER=clang
-cmake --build --preset linux-dev-user --target turboraft_wire_fuzzer
-cmake -E make_directory build/fuzz-corpus/wire
-./build/linux-gcc-debug/bin/turboraft_wire_fuzzer \
-  -max_len=8232 -timeout=10 -max_total_time=3600 build/fuzz-corpus/wire
-```
-
-Use an isolated corpus directory and retain minimized crash inputs in the issue or regression test that fixes the defect. Do not add unreviewed, secret, or production-derived network data to the repository.
-
-The instrumentation and runtime flags follow the [LLVM libFuzzer documentation](https://llvm.org/docs/LibFuzzer.html).
+Retain a minimized failing input with the regression that fixes it. Do not add
+secrets or unreviewed production network data to the corpus.

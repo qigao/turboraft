@@ -1,0 +1,25 @@
+schema RaftControl;
+
+message StatusRequest {}
+
+message RaftStatus {
+    uint64 node_id;
+    uint64 leader_id;
+    uint64 term;
+    uint64 commit_index;
+    uint64 applied_index;
+    bool faulted;
+    string role;
+}
+
+message StatusResponse {
+    RaftStatus status;
+}
+
+message StatusUnavailable {
+    string reason;
+}
+
+service raft {
+    status: StatusRequest -> StatusResponse throws StatusUnavailable;
+}

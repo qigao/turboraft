@@ -1,0 +1,15 @@
+[[configurations]]
+id = "cmake:build:configure"
+name = "CMake Configure (build)"
+kind = "cmake"
+command = "cmake"
+args = ["--preset", "llvm-mingw-x64-release-user", "--fresh"]
+env-files = [".env"]
+
+[[configurations]]
+id = "cmake:build:build"
+name = "CMake Build (build)"
+kind = "cmake"
+command = "cmake"
+args = ["--build", "build", "--preset", "llvm-mingw-x64-release-user"]
+before-launch = [{ kind = "run", target = "cmake:build:configure" }]

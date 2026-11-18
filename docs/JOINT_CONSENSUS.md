@@ -1,15 +1,12 @@
 # TurboRaft Dynamic Membership and Joint Consensus
 
-## Status
-
-Accepted design for the dynamic-membership implementation. Static voter and
-learner behavior remains the compatibility baseline while the implementation is
-introduced in independently testable layers.
+This document describes the current dynamic-membership implementation and its
+joint-quorum, persistence and recovery contracts.
 
 ## Context
 
-TurboRaft currently copies a stable voter/learner configuration into Core at
-startup. Learners replicate entries but do not vote, campaign, contribute to a
+Core starts from a configured or recovered voter/learner configuration.
+Learners replicate entries but do not vote, campaign, contribute to a
 quorum, serve ReadIndex, or receive leadership transfer. This is sufficient for
 static clusters, but changing voters in place would allow two disjoint
 majorities to commit conflicting logs.
@@ -27,7 +24,7 @@ Normal proposals retain the public invariant `command_id > 0`. The previously
 invalid value `command_id == 0` is reserved for TurboRaft configuration entries.
 The entry data begins with a versioned binary configuration payload. Therefore:
 
-- existing AppendEntries wire versions carry configuration entries unchanged;
+- the current AppendEntries payload carries configuration entries unchanged;
 - user command identifiers cannot collide with internal entries;
 - malformed command-zero entries fail with `SALTS_EPROTO`;
 - Runtime never forwards command-zero entries to the application state machine.
@@ -113,11 +110,6 @@ past failed durable state.
 
 ### Recovery and snapshots
 
-The WAL snapshot record adds versioned configuration metadata to the snapshot
-record. Migration from version 2 creates an empty metadata value. Empty metadata
-is accepted only for a legacy snapshot and uses the explicitly supplied
-bootstrap configuration.
-
 Recovery starts from the snapshot configuration, then replays committed
 configuration entries after the snapshot index. Uncommitted configuration
 entries are retained as pending log state but do not alter quorum rules.
@@ -134,18 +126,17 @@ and `GET /raft/status` through the same thread-safe status provider. Membership
 changes remain an internal Core/Runtime concern; there is no control-plane
 mutation command and no alternate owner bridge.
 
-## Persistence and versioning
+## Persistence contract
 
-- Normal command behavior and Raft AppendEntries wire versions remain
-  compatible.
+- Normal commands and internal configuration entries use the current
+  [wire contract](WIRE_PROTOCOL.md).
 - `command_id == 0` remains invalid for public normal proposals.
 - WAL recovery validates snapshot configuration transactionally.
-- A version-3 database is not writable by an older TurboRaft binary. Deployment
-  must retain a pre-migration backup for binary rollback.
-- Legacy snapshots can recover using bootstrap configuration, but the next
-  snapshot must write explicit configuration metadata.
+- New snapshots persist the exact committed configuration at their boundary.
 - Snapshot peers that do not support configuration metadata must fail the
   handshake; silently omitting it could recover with the wrong quorum.
+- Historical SDKs, old-format migration and binary downgrade are not part of
+  the [supported current-only contract](PRE_1_0_COMPATIBILITY.md).
 
 ## Rejected alternatives
 
@@ -154,7 +145,7 @@ mutation command and no alternate owner bridge.
 Rejected because old and new majorities may be disjoint and commit conflicting
 entries.
 
-### Add an entry-type field and Raft wire v4
+### Add a separate entry-type field
 
 Rejected for this implementation because command zero is already outside the
 public proposal domain and safely distinguishes internal entries. A wire schema
@@ -171,7 +162,7 @@ Rejected because storage would become an independent mutable fact source. The
 committed log and snapshot configuration must be sufficient to reconstruct the
 same state.
 
-## Failure handling and rollback
+## Failure handling
 
 - Invalid payload, overlapping roles, empty voter sets, unsorted IDs, or an
   oversized union fail before log append.
@@ -182,12 +173,12 @@ same state.
   Connection failure does not roll back membership.
 - Snapshot configuration and its FSM payload become authoritative through one
   WAL transaction. Failure leaves the previous snapshot authoritative.
-- Binary rollback across a WAL format change requires restoring a matching
-  WAL and snapshot backup.
+- An unsupported durable format must fail before mutation; pre-1.0 source
+  changes never justify reinterpreting stored configuration.
 
 ## Verification gates
 
-Implementation is not complete until all gates pass:
+The formal tests must verify these invariants with the selected current SDKs:
 
 1. Configuration codec rejects malformed and non-canonical payloads.
 2. Static behavior remains unchanged for command-only logs.
@@ -200,4 +191,5 @@ Implementation is not complete until all gates pass:
 8. Partition tests prove no two sides can commit conflicting commands during a
    transition.
 9. WAL snapshot configuration recovery and corruption rejection pass.
-10. `ctest --preset win-release-user` passes in full.
+10. The complete CTest suite passes, for example with
+    `ctest --preset msvc-release-user --output-on-failure` after a full build.

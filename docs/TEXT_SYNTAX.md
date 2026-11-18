@@ -1,6 +1,6 @@
 # TurboRaft Text Syntax
 
-> 使用指南（工具、CMake 链接、C API 骨架、端到端示例）见
+> 使用指南（CMake 链接、C API 骨架、端到端示例）见
 > [DSL_USAGE.md](DSL_USAGE.md)。
 
 TurboRaft provides three small text languages:
@@ -13,9 +13,12 @@ Configuration DSL is intentionally out of scope.
 
 ## Build
 
-CMake uses `re2c` for lexers and the repository-provided Lemon source for
-parsers. Lemon is built from `tools/lemon/CMakeLists.txt` as a host tool, so
-the runtime library does not depend on either generator.
+CMake uses the host re2c and Lemon binary packages restored by vcpkg-cache.
+The selected roots are `RE2C_ROOT` and `LEMON_ROOT`; `QIGAO_HOST_RID` selects
+the host independently of the target triplet. The Lemon package includes its
+paired `lempar.c` template. See [dependency restoration](../README.md#upstream-dependency-versions).
+The runtime libraries do not depend on either generator. Standalone console
+and REPL programs have been removed; the C APIs below remain available.
 
 ## Query syntax
 
@@ -70,25 +73,10 @@ by `where role`; progress selects the exact requested node. The adapter only
 borrows each snapshot until its sink callback returns and never starts a read
 barrier or advances time.
 
-### Remote query console
-
-`turboraft_console` compiles query DSL locally and invokes the existing typed
-JSON-RPC methods. The endpoint is a console session argument, not part of the
-DSL:
-
-```text
-turboraft_console --endpoint http://127.0.0.1:8080/raft/rpc \
-  --query "show members where role == voter;"
-```
-
-Without `--query`, the console reads one complete query statement per input
-line until `exit` or `quit`. It supports only the read-only query syntax;
-protocol-debug and replay text are never sent to a remote Raft node.
-
 ## Protocol-debug syntax
 
 ```text
-frame version 3 kind raft {
+frame version 6 kind raft {
     from = 1;
     to = 2;
     term = 7;
@@ -96,6 +84,10 @@ frame version 3 kind raft {
     payload = 0x0102a0ff;
 }
 ```
+
+The literal payload above illustrates parsing only; it is not a valid encoded
+wire frame. Execution requires a complete current frame from the wire codec,
+with `version` equal to `TR_RAFT_WIRE_VERSION`.
 
 Each frame requires `version`, `kind`, `from`, `to`, `term`, and `message`.
 Each field may appear at most once; duplicate fields are rejected as semantic
@@ -223,18 +215,6 @@ plan through `tr_replay_driver_run()`:
   generic adapter never advances time).
 - `expect role` / `expect commit_index` assert on `tr_raft_core_status()`
   and return `SALTS_EPROTO` on mismatch.
-
-### REPL tool
-
-`turboraft_repl` (built as a tool, not installed) drives the native core
-driver interactively. Each command line is analyzed by a local bounded
-tokenizer with explicit command, argument-count, and integer validation.
-Interactive commands cover the full action set plus
-`cluster <n>`, `status [--node <id>]`, `run <file>`, `help`, and `exit`.
-A replay DSL script file can also be executed in batch with
-`turboraft_repl --nodes N --script FILE` or the `run <file>` command.
-
-Use `run <file>` for deterministic batch execution.
 
 ## Lifetime and limits
 

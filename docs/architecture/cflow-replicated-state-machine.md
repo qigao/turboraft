@@ -1,9 +1,8 @@
 # CFlow/CMeta replicated application state machine
 
 This document defines the supported asynchronous application-state-machine
-contract layered on TurboRaft Core. It is the canonical closeout for issue #22
-and depends on the split Ready/application acknowledgement protocol delivered
-by #23 / PR #50.
+contract layered on TurboRaft Core and its split Ready/application
+acknowledgement protocol.
 
 ## Layering
 
@@ -23,13 +22,13 @@ CFlowStateMachine
 CFlow V5 exact macrostep settlement
         |
         +--> optional app-owned durable materialization
-             TurboDB 2.3.1+ / Orm::C
+             TurboDB / Orm::C
              SQL execution + transactions
 ```
 
 TurboRaft Core remains consensus-only. It does not know SQL, ORM objects,
 application schemas or business-state layouts. All database access belongs to
-TurboDB ORM; see [the database boundary](turbodb-orm-state-machine.md). The legacy
+TurboDB ORM; see [the database boundary](turbodb-orm-state-machine.md). The
 synchronous `tr_raft_state_machine_t::apply_batch()` API remains available
 and unchanged.
 
@@ -236,30 +235,33 @@ The process-local admitted cursor is never trusted across restart.
 
 ## Package and compatibility boundary
 
-`TurboRaft::CFlowStateMachine` is an optional exported component. Core-only
-consumers do not require CFlow, ORM or TurboDB.
+`TurboRaft::CFlowStateMachine` is assembled with the other source modules and
+exported as a CMake component. Applications explicitly select the installed
+components they use. Selecting Core does not add an ORM dependency to Core;
+building TurboRaft's formal test graph requires the ORM fixture SDK.
+See the [package contract](../../cmake/TurboRaftConfig.cmake.in).
 
-Installed-package CI independently configures both Core and CFlow consumers.
-The V1 asynchronous SPI is versioned. Existing synchronous
-`apply_batch()` applications retain their historical behavior.
+The asynchronous SPI has an explicit version/size admission contract. The
+synchronous `apply_batch()` interface is a separate supported application path.
+Neither path implies support for historical SDK versions or mixed-version
+peers. See the [current-only policy](../PRE_1_0_COMPATIBILITY.md).
 
-No Raft wire, WAL entry, membership, or snapshot-transfer format change is
+No Raft wire, WAL entry, membership or snapshot-transfer format change is
 required by this integration.
 
-## Qualification evidence
+## Qualification entry points
 
-The v2 contract was closed incrementally:
+The [formal test graph](../../tests/core/CMakeLists.txt) registers:
 
-- PR #50: split Ready/application acknowledgement and restart boundaries;
-- PR #51: versioned ApplyRuntime, CFlow exact settlement, multi-Ready bounded
-  ownership, package contract;
-- PR #52: SQLite/Orm::C durable recovery and process crash cut-points;
-- PR #54: variable-length payload ownership/generation reuse;
-- PR #55: failure/shutdown settlement matrix.
+- `turboraft.cflow_state_machine` for ordered apply and settlement;
+- `turboraft.cflow_failure_matrix` for rejection, failure and shutdown;
+- `turboraft.cflow_payload_ownership` for copied payloads and generation reuse;
+- `turboraft.cflow_snapshot_replay` for snapshot plus suffix reconstruction;
+- `turboraft.cflow_orm_sqlite_recovery` for durable transaction reconciliation;
+- `turboraft.orm_sqlite_crash` for process termination before and after commit.
 
-The former PR #57 Redis integration was removed when the database boundary
-was unified on TurboDB ORM. It is no longer a supported package component.
-
-Current database qualification is `.github/workflows/cflow-orm.yml`, consuming
-TurboDB.Native 2.3.1 with the latest published Salts/SaltsUtils dependencies.
-Historical CI results do not qualify that SDK combination.
+The [CI workflow](../../.github/workflows/ci.yml) runs these through the complete
+configured CTest suite. Runtime tests and packaged header/callback/archive
+inventory checks provide distinct evidence; no separate installed-consumer
+project is part of this qualification. Test registration describes coverage,
+not a passing result for the current revision.

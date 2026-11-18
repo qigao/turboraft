@@ -1,7 +1,6 @@
 # TurboDB ORM database boundary
 
-All TurboRaft application database access goes through **TurboDB ORM 2.3.1 or
-newer**, linked as `Orm::C`. The integration boundary is SQL execution and
+All TurboRaft application database access goes through **the selected TurboDB ORM SDK**, linked as `Orm::C`. The integration boundary is SQL execution and
 transactions. Driver selection, connection configuration and SQL dialects remain
 inside TurboDB and the application bootstrap; TurboRaft does not maintain
 backend-specific adapters or a database-server CI matrix. ORM does not supply
@@ -43,52 +42,47 @@ business mutation. A rollback/cleanup failure also requires explicit recovery.
 The repository's application-owned reference is
 [`test_raft_cflow_orm_recovery.c`](../../tests/core/test_raft_cflow_orm_recovery.c).
 It uses the public `orm_runtime_load_driver` / `orm_runtime_connect` APIs and
-portable `?N` parameter binding from TurboDB 2.3.1. SQLite is the fixture's local
+portable `?N` parameter binding. SQLite is the fixture's local
 SQL implementation, not an additional database API in Raft. The fixture
 uses signed SQL `BIGINT` indexes and rejects values above `INT64_MAX`; this is
 not a change to Core's unsigned index domain.
 
 ## Why application-owned ORM
 
-The former Redis journal adapter duplicated a database-specific persistence
-path and exposed a separate public component. Retaining it would preserve a
-non-SQL database boundary that this project no longer supports. Moving SQL or
-schema management into Core would instead couple consensus to application data.
-The chosen boundary keeps the existing generic state-machine SPI and provides
-one SQL transaction/recovery contract through ORM.
-There is no new universal SQL schema or parallel ORM wrapper in TurboRaft.
-
-This removes `TurboRaft::TurboDbRedisStateMachine`, its public header/functions,
-the `TURBORAFT_ENABLE_TURBODB_REDIS_STATE_MACHINE` switch and Redis CI/tests.
-Callers migrate to the existing application SPI plus `Orm::C`; they own any
-data migration. No existing Redis data is deleted or converted. Rollback means
-using the prior TurboRaft release and its matching TurboDB deployment; there is
-no runtime database fallback. Wire, WAL and snapshot formats are unchanged.
+Putting SQL or schema management into Core would couple consensus to
+application data. Keeping the generic state-machine SPI leaves domain schemas,
+drivers and transactions with the application and provides one SQL
+transaction/recovery contract through ORM. TurboRaft does not expose a separate
+database-specific state-machine component or a universal SQL schema.
 
 ## Configuration and qualification
 
-Set `TURBODB_ROOT` to the intended SDK. CMake requires version 2.3.1+, `Orm::C`
-and the installed SQLite test driver. `TURBORAFT_ENABLE_ORM_SQLITE_FIXTURES`
-enables the SQL recovery/crash tests. Missing requested SDKs or the test driver
-fail explicitly.
+Expose the intended matching TurboDB SDK through `CMAKE_PREFIX_PATH` or
+`TurboDB_DIR`. With `BUILD_TESTS=ON`, CMake requires the package, `Orm::C` and
+the installed SQLite driver used by the formal
+recovery/crash fixtures. The normal test graph includes both tests; there is no
+ORM-specific feature switch or source profile. Dependency lookup, linking and
+driver loading failures must be fixed at the selected SDK input.
 
-Windows local validation, from a Visual Studio developer environment:
+Windows local validation, from a Visual Studio developer environment with the
+[required SDK inputs](../../README.md#upstream-dependency-versions):
 
 ```powershell
-cmake --preset win-orm-user
-cmake --build --preset win-orm-user
-ctest --preset win-orm-user
+cmake --fresh --preset msvc-release-user
+cmake --build --preset msvc-release-user
+ctest --preset msvc-release-user -R "^turboraft\.(cflow_orm_sqlite_recovery|orm_sqlite_crash)$" --output-on-failure
 ```
 
-CI uses `ci-linux-orm-user`, builds the complete configured graph, and runs the
-two ORM CTest entries. The recovery case checks rollback, commit-unknown
-reconciliation, conflicting identity rejection and absence of duplicate effects.
-The process-crash fixture verifies termination before and after commit. Tests
-own temporary database files, create their own schema and remove it afterwards.
+Linux Release uses `gcc-release-user`. The
+[current CI workflow](../../.github/workflows/ci.yml) builds the complete graph
+and runs the full CTest suite, including these entries. The recovery fixture
+checks rollback, commit-unknown reconciliation, conflicting identity rejection
+and absence of duplicate effects. The process-crash fixture checks termination
+before and after commit. Tests own their temporary database files and schema;
 CTest supplies the SQLite driver path from the installed TurboDB SDK.
 
-CI restores exactly `TurboDB.Native` 2.3.1, while Salts and SaltsUtils continue
-to resolve their latest published stable SDKs. References:
-[TurboDB 2.3.1 release](https://github.com/qigao/turbodb/releases/tag/v2.3.1),
-[public ORM API](https://github.com/qigao/turbodb/blob/v2.3.1/orm/include/orm/orm.h),
-[driver runtime](https://github.com/qigao/turbodb/blob/v2.3.1/orm/include/orm/orm_runtime.h).
+The [SDK restore action](../../.github/actions/setup-native-sdks/action.yml)
+resolves published packages through the Native package project and exports
+roots from the resolved NuGet assets. Retain the actual package versions with
+results. The selected package must provide the SQL API used by the fixture; version
+selection alone is not proof that the current checkout passed either test.

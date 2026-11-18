@@ -1,8 +1,8 @@
 # TurboRaft operations runbook
 
-This document defines the operator-facing recovery, certificate-rotation, and
+This document defines the operator-facing recovery and
 incident-diagnostic contract. It complements the build-focused
-`DIAGNOSTICS.md`.
+[Diagnostics](DIAGNOSTICS.md).
 
 ## Backup handoff and copy boundary
 
@@ -42,36 +42,13 @@ silently creating an empty store. After recovery, compare term, commit index,
 applied snapshot boundary, and persisted membership before allowing the node to
 rejoin peer traffic.
 
-The in-process and multiprocess chaos suites qualify the
-prepare/close/reopen/resume handoff, including injected reopen failure. The
-retained release-qualified fresh-process restore drill landed via #98 under
-completed issue #88: it copies a quiesced authoritative durable set into a
-distinct path, opens with `create_if_missing=false`, rejects an incomplete
-copy, proves the remaining quorum can continue while the restored node is
-offline, and then proves rejoin/catch-up/convergence from fresh Raft traffic.
-
-## Certificate rotation
-
-FlowMQ peer identity is bound to the tuple of HELLO identity and verified
-client-certificate SHA-256 fingerprint. The policy is immutable for one
-service lifetime, so rotation is intentionally restart-based.
-
-Use this sequence:
-
-1. add the new fingerprint next to the old fingerprint for the same peer
-   identity;
-2. restart listeners with the overlap policy;
-3. verify both the old and new client certificates can authenticate under the
-   same FlowMQ identity;
-4. deploy the new client certificate/key;
-5. remove the old fingerprint;
-6. restart listeners again;
-7. verify the new certificate is accepted and the retired certificate
-   increments `tls_identity_rejections` without delivering a Raft frame.
-
-The hosted `turboraft.flowmq_peer_service` test exercises this exact
-old/overlap/new/retired sequence using two independent test CAs. Hot reload is
-not part of the contract.
+The [WAL reload fixture](../tests/core/test_raft_service_wal_reload.c) and
+[multiprocess chaos fixture](../tests/chaos/test_raft_multiprocess_chaos.c) cover
+the prepare/close/reopen/resume handoff, including injected reopen failure.
+The chaos fixture also copies a quiesced durable set to a distinct path, opens
+with `create_if_missing=false`, rejects an incomplete copy, and checks quorum
+progress plus restored-node catch-up. Run the formal tests with the selected
+current SDK inputs before claiming that a deployment has passed this drill.
 
 ## Metrics inventory
 
@@ -99,20 +76,6 @@ From `tr_raft_service_get_peer_delivery_status()` per peer:
 - paused logical ticks;
 - last peer-delivery error.
 
-### FlowMQ peer service
-
-From `tr_raft_flowmq_peer_service_get_status()` and the per-peer/group
-status accessors:
-
-- active group count;
-- queued payload count and bytes;
-- frames sent/received;
-- group-routing rejections;
-- TLS identity rejections;
-- blocked/failed peer observations;
-- transport/group queue occupancy;
-- last error.
-
 ### Snapshot / durable state
 
 Record sender/receiver progress while snapshot transfer is active. For WAL
@@ -126,53 +89,28 @@ baseline:
 
 - `service.faulted == true`;
 - nonzero persistent Service/transport `last_error`;
-- any unexpected increase in `tls_identity_rejections`;
 - a peer remaining paused while the healthy quorum is otherwise progressing;
 - backup remaining prepared beyond the operator's bounded copy window;
 - restore/open failure, missing manifest for a high-sequence copy, or durable
   metadata checksum failure.
 
-Latency/throughput/lag thresholds must not be invented here. The retained
-baseline work in completed issue #87 and `docs/PERFORMANCE_SLOS.md` defines
-the current policy: only stable normalized/protocol metrics are hard release
-guards. Absolute hosted-runner fsync, ReadIndex, snapshot, checkpoint, and
-resource values remain evidence-only because cross-run variance is not
-actionable enough for fixed CI or paging thresholds. Operational alerting
-should therefore page on correctness/fault conditions above and report
+Latency/throughput/lag thresholds need measured deployment evidence. The
+[performance policy](PERFORMANCE_SLOS.md) distinguishes executable correctness
+checks from measurements; current benchmarks do not enforce numeric
+performance SLOs. Page on the correctness/fault conditions above and report
 lag/queue/latency distributions unless a deployment-specific threshold has its
 own measured production rationale.
 
-## Incident bundle
+## Incident evidence
 
-The installed SDK contains:
-
-`share/turboraft/tools/turboraft_incident_bundle.py`
-
-It is read-only. It can query the ControlPlane status endpoint, record
-WAL/snapshot/manifest metadata and SHA-256 hashes, and copy only configuration
-files explicitly selected by the operator.
-
-Example:
-
-```sh
-python3 "$TURBORAFT_ROOT/share/turboraft/tools/turboraft_incident_bundle.py" \
-  --output incident-2026-10-02.tar.gz \
-  --status-url http://127.0.0.1:9000/raft/status \
-  --wal-prefix /srv/turboraft/group-7/raft \
-  --config /etc/turboraft/node-sanitized.json \
-  --label node=node-7 \
-  --label release=0.3.0
-```
-
-The bundle contains metadata, the status JSON (or a status-fetch error), a
-storage inventory with size/mtime/hash, and explicitly selected config files.
-`*.tmp` staging files are excluded. The tool does not discover or copy
-private keys, environment variables, WAL payload contents, or arbitrary
-configuration automatically.
+The standalone incident-bundle utility has been removed from the SDK. Collect
+status, storage metadata and logs using the deployment's existing operational
+process. Select sanitized configuration files explicitly and exclude private
+keys and environment credentials.
 
 For a support/incident handoff, retain:
 
-- the incident bundle;
+- status output and storage file metadata with hashes;
 - TurboRaft and first-party package/repository versions;
 - the exact deployment config with secrets removed;
 - the relevant chaos/recovery seed or reproduction command when one exists;

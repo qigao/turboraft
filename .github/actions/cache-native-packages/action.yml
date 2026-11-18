@@ -1,0 +1,28 @@
+name: Cache native package downloads
+description: Reuse immutable producer package payloads while resolving versions on every restore.
+
+inputs:
+  packages-path:
+    description: NuGet package payload directory (never an SDK build or install tree)
+    required: true
+  profile:
+    description: Unique writer within this run, including a matrix variant when applicable
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Restore producer package downloads
+      uses: actions/cache@v4
+      with:
+        # Only producer payloads are cached. The newly packed TurboRaft SDK,
+        # project.assets.json and authenticated NuGet configs stay outside.
+        path: |
+          ${{ inputs.packages-path }}/salts.native
+          ${{ inputs.packages-path }}/saltsutils.native
+          ${{ inputs.packages-path }}/chttp.native
+          ${{ inputs.packages-path }}/turbodb.native
+        key: turboraft-native-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packaging/nuget/*.csproj', 'cmake/*sdk.nuget.config') }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.profile }}
+        restore-keys: |
+          turboraft-native-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packaging/nuget/*.csproj', 'cmake/*sdk.nuget.config') }}-
+          turboraft-native-downloads-v1-${{ runner.os }}-${{ runner.arch }}-

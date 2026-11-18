@@ -4,16 +4,14 @@
   "description": "Manifest dependencies for the TurboRaft consensus library",
   "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
   "dependencies": [
-    "gmssl",
-    {
-      "name": "pkgconf",
-      "host": true
-    },
-    "simde",
     {
       "name": "xxhash",
       "version>=": "0.8.3"
     },
-    "zstd"
+    "zstd",
+    {
+      "name": "sqlite3",
+      "platform": "windows"
+    }
   ]
 }

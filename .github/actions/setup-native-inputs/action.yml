@@ -1,0 +1,100 @@
+name: Prepare or restore locked native inputs
+description: Resolve once, distribute verified blobs, and restore explicit target and host payloads.
+inputs:
+  operation:
+    description: prepare or restore
+    default: restore
+  triplets:
+    description: Space-separated target triplets for prepare
+    default: ""
+  triplet:
+    description: Target triplet for restore
+    default: ""
+  host-rid:
+    description: Explicit build-host runtime identifier for restore
+    default: ""
+  artifact:
+    description: Prepared locks and blobs artifact
+    default: turboraft-native-inputs
+  token:
+    description: Package read token
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: qigao/vcpkg-cache
+        ref: v${{ env.VCPKG_CACHE_VERSION }}
+        path: .ci/vcpkg-cache
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Export pinned infrastructure checkout
+      shell: pwsh
+      run: |
+        $root = (Resolve-Path -LiteralPath .ci/vcpkg-cache).Path.Replace('\', '/')
+        "VCPKG_CACHE_REPOSITORY_ROOT=$root" >> $env:GITHUB_ENV
+    - name: Resolve releases and download shared inputs
+      if: inputs.operation == 'prepare'
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        INPUT_TRIPLETS: ${{ inputs.triplets }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+        $cli = "$env:VCPKG_CACHE_REPOSITORY_ROOT/scripts/restore-native-dependency.py"
+        New-Item -ItemType Directory -Path .ci/native-inputs/locks -Force | Out-Null
+        foreach ($triplet in ($env:INPUT_TRIPLETS -split '\s+' | Where-Object { $_ })) {
+          $lock = ".ci/native-inputs/locks/$triplet.lock.json"
+          python $cli resolve-release "cmake/dependencies/$triplet.lock.json" --output-lock $lock
+          python $cli download $lock --destination .ci/native-inputs/blobs
+        }
+        foreach ($tool in @('re2c', 'lemon')) {
+          $lock = ".ci/native-inputs/locks/$tool.lock.json"
+          Copy-Item -LiteralPath "cmake/$tool.lock.json" -Destination $lock
+          python $cli download $lock --destination .ci/native-inputs/blobs
+        }
+    - uses: actions/upload-artifact@v4
+      if: inputs.operation == 'prepare'
+      with:
+        name: ${{ inputs.artifact }}
+        path: .ci/native-inputs
+        if-no-files-found: error
+        compression-level: 0
+    - uses: actions/download-artifact@v4
+      if: inputs.operation == 'restore'
+      with:
+        name: ${{ inputs.artifact }}
+        path: .ci/native-inputs
+    - name: Restore target libraries and host tools from prepared inputs
+      if: inputs.operation == 'restore'
+      shell: pwsh
+      env:
+        INPUT_TRIPLET: ${{ inputs.triplet }}
+        INPUT_HOST_RID: ${{ inputs.host-rid }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+        $cli = "$env:VCPKG_CACHE_REPOSITORY_ROOT/scripts/restore-native-dependency.py"
+        $env:QIGAO_PREPARED_INPUTS = (Resolve-Path -LiteralPath .ci/native-inputs).Path
+        $lock = ".ci/native-inputs/locks/$env:INPUT_TRIPLET.lock.json"
+        $selected = Get-Content -LiteralPath $lock -Raw | ConvertFrom-Json
+        $destination = "build/dependencies/vcpkg-cache-$env:VCPKG_CACHE_VERSION-$env:INPUT_TRIPLET-$($selected.sha256.Substring(0, 12))"
+        $receipt = python $cli locked $lock --destination $destination --payload vcpkg_installed | ConvertFrom-Json
+        "VCPKG_INSTALLED_DIR=$($receipt.root)" >> $env:GITHUB_ENV
+        "VCPKG_TARGET_TRIPLET=$env:INPUT_TRIPLET" >> $env:GITHUB_ENV
+        "QIGAO_HOST_RID=$env:INPUT_HOST_RID" >> $env:GITHUB_ENV
+        $extension = if ($env:INPUT_HOST_RID.StartsWith('windows-')) { '.exe' } else { '' }
+        foreach ($tool in @('re2c', 'lemon')) {
+          $lock = ".ci/native-inputs/locks/$tool.lock.json"
+          $selected = Get-Content -LiteralPath $lock -Raw | ConvertFrom-Json
+          $destination = "build/dependencies/$($selected.source.id)-$($selected.source.version)-$env:INPUT_HOST_RID-$($selected.sha256.Substring(0, 12))"
+          $arguments = @($cli, 'locked', $lock, '--destination', $destination,
+            '--payload', "tools/$env:INPUT_HOST_RID", '--require', "bin/$tool$extension",
+            '--executable', "bin/$tool$extension", '--env-prefix', $tool.ToUpperInvariant())
+          if ($tool -eq 'lemon') { $arguments += @('--require', 'share/lemon/lempar.c') }
+          python @arguments
+        }

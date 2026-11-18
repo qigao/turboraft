@@ -3,22 +3,23 @@
 TurboRaft 提供三套小型文本语言（DSL）：Query（只读巡检）、
 Protocol-debug（线协议帧描述与校验）、Replay（确定性仿真）。
 语法细节见 [TEXT_SYNTAX.md](TEXT_SYNTAX.md)；本文说明"怎么用"：
-工具、CMake 链接、C API 骨架与端到端示例。
+CMake 链接、C API 骨架与端到端示例。
 
 ## 1. 能力总览
 
 | DSL | 能做什么 | 现成入口 |
 |---|---|---|
-| Query | 生成只读巡检 plan（status/members/progress）并分发执行 | `turboraft_console`（命令行）、`tr_text_query_execute(_service)` |
+| Query | 生成只读巡检 plan（status/members/progress）并分发执行 | `tr_text_query_execute(_service)` |
 | Protocol-debug | 用可读文本描述一帧 wire 帧，并用真实编解码器校验 | `tr_text_protocol_debug_execute`（C API） |
-| Replay | 确定性仿真：选举、提交、poll、故障注入、期望断言 | `turboraft_repl`（交互/脚本）、`tr_replay_driver_*`（C API） |
+| Replay | 确定性仿真：选举、提交、poll、故障注入、期望断言 | `tr_replay_driver_*`（C API） |
 
 ## 2. 构建与链接
 
-构建（可选示例）：
+加载匹配的编译器和 SDK 环境后，构建完整工程并启用示例：
+
 ```powershell
-cmake --preset win-release-user -DBUILD_EXAMPLES=ON
-cmake --build --preset win-release-user --target turboraft_dsl_embed_demo
+cmake --fresh --preset msvc-release-user -DBUILD_EXAMPLES=ON
+cmake --build --preset msvc-release-user
 ```
 
 应用里按需链接已安装的 CMake target：
@@ -33,68 +34,11 @@ target_link_libraries(app PRIVATE
 )
 ```
 
-命令行工具（随构建生成、不随包安装）：
-- `turboraft_console`：远程巡检，依赖运行中的控制面（`/raft/rpc`）。
-- `turboraft_repl`：本地确定性仿真 REPL。
+独立命令行工具已移除。Query、Protocol-debug 和 Replay 通过下列 C API 使用。
 
-## 3. 命令行使用
+## 3. C API 使用
 
-### 3.1 Query：turboraft_console（连真实集群）
-
-前置：控制面已绑定到 `/raft/rpc` 并注册 `raft.status/members/progress`。
-
-```powershell
-# 一次性查询
-turboraft_console --endpoint http://127.0.0.1:8080/raft/rpc ^
-  --query "show members where role == voter;"
-
-# 交互模式：每行一条语句，exit/quit 退出
-turboraft_console --endpoint http://127.0.0.1:8080/raft/rpc
-turboraft> show status;
-turboraft> show progress for node 2;
-```
-
-支持语句：`show status;`、`show members;`、
-`show members where role == voter|learner;`、`show progress for node N;`。
-注意：console 只发送 Query；protocol/replay 文本不会发给远端。
-
-### 3.2 Replay：turboraft_repl（本地仿真）
-
-```powershell
-# 交互模式（3 节点集群）
-turboraft_repl --nodes 3
-repl> node 1
-repl> tick 30
-repl> status
-repl> submit 7 1 1 1 0x0102a0ff
-repl> poll 7 applied 40
-repl> expect --node 2 --commit 1
-repl> partition 1 2
-repl> heal 1 2
-repl> exit
-
-# 批处理：replay DSL 脚本
-turboraft_repl --nodes 3 --script demo.rpl
-```
-
-`demo.rpl`（replay DSL 语法）：
-```text
-node 1;
-node 2;
-node 3;
-tick 30;
-submit request 7 to node 1 client 1 sequence 1 payload 0x0102a0ff;
-poll request 7 until applied timeout 40 ticks;
-tick 5;
-expect node 2 commit_index >= 1;
-```
-完整交互命令见 REPL 内 `help`。命令行由 REPL 内置的 bounded tokenizer
-分析，并校验命令名、参数个数与整数值；批处理请用 `run <file>` 或
-`--script`。
-
-## 4. C API 使用
-
-### 4.1 Query（解析 + 通用执行）
+### 3.1 Query（解析 + 通用执行）
 
 ```c
 #include <turboraft/text_syntax.h>
@@ -122,7 +66,12 @@ if (rc == SALTS_OK) {
 `tr_text_query_execute_service(service, &plan, &sink, ctx)`，由适配器调用
 `tr_raft_service_status/config/progress` 并做 role 过滤。
 
-### 4.2 Protocol-debug（帧描述 + 真实编解码校验）
+### 3.2 Protocol-debug（帧描述 + 真实编解码校验）
+
+调用方提供 `frame_text`：其中 `version` 必须等于当前
+`TR_RAFT_WIRE_VERSION`（6），`payload` 必须是当前 wire 编码器生成的完整帧的
+十六进制表示。解析成功只表示文本语法有效，执行器还会校验二进制帧及声明的
+kind、端点、term 和 message；任意短字节串不能代替有效帧。
 
 ```c
 #include <turboraft/text_protocol_executor.h>
@@ -135,19 +84,17 @@ static int on_frame(void *ctx,
     return SALTS_OK;
 }
 
-const char text[] =
-    "frame version 3 kind raft { from = 1; to = 2; term = 7;"
-    " message = append_request; payload = 0x0102a0ff; }";
 tr_text_protocol_debug_plan_t plan;
 tr_text_diagnostic_t diag;
 tr_text_protocol_debug_executor_ops_t ops = { .frame = on_frame };
-int rc = tr_text_protocol_debug_parse(text, strlen(text), NULL, &plan, &diag);
+int rc = tr_text_protocol_debug_parse(frame_text, strlen(frame_text),
+                                      NULL, &plan, &diag);
 if (rc == SALTS_OK) {
     rc = tr_text_protocol_debug_execute(&plan, &ops, NULL);
 }
 ```
 
-### 4.3 Replay（完整驱动：全部动作）
+### 3.3 Replay（完整驱动：全部动作）
 
 ```c
 #include <turboraft/text_replay_core_driver.h>
@@ -187,21 +134,19 @@ tr_replay_driver_destroy(driver);
 - `submit` 目标节点必须是 leader；`poll` 内部推进时间至 `timeout_ticks`。
 - `expect` 失败返回 `SALTS_EPROTO`。
 
-## 5. 完整示例
+## 4. 完整示例
 
-仓库提供可编译运行的 `examples/dsl_embed_demo.c`
+仓库提供可编译运行的 [dsl_embed_demo.c](../examples/dsl_embed_demo.c)
 （`turboraft_dsl_embed_demo`）：它先用 Query DSL 解析三条巡检命令并分发，
 再创建 3 节点 Replay 驱动，选举 leader、submit、poll 到 applied、断言
 全部节点 commit >= 1，最后打印各节点状态与网络计数。运行：
 
 ```powershell
-build/msvc-release/bin/turboraft_dsl_embed_demo
+build/msvc-release-user/bin/turboraft_dsl_embed_demo.exe
 ```
 
-## 6. 边界与限制
+## 5. 边界与限制
 
-- `turboraft_console` 只支持 Query；protocol/replay 文本不会发给远端节点。
-- `turboraft_repl` 是本地进程内仿真，不连网络、不连控制面。
 - 通用适配器 `tr_text_replay_execute()` 只实现 submit/poll/tick，其余动作
   返回 `SALTS_ENOTSUP`；完整动作请用 `TurboRaft::ReplayDriver`。
 - 输入与容量：输入 ≤ `TR_TEXT_MAX_INPUT_BYTES`（1MB）、语句 ≤

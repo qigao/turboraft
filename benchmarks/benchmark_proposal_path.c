@@ -1,8 +1,8 @@
 #include <turboraft/raft_service.h>
 #include <turboraft/raft_wal_storage.h>
 
-#include <cmeta_error.h>
-#include <cmeta_fs.h>
+#include <core/error.h>
+#include <file/fs.h>
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -143,8 +143,8 @@ typedef struct bench_memory_storage {
 static void bench_unlink_if_exists(const char *path)
 {
     if (path != NULL &&
-        cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
-        (void)cmeta_fs_unlink(path);
+        fs_access(path, SALTS_FS_ACCESS_EXISTS) == SALTS_OK) {
+        (void)fs_unlink(path);
     }
 }
 
@@ -498,7 +498,7 @@ static int bench_wal_batch_path(
     config.segment_bytes = TR_RAFT_WAL_DEFAULT_SEGMENT_BYTES;
     config.max_transaction_bytes =
         TR_RAFT_WAL_DEFAULT_TRANSACTION_BYTES;
-    config.max_segments = 2U;
+    config.max_live_segments = 2U;
     config.max_log_entries = BENCH_PROPOSALS + 16U;
     config.max_snapshot_bytes = 1024U;
     config.create_if_missing = true;
@@ -600,7 +600,7 @@ static int bench_wal_path(double *out_ns_per_op)
     config.segment_bytes = TR_RAFT_WAL_DEFAULT_SEGMENT_BYTES;
     config.max_transaction_bytes =
         TR_RAFT_WAL_DEFAULT_TRANSACTION_BYTES;
-    config.max_segments = 2U;
+    config.max_live_segments = 2U;
     config.max_log_entries = BENCH_PROPOSALS + 16U;
     config.max_snapshot_bytes = 1024U;
     config.create_if_missing = true;
@@ -652,7 +652,7 @@ static int bench_wal_service_batch_path(
     config.segment_bytes = TR_RAFT_WAL_DEFAULT_SEGMENT_BYTES;
     config.max_transaction_bytes =
         TR_RAFT_WAL_DEFAULT_TRANSACTION_BYTES;
-    config.max_segments = 2U;
+    config.max_live_segments = 2U;
     config.max_log_entries = BENCH_PROPOSALS + 16U;
     config.max_snapshot_bytes = 1024U;
     config.create_if_missing = true;

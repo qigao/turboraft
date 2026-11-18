@@ -3,11 +3,11 @@
 
 #ifdef TURBORAFT_BENCHMARK_WAL
 #include <turboraft/raft_wal_storage.h>
-#include <cmeta_fs.h>
+#include <file/fs.h>
 #endif
 
 #include <tinytest.h>
-#include <cmeta_error.h>
+#include <core/error.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -483,7 +483,7 @@ spec("TurboRaft performance baselines")
         config.segment_bytes = TR_RAFT_WAL_DEFAULT_SEGMENT_BYTES;
         config.max_transaction_bytes =
             TR_RAFT_WAL_DEFAULT_TRANSACTION_BYTES;
-        config.max_segments = 1U;
+        config.max_live_segments = 1U;
         config.max_log_entries = STORAGE_BENCHMARK_SAMPLE_COUNT;
         config.create_if_missing = true;
         check_equal(tr_raft_wal_storage_open(&config, &storage), SALTS_OK);
