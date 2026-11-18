@@ -218,3 +218,22 @@
   `ctest --preset native-release-user --output-on-failure` 和
   `cmake --build --preset install-native-release-user`。60/60 通过（90.19 秒），
   含多进程 chaos。原始日志在 `build/upstream-sync/`。
+
+## 原生 CI 和 macOS arm64
+
+- 若 checkout 请求了标签 `v`，检查 Actions 变量 `TURBORAFT_CI_ENV` 是否已从项目
+  `.env` 同步。同步命令见 [平台说明](docs/SUPPORTED_PLATFORMS.md)。各 runner
+  从这份版本选择恢复 Salts SDK，再编译对应标签的 CHttp 和 TurboDB。
+- macOS 首次从源码构建 `libpq` 需要 Autoconf、Automake 和 Libtool。
+  `salts-idlc` 通过 `@rpath/libsalts.dylib` 加载 SaltsBase。运行生成器时
+  由 CMake 将所选 SDK 的 `lib` 目录加入该进程的 `DYLD_LIBRARY_PATH`。
+- TurboDB 将 SQLite 驱动构建为 CMake `MODULE`。macOS 安装的驱动后缀为
+  `.so`，使用共享库后缀 `.dylib` 会使两个 ORM 恢复测试报告驱动加载失败。
+  测试用 `CMAKE_SHARED_MODULE_SUFFIX` 构造驱动路径。
+- macOS 的 ORM 崩溃恢复子进程通过 `Orm::C` 间接加载
+  `@rpath/libdata_bind.dylib`。将所选 `Salts::DataBind` 的目录加入该测试
+  子进程的 `BUILD_RPATH`，并让子进程继承 CTest 标准输出和错误输出。
+- [远端验证](https://github.com/qigao/turboraft/actions/runs/44242625902)
+  在提交 `636adb4` 上完成全部构建和安装。Linux 四项配置各通过 64 项
+  CTest，macOS arm64 和 Windows x64 各通过 60 项。本地 Windows
+  LLVM-MinGW 的两个 SQLite 恢复测试也通过。
