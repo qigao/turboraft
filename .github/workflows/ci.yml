@@ -27,6 +27,9 @@ permissions:
   contents: read
   packages: read
 
+env:
+  TURBORAFT_CI_ENV: ${{ vars.TURBORAFT_CI_ENV }}
+
 concurrency:
   group: turboraft-ci-${{ github.ref }}
   cancel-in-progress: true

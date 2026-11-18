@@ -81,8 +81,6 @@ and absence of duplicate effects. The process-crash fixture checks termination
 before and after commit. Tests own their temporary database files and schema;
 CTest supplies the SQLite driver path from the installed TurboDB SDK.
 
-The [SDK restore action](../../.github/actions/setup-native-sdks/action.yml)
-resolves published packages through the Native package project and exports
-roots from the resolved NuGet assets. Retain the actual package versions with
-results. The selected package must provide the SQL API used by the fixture; version
-selection alone is not proof that the current checkout passed either test.
+The native CI matrix builds the selected TurboDB tag against the same Salts
+SDKs as TurboRaft and supplies the installed SQLite driver to these tests.
+See the [native dependency inputs](../SUPPORTED_PLATFORMS.md#native-dependency-inputs).

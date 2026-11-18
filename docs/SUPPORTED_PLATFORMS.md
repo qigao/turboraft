@@ -17,15 +17,13 @@ and configures each lane's complete graph before building and running CTest.
 | Linux Release | `ubuntu-24.04`, GCC, Ninja | `ci-gcc-release-user` |
 | Linux ASan + UBSan | `ubuntu-24.04`, Clang Debug, Ninja | `ci-llvm-native-asan-ubsan-user` |
 | Linux TSan | `ubuntu-24.04`, Clang Debug, Ninja | `ci-llvm-native-tsan-user` |
-| Windows Release | `windows-2025`, MSVC through `VsDevCmd`, Ninja | `ci-msvc-release-user` |
+| Linux arm64 Release | `ubuntu-24.04-arm`, Clang, Ninja | `ci-llvm-native-release-user` |
+| macOS arm64 Release | `macos-15`, Apple Clang, Ninja | `ci-llvm-native-release-user` |
+| Windows x64 Release | `windows-2025`, MSVC through `VsDevCmd`, Ninja | `ci-msvc-release-user` |
 
-The [Windows workflow](../.github/workflows/windows-msvc-release.yml) is reusable
-and also installs the configured SDK. It explicitly builds CHttp
-from its selected source refs; those builds are declared inputs, not a fallback
-from a failed SDK restore. The Linux lanes restore the published dependency
-SDKs. Exact source refs and package selection belong to the workflows and
-[Native package project](../packaging/nuget/TurboRaft.Native.csproj), rather than
-a second version list in this document.
+The matching Salts SDK releases also determine which native architectures can
+be tested. Linux arm64 builds CHttp and TurboDB on the ARM runner. macOS x64
+and Windows arm64 require additional Salts SDK profiles.
 
 The presets also describe other compiler and cross-compilation configurations.
 Their presence does not establish equivalent runtime or release qualification.
@@ -55,23 +53,19 @@ The current [wire schema](../schema/turboraft_wire.schema) generates one C
 binding in the build tree; generated sources are not checked in. See the
 [schema documentation](../schema/README.md) and [text grammar build](TEXT_SYNTAX.md#build).
 
-The [SDK action](../.github/actions/setup-native-sdks/action.yml) restores
-published packages and [exports SDK roots](../cmake/export_native_sdks.py) from
-the resolved NuGet assets. The root build requires the selected SaltsBase,
-CMeta, SaltsUtils, SaltsCNet, CHttp and third-party packages.
-`BUILD_TESTS=ON` also requires TurboDB ORM and its SQLite fixture driver.
-[User presets](../presets/UserEnvironments.json) pass the loaded
-`*_VERSION` / `*_ROOT` selectors for SaltsBase, CMeta, SaltsUtils and SaltsCNet
-to [CMakeLists.txt](../CMakeLists.txt), which uses exact versions and explicit
-roots for those SDKs. CHttp and test-only TurboDB use required CMake
-config-package discovery through `CMAKE_PREFIX_PATH` or their `<Package>_DIR`
-cache entries. Missing packages, mismatched split-SDK versions or a different
-SDK contract fail configuration.
+The CI runner writes its local `.env` from the repository Actions variable
+`TURBORAFT_CI_ENV`. Synchronize the seven non-secret version assignments from
+the local project environment when updating SDKs:
 
-The existing NuGet/source workflow inputs still describe the former monolithic
-SDK generation. They need matching split-SDK producer/restoration inputs before
-those lanes can qualify the new configuration. Their declarations above do not
-establish a passing run of the environment-selected graph.
+```powershell
+$keys = 'VCPKG_CACHE_VERSION','SALTS_BASE_VERSION','CMETA_VERSION','SALTS_CNET_VERSION','SALTS_UTILS_VERSION','CHTTP_VERSION','TURBODB_VERSION'
+$versions = Get-Content .env | Where-Object { ($_ -split '=', 2)[0] -cin $keys }
+$versions -join "`n" | gh variable set TURBORAFT_CI_ENV --repo qigao/turboraft
+```
+
+Each native job verifies the selected Salts release manifests, producer revisions
+and SDK archive digests, builds the selected CHttp and TurboDB tags against
+those SDKs, and runs the complete TurboRaft build, CTest and install presets.
 
 After changing compiler, triplet or SDK roots, explicitly configure with
 `cmake --fresh --preset <preset>` to remove stale package lookup results.

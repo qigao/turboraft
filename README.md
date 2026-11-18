@@ -121,10 +121,9 @@ host. There is no repository-built Lemon or standalone command-line tools.
 The split SDK selectors and the discovered CHttp/TurboDB packages must
 describe one matching SDK closure. [.env.example](.env.example) lists the split
 SDK selectors. Neither the removed monolithic `Salts` package nor a historical
-SDK is a fallback for a missing split package. CI restoration must supply those
-selectors and the existing `CHTTP_ROOT` / `TURBODB_ROOT` assignments;
-the existing NuGet/source gates need matching producer inputs before they can
-qualify this configuration.
+SDK is a fallback for a missing split package. CI restores the native Salts SDKs and builds CHttp and TurboDB from their
+selected tags using the same compiler and SDK roots. See the
+[native matrix and version synchronization](docs/SUPPORTED_PLATFORMS.md).
 
 CI also uses [sccache](https://github.com/mozilla/sccache) 0.16.0 (Apache-2.0)
 through the shared [setup action](.github/actions/setup-sccache/action.yml).
