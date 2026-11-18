@@ -3,14 +3,13 @@
 This document describes the matrix declared by the current workflows. A
 workflow definition is not evidence that the current revision passed; report
 actual run results with their source revision and resolved dependency versions.
-Only the current source and SDK contract is maintained. Older-release restores,
-mixed-version peers and downgrade qualification are not supported; see
-[the compatibility policy](PRE_1_0_COMPATIBILITY.md).
 
 ## Continuous integration matrix
 
 The [CI workflow](../.github/workflows/ci.yml) prepares native dependency inputs
 and configures each lane's complete graph before building and running CTest.
+Source, header, grammar, schema and Python test changes trigger CI on the
+selected branches. Use workflow dispatch to verify a CI configuration change.
 
 | Lane | Runner / toolchain | Configure, build and test preset |
 | --- | --- | --- |
@@ -39,18 +38,16 @@ compiler, target triplet, host RID, dependency installation and SDK roots must
 belong to the same restore.
 
 The [native-input action](../.github/actions/setup-native-inputs/action.yml)
-uses the shared vcpkg-cache release resolver and locked restoration through
-[native_dependencies.py](../cmake/native_dependencies.py). Platform descriptions
-resolve into URL/SHA-256 locks before restoration; restored roots come from
-receipts.
+uses the selected vcpkg-cache release resolver to produce URL/SHA-256 locks.
+The locked restore supplies an installation root in its receipt.
 Missing release inputs, unavailable assets or digest mismatches fail instead of
 selecting another dependency source.
 
 Target libraries and host tools are distinct inputs. re2c and Lemon come from
 the selected vcpkg-cache host packages via `RE2C_ROOT` and `LEMON_ROOT`; Lemon
 uses its paired `lempar.c`. The installed SaltsUtils SDK supplies `salts-idlc`.
-The current [wire schema](../schema/turboraft_wire.schema) generates one C
-binding in the build tree; generated sources are not checked in. See the
+The [wire schema](../schema/turboraft_wire.schema) generates a C
+binding in the build tree. See the
 [schema documentation](../schema/README.md) and [text grammar build](TEXT_SYNTAX.md#build).
 
 The CI runner writes its local `.env` from the repository Actions variable
@@ -82,8 +79,8 @@ cmake --build --preset msvc-release-user
 ctest --preset msvc-release-user --output-on-failure
 ```
 
-Linux Release uses `gcc-release-user`; sanitizer commands and instrumentation
-limits are in [Diagnostics](DIAGNOSTICS.md). Tests are controlled by
+Linux x64 Release uses `gcc-release-user`. The matrix above lists the
+Linux sanitizer presets. Tests are controlled by
 `BUILD_TESTS`; benchmarks by `BUILD_BENCHMARKS`; examples by `BUILD_EXAMPLES`.
 Modules are assembled unconditionally. The switches are declared in
 [CMakeOptions.cmake](../CMakeOptions.cmake). There are no source-profile,
@@ -101,9 +98,8 @@ checks the unpacked package against those inventories.
 These are package-content and ABI-inventory checks. Runtime evidence comes
 from the project's formal CTest suite; the pipeline does not generate
 independent installed-consumer validation projects. The
-[package documentation](../packaging/nuget/README.md) defines artifacts and
-consumption, and the [compatibility policy](PRE_1_0_COMPATIBILITY.md) explains
-the current inventory's limits.
+[release workflow](../.github/workflows/native-sdk-release.yml) defines the
+publication steps.
 
 ## Reporting validation
 

@@ -12,12 +12,6 @@ on:
       - '**/*.re'
       - '**/*.y'
       - 'raft/tests/**/*.py'
-      - '**/CMakeLists.txt'
-      - '**/*.cmake'
-      - '**/*.cmake.in'
-      - 'CMake*Presets.json'
-      - 'presets/**/*.json'
-      - 'vcpkg*.json'
   pull_request:
     branches: [master]
     paths: *code
@@ -103,6 +97,11 @@ jobs:
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           "VSDEVCMD_BAT=$vs/Common7/Tools/VsDevCmd.bat" >> $env:GITHUB_ENV
+          python "$env:VCPKG_CACHE_REPOSITORY_ROOT/scripts/windows_pkgconf.py"
+      - name: Install macOS tools for the libpq port
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install autoconf automake libtool
       - uses: ./.ci/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache
         if: runner.os != 'Linux'
         with:
@@ -110,6 +109,11 @@ jobs:
           host-triplet: ${{ matrix.triplet }}
           manifest-root: build/upstream/turbodb
           restore-packages: 'false'
+      - uses: actions/cache@v4
+        if: runner.os != 'Linux'
+        with:
+          path: ${{ env.VCPKG_BINARY_CACHE }}
+          key: native-ports-${{ matrix.triplet }}-${{ env.VCPKG_CACHE_VERSION }}-${{ env.TURBODB_VERSION }}
       - name: Install TurboDB platform ports alongside the prepared libraries
         if: runner.os != 'Linux'
         run: |

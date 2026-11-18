@@ -15,7 +15,7 @@ foreach ($project in 'chttp','turbodb') {
             $preset = 'llvm-native-release-user'
             $options += '-DENABLE_ASAN=ON','-DENABLE_UBSAN=ON'
         }
-        $prefix = [IO.Path]::GetFullPath("build/$preset/stage").Replace('\','/')
+        $prefix = (Join-Path $PWD "build/$preset/stage").Replace('\','/')
         Build-CMake --fresh --preset $preset "-DCMAKE_INSTALL_PREFIX=$prefix" @options
         Build-CMake --build --preset $preset
         Build-CMake --install "build/$preset"
