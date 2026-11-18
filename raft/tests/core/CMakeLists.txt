@@ -182,7 +182,7 @@ target_link_libraries(
   turboraft_cflow_orm_recovery_tests
   PRIVATE TurboRaft::CFlowStateMachine Orm::C Salts::Coroutine Salts::TinyTest)
 set(_turboraft_sqlite_plugin
-    "${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    "${TurboDB_DRIVER_DIR}/turbodb_driver_sqlite${CMAKE_SHARED_MODULE_SUFFIX}")
 add_test(NAME turboraft.cflow_orm_sqlite_recovery
          COMMAND turboraft_cflow_orm_recovery_tests)
 set_tests_properties(
