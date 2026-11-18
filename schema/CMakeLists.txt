@@ -5,6 +5,11 @@ find_program(
         NO_DEFAULT_PATH REQUIRED
         DOC "SaltsUtils IDL/schema compiler"
 )
+set(turboraft_idlc_command "${TURBORAFT_IDLC}")
+if(CMAKE_HOST_APPLE)
+  list(PREPEND turboraft_idlc_command "${CMAKE_COMMAND}" -E env
+       --modify "DYLD_LIBRARY_PATH=path_list_prepend:$ENV{SALTS_BASE_ROOT}/lib" --)
+endif()
 
 set(TURBORAFT_WIRE_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/turboraft_wire.schema")
 set(TURBORAFT_WIRE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/wire")
@@ -14,7 +19,7 @@ add_custom_command(
         OUTPUT "${TURBORAFT_WIRE_GENERATED_HEADER}" "${TURBORAFT_WIRE_GENERATED_SOURCE}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${TURBORAFT_WIRE_GENERATED_DIR}"
         COMMAND
-                "${TURBORAFT_IDLC}" "${TURBORAFT_WIRE_SCHEMA}" --lang c --binary-codec --output
+                ${turboraft_idlc_command} "${TURBORAFT_WIRE_SCHEMA}" --lang c --binary-codec --output
                 "${TURBORAFT_WIRE_GENERATED_HEADER}" --source-output
                 "${TURBORAFT_WIRE_GENERATED_SOURCE}"
         DEPENDS "${TURBORAFT_WIRE_SCHEMA}" "${TURBORAFT_IDLC}"
@@ -41,7 +46,7 @@ add_custom_command(
         OUTPUT "${TURBORAFT_CONTROL_GENERATED_HEADER}" "${TURBORAFT_CONTROL_GENERATED_SOURCE}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${TURBORAFT_CONTROL_GENERATED_DIR}"
         COMMAND
-                "${TURBORAFT_IDLC}" "${TURBORAFT_CONTROL_SCHEMA}" --lang c --output
+                ${turboraft_idlc_command} "${TURBORAFT_CONTROL_SCHEMA}" --lang c --output
                 "${TURBORAFT_CONTROL_GENERATED_HEADER}" --source-output
                 "${TURBORAFT_CONTROL_GENERATED_SOURCE}"
         DEPENDS "${TURBORAFT_CONTROL_SCHEMA}" "${TURBORAFT_IDLC}"

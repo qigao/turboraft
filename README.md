@@ -55,8 +55,8 @@ SDK generation. Dependency versions use `EXACT`, and roots use
 mismatches fail configuration. Do not configure duplicate locations for these
 split SDKs through `<Package>_DIR`.
 
-Select the CHttp release archive with `CHTTP_VERSION` in `.env`. CHttp and
-test-only TurboDB use the `CHTTP_ROOT` and `TURBODB_ROOT` assignments
+Select CHttp and the test-only TurboDB release with `CHTTP_VERSION` and
+`TURBODB_VERSION` in `.env`. Their SDKs use the `CHTTP_ROOT` and `TURBODB_ROOT` assignments
 from the same file. Their CMake config packages and runtime library paths
 come from those roots. Third-party libraries come from the selected
 `VCPKG_INSTALLED_DIR` / `VCPKG_TARGET_TRIPLET` prefix. No duplicate `<Package>_DIR`
@@ -84,8 +84,8 @@ The parent environment selects `VCPKG_CACHE_VERSION` (an exact release without
 `v`) and `VCPKG_CACHE_REPOSITORY_ROOT` (a checkout of that tag). The current
 selection in [.env.example](.env.example) is `0.1.3`. CMake does not load `.env`.
 Keep credentials private and load only the required assignments in the invoking
-process. CI uses the repository variable `VCPKG_CACHE_VERSION` and its Packages
-read token.
+process. The native CI matrix reads the version assignments synchronized from
+that file through `TURBORAFT_CI_ENV`.
 
 [Platform descriptors](cmake/dependencies/) are inputs to vcpkg-cache's shared
 `resolve-release` command. Use that checkout's
