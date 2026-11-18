@@ -1,18 +1,26 @@
 name: TurboRaft CI
 
 on:
+  push:
+    branches: [master, 'feature/**']
+    paths: &code
+      - '**/*.c'
+      - '**/*.h'
+      - '**/*.cpp'
+      - '**/*.hpp'
+      - '**/*.schema'
+      - '**/*.re'
+      - '**/*.y'
+      - 'raft/tests/**/*.py'
+      - '**/CMakeLists.txt'
+      - '**/*.cmake'
+      - '**/*.cmake.in'
+      - 'CMake*Presets.json'
+      - 'presets/**/*.json'
+      - 'vcpkg*.json'
   pull_request:
     branches: [master]
-  push:
-    branches:
-      - master
-      - feature/multi-group-wire
-      - feature/multi-group-multiplex
-      - feature/streaming-snapshot
-      - feature/multigroup-chaos
-      - feature/concurrent-readindex
-      - feature/streaming-data-plane
-      - feature/proposal-batching-benchmark
+    paths: *code
   workflow_dispatch:
 
 permissions:
@@ -23,64 +31,118 @@ concurrency:
   group: turboraft-ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  VCPKG_CACHE_VERSION: ${{ vars.VCPKG_CACHE_VERSION }}
-
 jobs:
-  native-inputs:
+  inputs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/load-upstream
       - uses: ./.github/actions/setup-native-inputs
         with:
           operation: prepare
-          triplets: x64-linux x64-windows
-          token: ${{ secrets.GITHUB_TOKEN }}
-  linux:
-    needs: native-inputs
-    runs-on: ubuntu-24.04
+          triplets: x64-linux arm64-linux arm64-osx x64-windows
+          token: ${{ github.token }}
+
+  native:
+    name: ${{ matrix.name }}
+    needs: inputs
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
-        preset: [ci-gcc-release-user, ci-llvm-native-asan-ubsan-user, ci-llvm-native-tsan-user]
+        include:
+          - {name: linux-gcc-x64, runner: ubuntu-24.04, host: linux-x64, triplet: x64-linux, sdk: linux-gcc-x64, cnet: linux-gcc-x64, preset: gcc-release-user}
+          - {name: linux-clang-arm64, runner: ubuntu-24.04-arm, host: linux-arm64, triplet: arm64-linux, sdk: linux-clang-arm64, cnet: linux-arm64, preset: llvm-native-release-user}
+          - {name: linux-clang-x64-asan-ubsan, runner: ubuntu-24.04, host: linux-x64, triplet: x64-linux, sdk: linux-clang-x64, cnet: linux-x64-asan-ubsan, preset: llvm-native-asan-ubsan-user}
+          - {name: linux-clang-x64-tsan, runner: ubuntu-24.04, host: linux-x64, triplet: x64-linux, sdk: linux-clang-x64-tsan, cnet: linux-x64-tsan, preset: llvm-native-tsan-user}
+          - {name: macos-clang-arm64, runner: macos-15, host: macos-arm64, triplet: arm64-osx, sdk: macos-clang-arm64, cnet: macos-arm64, preset: llvm-native-release-user}
+          - {name: windows-msvc-x64, runner: windows-2025, host: windows-x64, triplet: x64-windows, sdk: windows-msvc-x64, cnet: windows-msvc-x64, preset: msvc-release-user}
+    env:
+      NATIVE_PRESET: ${{ matrix.preset }}
+      CMAKE_BUILD_PARALLEL_LEVEL: 3
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build clang pkg-config
+      - uses: ./.github/actions/load-upstream
       - uses: ./.github/actions/setup-native-inputs
         with:
-          triplet: x64-linux
-          host-rid: linux-x64
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: ./.github/actions/setup-native-sdks
+          triplet: ${{ matrix.triplet }}
+          host-rid: ${{ matrix.host }}
+          token: ${{ github.token }}
+      - name: Restore selected Salts SDK archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/ci/restore-salts.py '${{ matrix.sdk }}' '${{ matrix.cnet }}'
+      - uses: actions/checkout@v4
         with:
-          rid: linux-x64
-          packages: salts salts-utils chttp
-          orm: "true"
-          cache-profile: ${{ matrix.preset }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: qigao/chttp
+          ref: v${{ env.CHTTP_VERSION }}
+          path: build/upstream/chttp
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: qigao/turbodb
+          ref: v${{ env.TURBODB_VERSION }}
+          path: build/upstream/turbodb
+          persist-credentials: false
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build clang pkg-config libpipewire-0.3-dev libx11-dev libxext-dev
+      - name: Locate MSVC
+        if: runner.os == 'Windows'
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          "VSDEVCMD_BAT=$vs/Common7/Tools/VsDevCmd.bat" >> $env:GITHUB_ENV
+      - uses: ./.ci/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache
+        if: runner.os != 'Linux'
+        with:
+          triplet: ${{ matrix.triplet }}
+          host-triplet: ${{ matrix.triplet }}
+          manifest-root: build/upstream/turbodb
+          restore-packages: 'false'
+      - name: Install TurboDB platform ports alongside the prepared libraries
+        if: runner.os != 'Linux'
+        run: |
+          $common = @('--classic', "--triplet=$env:VCPKG_TARGET_TRIPLET", "--x-install-root=$env:VCPKG_INSTALLED_DIR")
+          if ($IsWindows) {
+            & ./cmake/WithVs.cmd "$env:VCPKG_ROOT/vcpkg.exe" install scintilla lexilla --overlay-ports=build/upstream/turbodb/app/vcpkg-ports @common
+          } else {
+            & "$env:VCPKG_ROOT/vcpkg" install 'libpq[core,zstd]' "--overlay-ports=$env:VCPKG_CACHE_REPOSITORY_ROOT/ports/libpq" @common
+          }
+          exit $LASTEXITCODE
       - uses: ./.github/actions/setup-sccache
         with:
-          compiler: ${{ matrix.preset == 'ci-gcc-release-user' && 'gcc' || 'clang' }}
-          configuration: ${{ matrix.preset == 'ci-gcc-release-user' && 'Release' || 'Debug' }}
-          profile: ${{ matrix.preset }}
-      - name: Configure complete graph
-        run: cmake --fresh --preset "${{ matrix.preset }}"
-      - name: Build complete graph
-        run: cmake --build --preset "${{ matrix.preset }}"
-      - name: Run formal tests
-        run: ctest --preset "${{ matrix.preset }}"
+          compiler: ${{ matrix.sdk }}
+          configuration: ${{ matrix.preset }}
+          profile: ${{ matrix.name }}
+      - name: Build CHttp and the TurboDB test SDK
+        run: ./.github/ci/build-upstream.ps1
+      - name: Configure and build the complete graph
+        run: |
+          if ($IsWindows) { ./cmake/WithVs.cmd cmake --fresh --preset "ci-$env:NATIVE_PRESET" }
+          else { cmake --fresh --preset "ci-$env:NATIVE_PRESET" }
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($IsWindows) { ./cmake/WithVs.cmd cmake --build --preset "ci-$env:NATIVE_PRESET" }
+          else { cmake --build --preset "ci-$env:NATIVE_PRESET" }
+          exit $LASTEXITCODE
+      - name: Run formal CTests
+        run: ctest --preset "ci-$env:NATIVE_PRESET" --output-on-failure --no-tests=error --output-junit ctest.xml
+      - name: Install SDK
+        run: |
+          if ($IsWindows) { ./cmake/WithVs.cmd cmake --build --preset "install-ci-$env:NATIVE_PRESET" }
+          else { cmake --build --preset "install-ci-$env:NATIVE_PRESET" }
+          exit $LASTEXITCODE
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ${{ matrix.preset }}-diagnostics
-          path: build/${{ matrix.preset }}/Testing/Temporary
-          if-no-files-found: ignore
-  windows-release:
-    needs: native-inputs
-    uses: ./.github/workflows/windows-msvc-release.yml
-    with:
-      native-inputs-prepared: true
-    secrets: inherit
+          name: ${{ matrix.name }}-diagnostics
+          path: |
+            build/ci-${{ matrix.preset }}/Testing/Temporary
+            build/ci-${{ matrix.preset }}/ctest.xml

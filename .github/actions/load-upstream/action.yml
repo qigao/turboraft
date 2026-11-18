@@ -1,0 +1,15 @@
+name: Load selected upstream releases
+description: Materialize the non-secret version fields synchronized from the project .env.
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      env:
+        SDK_SELECTION: ${{ vars.TURBORAFT_CI_ENV }}
+      run: |
+        $env:SDK_SELECTION | Set-Content -Encoding utf8 .env
+        $inputs = Get-Content -Raw .env | ConvertFrom-StringData
+        foreach ($key in 'VCPKG_CACHE_VERSION','SALTS_BASE_VERSION','CMETA_VERSION','SALTS_CNET_VERSION','SALTS_UTILS_VERSION','CHTTP_VERSION','TURBODB_VERSION') {
+          if ($inputs[$key] -notmatch '^\d+\.\d+\.\d+$') { throw "Expected an exact release for $key in TURBORAFT_CI_ENV" }
+          "$key=$($inputs[$key])" >> $env:GITHUB_ENV
+        }

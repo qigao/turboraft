@@ -55,7 +55,12 @@ runs:
         foreach ($tool in @('re2c', 'lemon')) {
           $lock = ".ci/native-inputs/locks/$tool.lock.json"
           Copy-Item -LiteralPath "cmake/$tool.lock.json" -Destination $lock
-          python $cli download $lock --destination .ci/native-inputs/blobs
+          $entry = Get-Content -Raw $lock | ConvertFrom-Json
+          $file = "$($entry.source.id).$($entry.source.version).nupkg"
+          gh release download "v$env:VCPKG_CACHE_VERSION" --repo qigao/vcpkg-cache --pattern $file --dir .ci/native-inputs
+          $download = ".ci/native-inputs/$file"
+          if ((Get-FileHash $download).Hash.ToLowerInvariant() -cne $entry.sha256) { throw "Host tool digest mismatch: $file" }
+          Move-Item -LiteralPath $download -Destination ".ci/native-inputs/blobs/$($entry.sha256)"
         }
     - uses: actions/upload-artifact@v4
       if: inputs.operation == 'prepare'
