@@ -2,6 +2,7 @@
 #include <core/process.h>
 #include "tinytest.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,6 +23,7 @@ static int app_run(const char *program, const char *mode, const char *path,
     process_options_init(&options);
     options.program = program;
     options.args = args;
+    options.flags = 0; /* Inherit CTest output for child loader and ORM errors. */
     options.timeout_ms = 10000U;
     status = process_spawn(&options, &process);
     if (status != SALTS_OK) {
@@ -30,8 +32,13 @@ static int app_run(const char *program, const char *mode, const char *path,
     memset(&result, 0, sizeof(result));
     status = process_wait(process, &result);
     process_destroy(process);
-    if (status != SALTS_OK || result.state != SALTS_PROCESS_EXITED ||
-        result.exit_code != expected_exit) {
+    if (status != SALTS_OK) {
+        return status;
+    }
+    if (result.state != SALTS_PROCESS_EXITED || result.exit_code != expected_exit) {
+        fprintf(stderr, "%s: state=%s signal=%d exit=%d expected=%d\n", mode,
+                process_state_name(result.state), result.term_signal,
+                result.exit_code, expected_exit);
         return SALTS_EIO;
     }
     return SALTS_OK;

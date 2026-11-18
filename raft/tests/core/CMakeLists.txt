@@ -193,6 +193,11 @@ set_tests_properties(
 add_executable(turboraft_orm_sqlite_crash_node
                ../chaos/raft_orm_sqlite_crash_node.c)
 target_link_libraries(turboraft_orm_sqlite_crash_node PRIVATE Orm::C)
+if(APPLE)
+  # The installed ORM dylib loads DataBind as a private runtime dependency.
+  set_property(TARGET turboraft_orm_sqlite_crash_node APPEND PROPERTY
+               BUILD_RPATH "$<TARGET_FILE_DIR:Salts::DataBind>")
+endif()
 
 if(WIN32)
   find_package(unofficial-sqlite3 CONFIG REQUIRED)
